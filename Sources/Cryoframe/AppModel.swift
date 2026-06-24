@@ -15,8 +15,11 @@ import CryoframeKit
 final class AppModel: ObservableObject {
     let helper = HelperManager()
     let schedule = ScheduleManager()
-    let registry = ContentTypeRegistry()
     private let detector = WorkspaceProcessDetector()
+
+    /// built-ins with any user path overrides applied (read fresh so the New Job
+    /// sheet reflects changes made in Settings).
+    var registry: ContentTypeRegistry { ContentTypeRegistry.withOverrides(LibraryOverrides.load()) }
     private let store = JobStore.standard()
 
     @Published var jobs: [BackupJob] = []
@@ -67,8 +70,9 @@ final class AppModel: ObservableObject {
             let runner = JobRunner(
                 targeted: TargetedBackupRunner(backup: BackupRunner(helper: XPCPrivilegedHelper())),
                 detector: detector, store: store)
+            let resolved = job.resolvingContentType(in: registry)   // honor current library overrides
             do {
-                let result = try await runner.run(job, ownerUID: getuid(), now: Date(),
+                let result = try await runner.run(resolved, ownerUID: getuid(), now: Date(),
                     onStage: { s in Task { @MainActor in self.stage = s } })
                 switch result {
                 case .deferred(let reason):

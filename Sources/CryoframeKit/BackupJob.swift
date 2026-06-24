@@ -60,4 +60,14 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         self.format = format; self.frequency = frequency; self.verification = verification
         self.runPolicy = runPolicy; self.createdAt = createdAt
     }
+
+    /// if this job targets a built-in library, use its current (possibly
+    /// overridden) descriptor rather than the one captured when the job was made.
+    /// Generic-folder and template jobs (not in the registry) are left as-is.
+    public func resolvingContentType(in registry: ContentTypeRegistry) -> BackupJob {
+        guard let resolved = registry.type(id: contentType.id) else { return self }
+        var copy = self
+        copy.contentType = resolved
+        return copy
+    }
 }

@@ -58,6 +58,8 @@ Templates (you point at the library, since these live anywhere — often on exte
 
 Anything else: point at any folder with "Add library", and it is treated as static content.
 
+A built-in library kept somewhere other than its default location — an external drive, say — can be repointed in Settings ▸ Libraries. The owning app and integrity check stay attached.
+
 ## Install
 
 ### Download

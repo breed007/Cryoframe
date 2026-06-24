@@ -20,12 +20,14 @@ enum AgentMain {
             targeted: TargetedBackupRunner(backup: BackupRunner(helper: XPCPrivilegedHelper())),
             detector: WorkspaceProcessDetector(),
             store: store)
+        let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
 
         let group = DispatchGroup()
         for job in due {
             group.enter()
+            let resolved = job.resolvingContentType(in: registry)   // honor current library overrides
             Task {
-                _ = try? await runner.run(job, ownerUID: getuid(), now: Date())
+                _ = try? await runner.run(resolved, ownerUID: getuid(), now: Date())
                 group.leave()
             }
         }

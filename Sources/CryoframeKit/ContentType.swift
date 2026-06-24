@@ -150,4 +150,11 @@ public extension ContentType {
         ContentType(id: id, displayName: displayName, paths: [path],
                     owningProcess: nil, kind: .staticContent, integrityProbe: nil)
     }
+
+    /// a copy pointing at a different location — keeps the identity, owning app,
+    /// kind, and integrity probe. Used to repoint a built-in to a moved library.
+    func overridingPath(_ path: LibraryPath) -> ContentType {
+        ContentType(id: id, displayName: displayName, paths: [path],
+                    owningProcess: owningProcess, kind: kind, integrityProbe: integrityProbe)
+    }
 }

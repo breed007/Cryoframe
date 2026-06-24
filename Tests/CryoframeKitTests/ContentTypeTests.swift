@@ -35,6 +35,33 @@ import Foundation
     #expect(r.type(id: "f1")?.displayName == "Movies (renamed)")
 }
 
+@Test func overrideRepointsBuiltInButKeepsIdentity() {
+    let moved = LibraryPath.absolute("/Volumes/Big/Photos Library.photoslibrary")
+    let r = ContentTypeRegistry.withOverrides(["com.apple.photos": moved])
+
+    let photos = r.type(id: "com.apple.photos")
+    #expect(photos?.paths == [moved])                                   // repointed
+    #expect(photos?.owningProcess?.bundleIdentifier == "com.apple.Photos") // owner kept
+    #expect(photos?.integrityProbe == "database/Photos.sqlite")          // probe kept
+    #expect(r.type(id: "com.apple.music")?.paths == ContentType.appleMusic.paths) // others untouched
+    #expect(r.types.count == ContentTypeRegistry.builtIns.count)
+}
+
+@Test func jobReResolvesBuiltInPathFromOverridesAtRunTime() {
+    let moved = LibraryPath.absolute("/Volumes/X/Photos Library.photoslibrary")
+    let registry = ContentTypeRegistry.withOverrides(["com.apple.photos": moved])
+    let target = Target.localVolume(id: "t", name: "Disk", dir: URL(fileURLWithPath: "/tmp"))
+
+    let builtInJob = BackupJob(name: "p", contentType: .photos, target: target,
+                               format: .sealedZip, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+    #expect(builtInJob.resolvingContentType(in: registry).contentType.paths == [moved])
+
+    let folder = ContentType.genericFolder(id: "/x", displayName: "x", path: .home("x"))
+    let folderJob = BackupJob(name: "f", contentType: folder, target: target,
+                              format: .sealedZip, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+    #expect(folderJob.resolvingContentType(in: registry).contentType.id == "/x")   // unaffected
+}
+
 @Test func templateAttachesOwnerAndPathToAPickedLibrary() {
     let ct = LibraryTemplate.finalCutPro.contentType(
         id: "/Volumes/Media/Edit.fcpbundle",

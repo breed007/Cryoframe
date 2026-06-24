@@ -13,4 +13,5 @@ enum Prefs {
     static let runPolicy = "default.runPolicy"    // RunPolicy.rawValue
     static let archiveDir = "default.archiveDir"  // absolute path
     static let mirrorGB = "default.mirrorGB"      // Int
+    static let libraryOverrides = "library.overrides"  // [contentTypeID: absolute path]
 }

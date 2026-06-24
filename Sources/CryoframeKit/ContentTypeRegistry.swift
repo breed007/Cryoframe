@@ -21,6 +21,12 @@ public struct ContentTypeRegistry: Sendable {
         types.first { $0.id == id }
     }
 
+    /// built-ins with per-id path overrides applied (a moved library, a library
+    /// on an external drive). Ids without an override keep their default path.
+    public static func withOverrides(_ overrides: [String: LibraryPath]) -> ContentTypeRegistry {
+        ContentTypeRegistry(builtIns.map { overrides[$0.id].map($0.overridingPath) ?? $0 })
+    }
+
     public mutating func add(_ type: ContentType) {
         types.removeAll { $0.id == type.id }
         types.append(type)
