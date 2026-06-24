@@ -4,6 +4,10 @@ Back up live macOS media libraries into sealed, verifiable archives, on a schedu
 
 macOS 15+ · Apple Silicon · MIT licensed
 
+<p align="center">
+  <img src="docs/screenshots/main-window.png" alt="Cryoframe main window" width="520">
+</p>
+
 ---
 
 ## The problem it solves
@@ -37,12 +41,20 @@ Built in (fixed locations, detected automatically):
 | Mail | `~/Library/Mail` | Mail |
 | Microsoft Outlook | default Outlook profile | Outlook |
 
+<p align="center">
+  <img src="docs/screenshots/library-picker.png" alt="Built-in library picker" width="430">
+</p>
+
 Templates (you point at the library, since these live anywhere — often on external drives):
 
 - Final Cut Pro libraries
 - Lightroom Classic catalogs
 - Capture One catalogs
 - Logic Pro projects
+
+<p align="center">
+  <img src="docs/screenshots/library-templates.png" alt="Library templates for Final Cut, Lightroom, Capture One, and Logic Pro" width="430">
+</p>
 
 Anything else: point at any folder with "Add library", and it is treated as static content.
 
@@ -80,10 +92,18 @@ Three one-time steps, shown at the top of the window:
 
 Press New Job and pick a library, a destination, a format, and how often to run. Every field has a tooltip.
 
+<p align="center">
+  <img src="docs/screenshots/destination-targets.png" alt="Choosing a destination: local or cloud-sync folder" width="430">
+</p>
+
 Formats:
 
 - Sealed DMG or zip. One immutable, checksummed file for cold storage. Larger than the target's cap splits into volumes, so it fits cloud single-file limits.
 - Live mirror. A sparsebundle with about 8 MB bands. The first run copies everything; later runs only write the bands that changed.
+
+<p align="center">
+  <img src="docs/screenshots/format-options.png" alt="Archive format options: sealed DMG, sealed zip, or live mirror" width="430">
+</p>
 
 Verification:
 
