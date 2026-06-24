@@ -1,0 +1,143 @@
+name: Cryoframe
+# XcodeGen spec — the .xcodeproj is generated from this and gitignored, so the
+# project is diffable in the OSS repo. Regenerate with: xcodegen generate
+options:
+  bundleIdPrefix: app.cryoframe
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: YA83Q8FTH3            # Brian Reed — Developer ID
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_HARDENED_RUNTIME: YES            # locked decision: notarized Developer ID
+    CODE_SIGN_STYLE: Manual
+    GENERATE_INFOPLIST_FILE: YES
+    ARCHS: arm64                            # locked decision: Apple Silicon only
+    ONLY_ACTIVE_ARCH: YES
+  configs:
+    Release:
+      # distribution signing: secure timestamp + no get-task-allow (debug
+      # entitlement). without these, notarization rejects the build.
+      OTHER_CODE_SIGN_FLAGS: "--timestamp"
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+
+targets:
+  # ── shared XPC contract + value types (app + helper both link this) ──────────
+  CryoframeShared:
+    type: library.static
+    platform: macOS
+    sources: [Sources/CryoframeShared]
+
+  # ── engine logic: snapshot backends, lifecycle coordinator (no privilege) ────
+  CryoframeKit:
+    type: library.static
+    platform: macOS
+    sources: [Sources/CryoframeKit]
+    dependencies:
+      - target: CryoframeShared
+
+  # ── root LaunchDaemon: snapshot lifecycle over XPC. embedded in the app ──────
+  CryoframeHelper:
+    type: tool
+    platform: macOS
+    sources: [Sources/CryoframeHelper]
+    dependencies:
+      - target: CryoframeShared
+      - target: CryoframeKit
+    settings:
+      base:
+        PRODUCT_NAME: CryoframeHelper
+        PRODUCT_BUNDLE_IDENTIFIER: app.cryoframe.helper
+        # embed an Info.plist section so the codesign IDENTIFIER comes from
+        # CFBundleIdentifier (app.cryoframe.helper), NOT the exec name. without this a
+        # `tool` derives its identifier from the filename and strips a dotted suffix
+        # as an "extension" — which is what the app's connection requirement checks.
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        CODE_SIGN_ENTITLEMENTS: Sources/CryoframeHelper/CryoframeHelper.entitlements
+        SKIP_INSTALL: YES
+
+  # ── SwiftUI app (FDA reader + SMAppService client) ───────────────────────────
+  Cryoframe:
+    type: application
+    platform: macOS
+    sources: [Sources/Cryoframe]
+    dependencies:
+      - target: CryoframeShared
+      - target: CryoframeKit
+      - target: CryoframeHelper
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables          # -> Contents/MacOS/CryoframeHelper
+    settings:
+      base:
+        PRODUCT_NAME: Cryoframe
+        PRODUCT_BUNDLE_IDENTIFIER: app.cryoframe
+        CODE_SIGN_IDENTITY: "Developer ID Application"
+        CODE_SIGN_ENTITLEMENTS: Sources/Cryoframe/Cryoframe.entitlements
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    postBuildScripts:
+      # marketing version is hand-set (MARKETING_VERSION); the build number is
+      # stamped with the build time as YYYYMMDD.HHMM on every build. Runs before
+      # the implicit code-sign so the signature stays valid.
+      - name: Set Build Number (YYYYMMDD.HHMM)
+        basedOnDependencyAnalysis: false
+        script: |
+          BUILD_NUMBER=$(date +%Y%m%d.%H%M)
+          PLIST="${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PLIST"
+    postCompileScripts:
+      - name: Embed LaunchDaemon plist
+        inputFiles:
+          - $(SRCROOT)/Sources/CryoframeHelper/app.cryoframe.helper.plist
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchDaemons/app.cryoframe.helper.plist
+        script: |
+          set -e
+          DEST="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchDaemons"
+          mkdir -p "$DEST"
+          cp "${SRCROOT}/Sources/CryoframeHelper/app.cryoframe.helper.plist" "$DEST/"
+      - name: Embed LaunchAgent plist
+        inputFiles:
+          - $(SRCROOT)/Sources/Cryoframe/app.cryoframe.agent.plist
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/app.cryoframe.agent.plist
+        script: |
+          set -e
+          DEST="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents"
+          mkdir -p "$DEST"
+          cp "${SRCROOT}/Sources/Cryoframe/app.cryoframe.agent.plist" "$DEST/"
+
+  # ── unit tests for the engine, run with fakes — no root, no XPC ──────────────
+  CryoframeKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/CryoframeKitTests]
+    dependencies:
+      - target: CryoframeKit
+      - target: CryoframeShared
+
+schemes:
+  Cryoframe-Core:
+    build:
+      targets:
+        CryoframeKit: all
+        CryoframeKitTests: [test]
+    test:
+      gatherCoverageData: true
+      targets: [CryoframeKitTests]
+  Cryoframe:
+    build:
+      targets:
+        Cryoframe: all
+    run:
+      config: Debug

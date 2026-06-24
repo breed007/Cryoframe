@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>app.cryoframe.agent</string>
+    <!-- the app's own executable; the env var switches it into headless agent mode -->
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/Cryoframe</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CRYOFRAME_AGENT</key>
+        <string>1</string>
+    </dict>
+    <!-- wake hourly to run due jobs; the Scheduler decides what actually fires -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <!-- ride the app's Full Disk Access grant -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>app.cryoframe</string>
+    </array>
+</dict>
+</plist>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- NOT sandboxed (Developer ID, not MAS). Full Disk Access is granted by
+         the user at runtime in System Settings — it is not an entitlement.
+         Hardened runtime is enabled via build settings for notarization. -->
+</dict>
+</plist>

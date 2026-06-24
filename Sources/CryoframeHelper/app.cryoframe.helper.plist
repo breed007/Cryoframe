@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>app.cryoframe.helper</string>
+    <!-- helper binary, relative to the .app bundle; copied into Contents/MacOS at build -->
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/CryoframeHelper</string>
+    <!-- launchd vends this mach service; the app connects to it on demand -->
+    <key>MachServices</key>
+    <dict>
+        <key>app.cryoframe.helper</key>
+        <true/>
+    </dict>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>app.cryoframe</string>
+    </array>
+</dict>
+</plist>
