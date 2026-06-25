@@ -17,16 +17,6 @@ private func tempDir() -> URL {
     return d
 }
 
-private final class RecordingEngine: ArchiveEngine, @unchecked Sendable {
-    var ran = false
-    func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
-        ran = true
-        try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
-        let a = destinationDir.appendingPathComponent("out.zip"); try Data("z".utf8).write(to: a)
-        return ArchiveResult(artifacts: [a], format: .sealedZip)
-    }
-}
-
 // MARK: - constraints
 
 @Test func cloudTargetCapsTriggerSplitButLocalDoesNot() {
@@ -64,37 +54,18 @@ private final class RecordingEngine: ArchiveEngine, @unchecked Sendable {
     }
 }
 
-// MARK: - targeted run wiring
+// MARK: - run gating
 
-@Test func targetedRunGatesOnAvailabilityAndNeverTouchesSnapshot() async throws {
+@Test func executorGatesOnAvailabilityAndNeverTouchesSnapshot() async throws {
     let helper = FakePrivilegedHelper()
-    let engine = RecordingEngine()
-    let runner = TargetedBackupRunner(
-        backup: BackupRunner(helper: helper, locator: ContentLocator(exists: { _ in true })),
-        probe: FakeTargetProbe(TargetAvailability(reachable: false, writable: false, reason: "offline")),
-        engineProvider: { _, _ in engine })
+    let exec = JobExecutor(helper: helper, detector: FakeProcessDetector(),
+                           probe: FakeTargetProbe(TargetAvailability(reachable: false, writable: false, reason: "offline")))
+    let j = BackupJob(name: "gated", libraries: [.photos],
+                      target: .localVolume(id: "l", name: "Disk", dir: URL(fileURLWithPath: "/nope")),
+                      format: .sealedZip, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
 
-    let target = Target.localVolume(id: "l", name: "Disk", dir: URL(fileURLWithPath: "/nope"))
     await #expect(throws: TargetError.self) {
-        try await runner.run(.photos, format: .sealedZip, to: target, ownerUID: 501)
+        try await exec.run(j, ownerUID: 501, now: Date(timeIntervalSince1970: 0))
     }
-    #expect(!engine.ran)
-    #expect(await helper.calls.isEmpty)                 // no snapshot was even created
-}
-
-@Test func targetedRunProceedsWhenAvailable() async throws {
-    let helper = FakePrivilegedHelper()
-    let engine = RecordingEngine()
-    let out = tempDir(); defer { try? FileManager.default.removeItem(at: out) }
-    let runner = TargetedBackupRunner(
-        backup: BackupRunner(helper: helper, locator: ContentLocator(exists: { _ in true })),
-        probe: FakeTargetProbe(TargetAvailability(reachable: true, writable: true)),
-        engineProvider: { _, _ in engine })
-
-    let target = Target.localVolume(id: "l", name: "Disk", dir: out)
-    let outcome = try await runner.run(.photos, format: .sealedZip, to: target, ownerUID: 501)
-
-    #expect(engine.ran)
-    #expect(FileManager.default.fileExists(atPath: outcome.manifestURL.path))
-    #expect(await helper.calls == ["create", "mount", "unmount", "delete"])
+    #expect(await helper.calls.isEmpty)                 // preflight failed before any snapshot
 }

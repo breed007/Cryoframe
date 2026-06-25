@@ -136,11 +136,20 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.archiveDir) private var archiveDir = ""
     @AppStorage(Prefs.mirrorGB) private var mirrorGB = 500
     @AppStorage(Prefs.maxConcurrent) private var maxConcurrent = 2
+    @AppStorage(Prefs.keepAwake) private var keepAwake = true
+    @AppStorage(Prefs.wakeForSchedule) private var wakeForSchedule = false
 
     var body: some View {
         Form {
-            Section("Running") {
+            Section {
                 Stepper("Maximum jobs running at once: \(maxConcurrent)", value: $maxConcurrent, in: 1...8)
+                Toggle("Keep the Mac awake while a backup runs", isOn: $keepAwake)
+                Toggle("Wake the Mac for scheduled backups", isOn: $wakeForSchedule)
+                    .onChange(of: wakeForSchedule) { Task { await WakeScheduler.arm() } }
+            } header: {
+                Text("Running")
+            } footer: {
+                Text("Keeping awake prevents idle sleep during a run. Waking for a schedule changes the system power schedule and asks the helper for permission; it can't wake a Mac that's shut down or one with its lid closed.")
             }
             Section("Defaults for new jobs") {
                 Picker("Format", selection: $format) {

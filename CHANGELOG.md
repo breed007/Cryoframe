@@ -2,6 +2,15 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [0.3.1] — 2026-06-25
+
+### Added
+- "Keep the Mac awake while a backup runs" (Settings ▸ General, on by default). Holds an idle-sleep assertion for the duration of a run so an unattended or scheduled backup isn't cut off when the Mac idle-sleeps. Prevents idle sleep only — it never forces the display on, and is released while a job is paused.
+- "Wake the Mac for scheduled backups" (off by default). Asks the helper to set a system wake a couple of minutes before the next due job, so an idle Mac runs its scheduled backup near the intended time. It only ever manages its own wake event, can't wake a Mac that's shut down, and can't beat a closed lid.
+
+### Internal
+- Removed the superseded `BackupRunner`/`TargetedBackupRunner` paths; all runs go through `JobExecutor`.
+
 ## [0.3.0] — 2026-06-25
 
 ### Added
@@ -40,6 +49,7 @@ First public release. Signed with a Developer ID and notarized.
 - Targets for local disks, network shares, and cloud-sync folders, each with a size cap and an availability preflight.
 - Scheduling through a launchd agent, with per-job control over what happens when the owning app is open.
 
+[0.3.1]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.1
 [0.3.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.0
 [0.2.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.2.0
 [0.1.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.1.0

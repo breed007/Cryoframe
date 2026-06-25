@@ -71,6 +71,7 @@ public actor FakePrivilegedHelper: PrivilegedHelper {
     }
 
     public func reloadForUpdate() async throws {}
+    public func scheduleWake(at date: Date?) async throws {}
 }
 
 /// Scriptable CommandRunner for backend tests — maps argv to canned results.

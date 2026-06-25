@@ -28,6 +28,7 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Targets for local disks, network shares, and cloud-sync folders, each with its own size cap and an availability preflight so a run never starts against an unmounted drive.
 - Run jobs concurrently up to a configurable limit, with live progress, and pause, resume, or stop a run in flight.
 - Scheduling through a launchd agent, with per-job control over what happens if the owning app is open.
+- Keeps the Mac awake while a backup runs, and can optionally wake it for a scheduled run, so unattended backups actually finish.
 - Owns its snapshots end to end. It never touches Time Machine's snapshots.
 
 ## Supported libraries

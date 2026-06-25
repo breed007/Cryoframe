@@ -18,4 +18,6 @@ enum Prefs {
     static let transferChunkUnit = "transfer.chunkUnit"    // "GB" | "TB", default "GB"
     static let scratchDir = "transfer.scratchDir"          // absolute path (empty = system cache)
     static let maxConcurrent = "run.maxConcurrent"         // Int, default 2
+    static let keepAwake = "run.keepAwake"                 // Bool, default true — prevent idle sleep during a run
+    static let wakeForSchedule = "run.wakeForSchedule"     // Bool, default false — pmset wake before a due job
 }

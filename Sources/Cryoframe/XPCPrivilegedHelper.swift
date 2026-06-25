@@ -60,6 +60,10 @@ final class XPCPrivilegedHelper: PrivilegedHelper, @unchecked Sendable {
     func reloadForUpdate() async throws {
         try await callVoid { $0.reloadForUpdate(reply: $1) }
     }
+    func scheduleWake(at date: Date?) async throws {
+        let epoch = date?.timeIntervalSince1970 ?? 0
+        try await callVoid { $0.scheduleWake(epoch: epoch, reply: $1) }
+    }
 
     // MARK: continuation plumbing (single-resume guarded)
 

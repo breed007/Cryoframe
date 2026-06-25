@@ -14,13 +14,17 @@ import CryoframeKit
 final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     private let backend: SnapshotBackend
     private let ledger: SnapshotLedger
+    private let runner: CommandRunner
     private let dataVolume = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: "")
     private static let mountBase = "/private/var/run/app.cryoframe/mnt"
+    private static let wakeStatePath = "/private/var/db/app.cryoframe/wake.txt"
 
     init(backend: SnapshotBackend = TMUtilSnapshotBackend(),
-         ledger: SnapshotLedger = SnapshotLedger(path: "/private/var/db/app.cryoframe/ledger.json")) {
+         ledger: SnapshotLedger = SnapshotLedger(path: "/private/var/db/app.cryoframe/ledger.json"),
+         runner: CommandRunner = ProcessCommandRunner()) {
         self.backend = backend
         self.ledger = ledger
+        self.runner = runner
     }
 
     // MARK: wire protocol
@@ -90,6 +94,35 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     func mountNetworkTarget(spec: Data, reply: @escaping (Data?, Error?) -> Void) {
         respond(reply) { () -> MountRef in
             throw HelperError.internalError("mountNetworkTarget: not implemented until M5")
+        }
+    }
+
+    private static let wakeFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MM/dd/yy HH:mm:ss"              // the input format `pmset schedule` documents
+        return f
+    }()
+
+    func scheduleWake(epoch: Double, reply: @escaping (Error?) -> Void) {
+        respondVoid(reply) {
+            let fm = FileManager.default
+            // cancel the wake we set last time (by its exact spec) — never cancelall,
+            // which would also drop the user's own and system power events.
+            if let prev = try? String(contentsOfFile: Self.wakeStatePath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines), !prev.isEmpty {
+                _ = try? self.runner.run("/usr/bin/pmset", ["schedule", "cancel", "wake", prev])
+                try? fm.removeItem(atPath: Self.wakeStatePath)
+            }
+            guard epoch > 0 else { return }                         // clear-only request
+            let date = Date(timeIntervalSince1970: epoch)
+            guard date.timeIntervalSinceNow > 0 else { return }     // never schedule in the past
+            let spec = Self.wakeFmt.string(from: date)
+            let r = try self.runner.run("/usr/bin/pmset", ["schedule", "wake", spec])
+            guard r.ok else { throw HelperError.internalError("pmset schedule wake failed: \(r.stderr)") }
+            try? fm.createDirectory(atPath: (Self.wakeStatePath as NSString).deletingLastPathComponent,
+                                    withIntermediateDirectories: true)
+            try? spec.write(toFile: Self.wakeStatePath, atomically: true, encoding: .utf8)
         }
     }
 

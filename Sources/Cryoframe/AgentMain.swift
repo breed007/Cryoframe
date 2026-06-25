@@ -16,24 +16,31 @@ enum AgentMain {
         TransferResumer.resumeAll(store: PendingTransferStore.standard())   // finish interrupted transfers first
 
         let due = Scheduler().dueJobs(store.load(), now: Date())
-        guard !due.isEmpty else { exit(0) }
+        if !due.isEmpty {
+            let sleepGuard = SleepGuard(); sleepGuard.begin()   // don't idle-sleep mid scheduled run
+            let executor = TransferConfig.makeExecutor(detector: WorkspaceProcessDetector(), store: store)
+            let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
+            let limit = DispatchSemaphore(value: TransferConfig.maxConcurrentJobs())
+            let group = DispatchGroup()
 
-        let executor = TransferConfig.makeExecutor(detector: WorkspaceProcessDetector(), store: store)
-        let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
-        let limit = DispatchSemaphore(value: TransferConfig.maxConcurrentJobs())
-        let group = DispatchGroup()
-
-        for job in due {
-            limit.wait()                                    // bound concurrency
-            group.enter()
-            let resolved = job.resolvingLibraries(in: registry)
-            Task {
-                _ = try? await executor.run(resolved, ownerUID: getuid(), now: Date())
-                limit.signal()
-                group.leave()
+            for job in due {
+                limit.wait()                                    // bound concurrency
+                group.enter()
+                let resolved = job.resolvingLibraries(in: registry)
+                Task {
+                    _ = try? await executor.run(resolved, ownerUID: getuid(), now: Date())
+                    limit.signal()
+                    group.leave()
+                }
             }
+            group.wait()
+            sleepGuard.end()
         }
-        group.wait()
+
+        // re-point the optional pmset wake at the next due job (lastRun may have changed).
+        let sem = DispatchSemaphore(value: 0)
+        Task { await WakeScheduler.arm(store: store); sem.signal() }
+        sem.wait()
         exit(0)
     }
 }

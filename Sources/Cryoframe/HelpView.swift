@@ -45,6 +45,12 @@ struct HelpView: View {
                         bullet("Each job shows a green check or red ✗ for whether its libraries are found, with a Fix in Settings link for built-ins.")
                     }
 
+                    section("Sleep & scheduled wake") {
+                        bullet("Locking the screen doesn't interrupt a backup — it keeps running.")
+                        bullet("\"Keep the Mac awake while a backup runs\" (Settings ▸ General, on by default) holds an assertion for the duration of a run so the Mac doesn't idle-sleep partway through and sever a network copy. It prevents idle sleep only — it never forces the display on, and closing a laptop lid still sleeps the Mac.")
+                        bullet("\"Wake the Mac for scheduled backups\" (off by default) asks the helper to set a system wake a couple of minutes before the next due job, so an idle Mac runs its nightly backup near the intended time. It changes the system power schedule (and only ever its own wake), can't wake a Mac that's shut down, and can't beat a closed lid.")
+                    }
+
                     section("Formats") {
                         bullet("Live mirror (default): a sparsebundle that updates in place. Only the parts that changed get rewritten — fast for a frequent working backup, and it can be paused mid-run.")
                         bullet("Sealed zip or DMG: one immutable, checksummed file for cold storage. Splits into volumes when the target caps file size, so it fits cloud limits. (DMG imaging can't be paused mid-build.)")

@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
 
     private var queue: [String] = []                    // job ids waiting for a run slot
     private var controls: [String: RunControl] = [:]
+    private let sleepGuard = SleepGuard()
     private var maxConcurrent: Int {
         let n = UserDefaults.standard.integer(forKey: Prefs.maxConcurrent)
         return n > 0 ? n : 2
@@ -56,6 +57,7 @@ final class AppModel: ObservableObject {
         revalidate()
         Task { await helper.reloadIfStale() }   // pick up a new helper binary after an app update
         resumeTransfers()
+        armWake()                               // align the optional pmset wake with the schedule
     }
 
     func refreshDiskAccess() { fullDiskAccess = DiskAccess.hasFullDiskAccess() }
@@ -99,12 +101,12 @@ final class AppModel: ObservableObject {
 
     // MARK: jobs / targets
 
-    func addJob(_ job: BackupJob) { store.upsert(job); jobs = store.load().jobs; revalidate() }
-    func deleteJob(_ id: String) { stopJob(id); store.remove(id: id); jobs = store.load().jobs; lastResults[id] = nil; revalidate() }
+    func addJob(_ job: BackupJob) { store.upsert(job); jobs = store.load().jobs; revalidate(); armWake() }
+    func deleteJob(_ id: String) { stopJob(id); store.remove(id: id); jobs = store.load().jobs; lastResults[id] = nil; revalidate(); armWake() }
     func addTarget(_ target: Target) { targets.removeAll { $0.id == target.id }; targets.append(target) }
 
     func setEnabled(_ job: BackupJob, _ enabled: Bool) {
-        var j = job; j.enabled = enabled; store.upsert(j); jobs = store.load().jobs
+        var j = job; j.enabled = enabled; store.upsert(j); jobs = store.load().jobs; armWake()
     }
 
     func owningAppRunning(_ type: ContentType) -> Bool { type.owningProcessRunning(detector) }
@@ -134,9 +136,17 @@ final class AppModel: ObservableObject {
         pausedJobIDs.remove(id)
     }
 
-    func pauseJob(_ id: String) { if controls[id]?.pause() == true { pausedJobIDs.insert(id) } }
-    func resumeJob(_ id: String) { controls[id]?.resume(); pausedJobIDs.remove(id) }
+    func pauseJob(_ id: String) { if controls[id]?.pause() == true { pausedJobIDs.insert(id); refreshSleepGuard() } }
+    func resumeJob(_ id: String) { controls[id]?.resume(); pausedJobIDs.remove(id); refreshSleepGuard() }
     func isPaused(_ id: String) -> Bool { pausedJobIDs.contains(id) }
+
+    /// keep the Mac awake while a job is actively running (not while merely paused).
+    private func refreshSleepGuard() {
+        if runningJobIDs.subtracting(pausedJobIDs).isEmpty { sleepGuard.end() } else { sleepGuard.begin() }
+    }
+
+    /// re-point the optional pmset wake at the next due job (no-op unless enabled).
+    func armWake() { Task { await WakeScheduler.arm() } }
 
     /// Whether the running job can be paused right now. hdiutil's DMG imaging can't
     /// be safely suspended (its diskimages-helper child segfaults), so Pause is only
@@ -162,6 +172,7 @@ final class AppModel: ObservableObject {
     private func startRun(_ job: BackupJob) {
         let id = job.id
         runningJobIDs.insert(id)
+        refreshSleepGuard()
         let control = RunControl(); controls[id] = control
         jobStage[id] = .preparing
         log("▶ \(job.name)")
@@ -179,8 +190,11 @@ final class AppModel: ObservableObject {
                 lastResults[id] = .failed(error.localizedDescription)
             }
             runningJobIDs.remove(id); controls[id] = nil; jobStage[id] = nil; jobLibrary[id] = nil; jobProgress[id] = nil
+            pausedJobIDs.remove(id)
+            refreshSleepGuard()
             jobs = store.load().jobs
             revalidate()
+            armWake()                               // lastRun changed — re-point the wake
             pump()                                  // give the next queued job its slot
         }
     }

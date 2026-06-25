@@ -119,6 +119,11 @@ public protocol PrivilegedHelper: Sendable {
     /// update never takes effect until reboot. Called only at app launch (no job
     /// in flight). Old helpers predating this method just error — caller falls back.
     func reloadForUpdate() async throws
+
+    /// schedule a one-time `pmset` wake at `date` so the Mac is awake for the next
+    /// due job, replacing any wake we previously set. `nil` clears ours. Only ever
+    /// touches the single event Cryoframe created — never the user's power schedule.
+    func scheduleWake(at date: Date?) async throws
 }
 
 // MARK: - XPC wire protocol (NSXPCConnection needs @objc + reply blocks)
@@ -136,6 +141,8 @@ public protocol PrivilegedHelper: Sendable {
     func reconcile(reply: @escaping (Data?, Error?) -> Void)
     func mountNetworkTarget(spec: Data, reply: @escaping (Data?, Error?) -> Void)
     func reloadForUpdate(reply: @escaping (Error?) -> Void)
+    /// epoch seconds since 1970; <= 0 means "clear our scheduled wake".
+    func scheduleWake(epoch: Double, reply: @escaping (Error?) -> Void)
 }
 
 public enum CryoframeHelper {
