@@ -46,6 +46,11 @@ struct HelpView: View {
                         bullet("Each job shows its last run — result, duration, size, and when. The History button (top right) lists every past run, including scheduled ones run while the app was closed, with per-library detail and any error. Run records persist across launches.")
                     }
 
+                    section("Notifications & the menu bar") {
+                        bullet("Cryoframe shows a status item in the menu bar — a glance at each job's last run, with a red triangle if anything failed. It also keeps the app resident, so it can notify you of scheduled runs even with the window closed. Quit it from the menu bar's Quit item.")
+                        bullet("Choose when to be notified in Settings ▸ General ▸ Notifications: never, on failure (default), or on every run.")
+                    }
+
                     section("Sleep & scheduled wake") {
                         bullet("Locking the screen doesn't interrupt a backup — it keeps running.")
                         bullet("\"Keep the Mac awake while a backup runs\" (Settings ▸ General, on by default) holds an assertion for the duration of a run so the Mac doesn't idle-sleep partway through and sever a network copy. It prevents idle sleep only — it never forces the display on, and closing a laptop lid still sleeps the Mac.")
@@ -55,6 +60,24 @@ struct HelpView: View {
                     section("Formats") {
                         bullet("Live mirror (default): a sparsebundle that updates in place. Only the parts that changed get rewritten — fast for a frequent working backup, and it can be paused mid-run.")
                         bullet("Sealed zip or DMG: one immutable, checksummed file for cold storage. Splits into volumes when the target caps file size, so it fits cloud limits. (DMG imaging can't be paused mid-build.)")
+                    }
+
+                    section("Versions & retention") {
+                        bullet("Each run of a sealed-DMG or sealed-zip job is saved as its own dated version, so you can restore the library as it was at a point in time. (Live mirror keeps a single, continuously-updated copy instead.)")
+                        bullet("Set how many to keep when you make the job: all versions, the last N, or a daily/weekly/monthly scheme. Older versions are pruned automatically after a run.")
+                        bullet("Restore lists each version with its date — pick the one you want.")
+                    }
+
+                    section("Encryption") {
+                        bullet("Turn on \"Encrypt with AES-256\" when making a job to encrypt the archive — good for copies kept on an external drive, a NAS, or a cloud-sync folder. It applies to sealed-DMG and live-mirror formats (sealed zip can't be strongly encrypted).")
+                        bullet("The passphrase is stored in your Keychain so scheduled runs encrypt without prompting; it's never written into the job. Restoring or verifying an encrypted archive asks for it.")
+                        bullet("There is no recovery if you lose the passphrase — the backup is unreadable without it. Keep it somewhere safe.")
+                    }
+
+                    section("Restoring a library") {
+                        bullet("Click Restore (top right), point it at the folder holding your archives (or use a Quick pick for a destination you back up to), and it lists the libraries it finds.")
+                        bullet("Pick what to restore and a destination folder. Cryoframe verifies the checksums, then mounts or extracts the archive and copies the library out with its original folder name.")
+                        bullet("It restores next to anything already there — never over your live library. Once it's done, move the restored library into place, or double-click it to open in its app.")
                     }
 
                     section("Verification") {

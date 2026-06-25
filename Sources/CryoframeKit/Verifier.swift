@@ -55,14 +55,10 @@ public struct StrongVerifier: Sendable {
     let runner: CommandRunner
     public init(runner: CommandRunner = ProcessCommandRunner()) { self.runner = runner }
 
-    public func verify(_ result: ArchiveResult, type: ContentType) throws -> VerificationReport {
+    public func verify(_ result: ArchiveResult, type: ContentType, passphrase: String? = nil) throws -> VerificationReport {
         let fm = FileManager.default
-        let work = fm.temporaryDirectory.appendingPathComponent("cf-verify-\(UUID().uuidString)")
-        try fm.createDirectory(at: work, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: work) }
-
-        let opened = try open(result, work: work, fm: fm)
-        defer { opened.teardown() }
+        let opened = try ArchiveReader(runner: runner).open(result, passphrase: passphrase)
+        defer { opened.close() }
 
         guard let libRoot = locateLibraryRoot(under: opened.root, probe: type.integrityProbe, fm: fm) else {
             return report(.mountAndOpen, false, "library not found inside archive", ["root/probe missing"])
@@ -84,48 +80,6 @@ public struct StrongVerifier: Sendable {
         }
     }
 
-    // MARK: opening the archive
-
-    private struct Opened { let root: URL; let teardown: () -> Void }
-
-    private func open(_ result: ArchiveResult, work: URL, fm: FileManager) throws -> Opened {
-        switch result.format {
-        case .sealedDMG:
-            let dmg = try singleFile(result.artifacts, work: work, name: "reassembled.dmg", fm: fm)
-            let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-            try exec(ArchivePlan.attach(image: dmg, mountpoint: mnt, readonly: true))
-            return Opened(root: mnt) { _ = try? self.runner.run("/usr/bin/hdiutil", ["detach", mnt.path]) }
-
-        case .liveMirror:
-            let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-            try exec(ArchivePlan.attach(image: result.artifacts[0], mountpoint: mnt, readonly: true))
-            return Opened(root: mnt) { _ = try? self.runner.run("/usr/bin/hdiutil", ["detach", mnt.path]) }
-
-        case .sealedZip:
-            let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
-            let ex = work.appendingPathComponent("extract"); try fm.createDirectory(at: ex, withIntermediateDirectories: true)
-            try exec(Command("/usr/bin/ditto", ["-x", "-k", zip.path, ex.path]))
-            return Opened(root: ex) {}
-        }
-    }
-
-    /// a single file to operate on — the artifact itself, or split parts reassembled.
-    private func singleFile(_ artifacts: [URL], work: URL, name: String, fm: FileManager) throws -> URL {
-        if artifacts.count == 1 { return artifacts[0] }
-        let out = work.appendingPathComponent(name)
-        fm.createFile(atPath: out.path, contents: nil)
-        let w = try FileHandle(forWritingTo: out); defer { try? w.close() }
-        for part in artifacts.sorted(by: { $0.path < $1.path }) {
-            let r = try FileHandle(forReadingFrom: part); defer { try? r.close() }
-            while true {
-                let chunk = try r.read(upToCount: 1 << 20) ?? Data()
-                if chunk.isEmpty { break }
-                try w.write(contentsOf: chunk)
-            }
-        }
-        return out
-    }
-
     /// the library may be at the archive root (dmg) or one level down (zip
     /// --keepParent, sparsebundle subdir). nil probe ⇒ static, root is fine.
     private func locateLibraryRoot(under root: URL, probe: String?, fm: FileManager) -> URL? {
@@ -138,13 +92,5 @@ public struct StrongVerifier: Sendable {
             }
         }
         return nil
-    }
-
-    private func exec(_ command: Command) throws {
-        let r = try runner.run(command.tool, command.args)
-        guard r.ok else {
-            throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent,
-                                          status: r.status, stderr: r.stderr)
-        }
     }
 }

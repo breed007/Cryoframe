@@ -2,6 +2,16 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [0.5.0] — 2026-06-25
+
+Closes the loop and hardens the archives.
+
+### Added
+- **Restore.** A Restore window finds archives in a folder, verifies their checksums, mounts or extracts them, and copies the library back out with its original folder name — beside your live library, never over it. Handles split volumes and every format.
+- **Encryption.** Optionally encrypt a job's archive with AES-256 (sealed DMG and live mirror). The passphrase is kept in your Keychain so scheduled runs encrypt without prompting; verify and restore unlock with it. Losing the passphrase means the backup is unrecoverable, by design.
+- **Versions & retention.** Each run of a sealed job is saved as a dated version, so you can restore a point in time. Keep all versions, the last N, or a daily/weekly/monthly scheme — older versions are pruned automatically. (Live mirror stays a single, continuously-updated copy.)
+- **Notifications & menu bar.** A menu-bar status item shows each job's last run at a glance and turns red on failure. Cryoframe stays resident there so it can notify you of scheduled-run results — never, on failure, or on every run — even with the window closed.
+
 ## [0.3.2] — 2026-06-25
 
 ### Added
@@ -59,6 +69,7 @@ First public release. Signed with a Developer ID and notarized.
 - Targets for local disks, network shares, and cloud-sync folders, each with a size cap and an availability preflight.
 - Scheduling through a launchd agent, with per-job control over what happens when the owning app is open.
 
+[0.5.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.5.0
 [0.3.2]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.2
 [0.3.1]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.1
 [0.3.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.0

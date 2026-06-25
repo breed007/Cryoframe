@@ -80,7 +80,7 @@ public struct ScriptedCommandRunner: CommandRunner {
     public init(_ handler: @escaping @Sendable (_ launchPath: String, _ args: [String]) -> CommandResult) {
         self.handler = handler
     }
-    public func run(_ launchPath: String, _ args: [String]) throws -> CommandResult {
+    public func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
         handler(launchPath, args)
     }
 }

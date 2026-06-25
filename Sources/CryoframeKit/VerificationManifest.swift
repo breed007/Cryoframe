@@ -17,18 +17,23 @@ public struct ArtifactDigest: Codable, Sendable, Equatable {
 public struct VerificationManifest: Codable, Sendable, Equatable {
     public let format: ArchiveFormat
     public let artifacts: [ArtifactDigest]
+    public var encrypted: Bool?      // nil/false = plaintext; true = AES-256 (needs a passphrase to open)
+
+    public init(format: ArchiveFormat, artifacts: [ArtifactDigest], encrypted: Bool? = nil) {
+        self.format = format; self.artifacts = artifacts; self.encrypted = encrypted
+    }
 }
 
 public enum ArchiveManifest {
     public static let sidecarName = "cryoframe-manifest.json"
 
     /// hash every artifact and build the manifest.
-    public static func build(for result: ArchiveResult) throws -> VerificationManifest {
+    public static func build(for result: ArchiveResult, encrypted: Bool = false) throws -> VerificationManifest {
         let digests = try result.artifacts.map { url -> ArtifactDigest in
             let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) ?? 0
             return ArtifactDigest(name: url.lastPathComponent, size: size, sha256: try Checksum.sha256(of: url))
         }
-        return VerificationManifest(format: result.format, artifacts: digests)
+        return VerificationManifest(format: result.format, artifacts: digests, encrypted: encrypted ? true : nil)
     }
 
     @discardableResult

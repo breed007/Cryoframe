@@ -14,9 +14,11 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     let sizeGB: Int
     let bandSectors: Int          // 16384 sectors * 512 = 8 MiB bands
     let runner: CommandRunner
+    let passphrase: String?       // AES-256 encryption when set
 
-    public init(sizeGB: Int, bandSectors: Int = 16384, runner: CommandRunner = ProcessCommandRunner()) {
-        self.sizeGB = sizeGB; self.bandSectors = bandSectors; self.runner = runner
+    public init(sizeGB: Int, bandSectors: Int = 16384,
+                runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil) {
+        self.sizeGB = sizeGB; self.bandSectors = bandSectors; self.runner = runner; self.passphrase = passphrase
     }
 
     public func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
@@ -28,10 +30,13 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 
         // isDirectory: true — otherwise appendingPathComponent stats the disk and
         // adds a trailing slash once the bundle exists, so run 1 and run 2 differ.
+        let stdin = passphrase.map { Data($0.utf8) }
+        let encrypted = passphrase != nil
         let bundle = destinationDir.appendingPathComponent(source.name + ".sparsebundle", isDirectory: true)
         if !fm.fileExists(atPath: bundle.path) {
             try execute(ArchivePlan.sparseBundleCreate(output: bundle, name: source.name,
-                                                       sizeGB: sizeGB, bandSectors: bandSectors))
+                                                       sizeGB: sizeGB, bandSectors: bandSectors,
+                                                       encrypted: encrypted), stdin: stdin)
         }
 
         // attach at a private mountpoint, mirror, detach — no namespace parsing.
@@ -44,7 +49,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             try? fm.removeItem(at: mountpoint)
         }
 
-        try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint))
+        try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin)
         let dest = mountpoint.appendingPathComponent(source.root.lastPathComponent)
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
         try execute(ArchivePlan.rsync(root: source.root, into: dest))
@@ -53,8 +58,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         return ArchiveResult(artifacts: [bundle], format: .liveMirror)
     }
 
-    private func execute(_ command: Command) throws {
-        let r = try runner.run(command.tool, command.args)
+    private func execute(_ command: Command, stdin: Data? = nil) throws {
+        let r = try runner.run(command.tool, command.args, stdin: stdin)
         guard r.ok else {
             throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent,
                                           status: r.status, stderr: r.stderr)

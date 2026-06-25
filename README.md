@@ -24,12 +24,16 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
 - Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG — immutable, checksummed, split into volumes when the target caps file size.
 - Resumable transfers to network shares and external drives: the archive ships in part files and picks up from the last whole part after a dropped connection or unplugged drive.
+- Restore built in: find an archive, verify it, and copy the library back out with its original folder name — beside the live one, never over it.
+- Optional AES-256 encryption for sealed-DMG and live-mirror archives, with the passphrase kept in the Keychain so scheduled runs encrypt without prompting.
+- Versioned sealed archives with a retention policy — keep all, the last N, or a daily/weekly/monthly scheme — so you can restore a point in time without the disk filling up.
 - Verification built in: a checksum manifest on every archive, plus an optional mount-and-open check that confirms the library's database opens clean. Cold archives can be re-verified later.
 - Targets for local disks, network shares, and cloud-sync folders, each with its own size cap and an availability preflight so a run never starts against an unmounted drive.
 - Run jobs concurrently up to a configurable limit, with live progress — speed, time elapsed, and time remaining — and pause, resume, or stop a run in flight.
 - Durable run history: every run, manual or scheduled, is recorded with its outcome, per-library detail, duration, size, and any error, and survives quitting the app.
 - Scheduling through a launchd agent, with per-job control over what happens if the owning app is open.
 - Keeps the Mac awake while a backup runs, and can optionally wake it for a scheduled run, so unattended backups actually finish.
+- A menu-bar status item and notifications, so you know at a glance whether the last run — including scheduled ones — succeeded.
 - Owns its snapshots end to end. It never touches Time Machine's snapshots.
 
 ## Supported libraries

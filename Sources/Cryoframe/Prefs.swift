@@ -21,4 +21,5 @@ enum Prefs {
     static let maxConcurrent = "run.maxConcurrent"         // Int, default 2
     static let keepAwake = "run.keepAwake"                 // Bool, default true — prevent idle sleep during a run
     static let wakeForSchedule = "run.wakeForSchedule"     // Bool, default false — pmset wake before a due job
+    static let notifyPolicy = "run.notifyPolicy"           // "never" | "failure" | "all", default "failure"
 }

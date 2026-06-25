@@ -15,9 +15,11 @@ public struct SealedArchiveEngine: ArchiveEngine {
     let sealed: Sealed
     let split: SplitPolicy
     let runner: CommandRunner
+    let passphrase: String?          // AES-256 encryption for dmg when set (zip is never encrypted)
 
-    public init(_ sealed: Sealed, split: SplitPolicy = .none, runner: CommandRunner = ProcessCommandRunner()) {
-        self.sealed = sealed; self.split = split; self.runner = runner
+    public init(_ sealed: Sealed, split: SplitPolicy = .none,
+                runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil) {
+        self.sealed = sealed; self.split = split; self.runner = runner; self.passphrase = passphrase
     }
 
     public func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
@@ -34,7 +36,9 @@ public struct SealedArchiveEngine: ArchiveEngine {
         case .dmg:
             output = dir.appendingPathComponent(source.name + ".dmg"); format = .sealedDMG
             try? fm.removeItem(at: output)
-            try execute(ArchivePlan.dmg(root: source.root, output: output))
+            let encrypted = passphrase != nil
+            try execute(ArchivePlan.dmg(root: source.root, output: output, encrypted: encrypted),
+                        stdin: passphrase.map { Data($0.utf8) })
         case .zip:
             output = dir.appendingPathComponent(source.name + ".zip"); format = .sealedZip
             try? fm.removeItem(at: output)
@@ -61,8 +65,8 @@ public struct SealedArchiveEngine: ArchiveEngine {
         return try partArtifacts(prefix: prefix, in: dir, fm: fm)
     }
 
-    private func execute(_ command: Command) throws {
-        let r = try runner.run(command.tool, command.args)
+    private func execute(_ command: Command, stdin: Data? = nil) throws {
+        let r = try runner.run(command.tool, command.args, stdin: stdin)
         guard r.ok else {
             throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent,
                                           status: r.status, stderr: r.stderr)

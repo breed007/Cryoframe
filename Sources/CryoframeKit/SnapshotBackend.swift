@@ -42,7 +42,16 @@ public struct CommandResult: Sendable {
 }
 
 public protocol CommandRunner: Sendable {
-    func run(_ launchPath: String, _ args: [String]) throws -> CommandResult
+    /// `stdin`, when non-nil, is written to the process and the pipe closed — used
+    /// to feed `hdiutil -stdinpass` an encryption passphrase without exposing it in
+    /// argv or on disk.
+    func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult
+}
+
+public extension CommandRunner {
+    func run(_ launchPath: String, _ args: [String]) throws -> CommandResult {
+        try run(launchPath, args, stdin: nil)
+    }
 }
 
 /// Real runner over Foundation `Process`. Used by the helper at runtime. When a
@@ -51,16 +60,22 @@ public struct ProcessCommandRunner: CommandRunner {
     let control: RunControl?
     public init(control: RunControl? = nil) { self.control = control }
 
-    public func run(_ launchPath: String, _ args: [String]) throws -> CommandResult {
+    public func run(_ launchPath: String, _ args: [String], stdin: Data? = nil) throws -> CommandResult {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: launchPath)
         p.arguments = args
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
+        let inPipe: Pipe? = stdin != nil ? Pipe() : nil
+        if let inPipe { p.standardInput = inPipe }
         control?.waitWhilePaused()                  // don't launch the next command while paused
         if let control, !control.attach(p) { throw CancelledError() }
         try p.run()
+        if let inPipe, let stdin {                  // feed the passphrase, then EOF
+            inPipe.fileHandleForWriting.write(stdin)
+            try? inPipe.fileHandleForWriting.close()
+        }
         // read before waitUntilExit to avoid pipe-buffer deadlock on large output
         let outData = out.fileHandleForReading.readDataToEndOfFile()
         let errData = err.fileHandleForReading.readDataToEndOfFile()

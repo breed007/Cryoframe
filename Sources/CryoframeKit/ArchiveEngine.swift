@@ -49,6 +49,7 @@ public enum ArchiveError: Error, Equatable {
     case toolFailed(tool: String, status: Int32, stderr: String)
     case noArtifactProduced(URL)
     case sourceMissing(String)
+    case passphraseUnavailable      // job is encrypted but no key was found in the Keychain
 }
 
 public struct Command: Sendable, Equatable {
@@ -61,8 +62,11 @@ public struct Command: Sendable, Equatable {
 public enum ArchivePlan {
     /// read-only compressed dmg. (hdiutil -segmentSize is deprecated and ignored
     /// for -srcfolder, so splitting is done post-hoc with split(1) — see ArchivePlan.split.)
-    public static func dmg(root: URL, output: URL) -> Command {
-        Command("/usr/bin/hdiutil", ["create", "-srcfolder", root.path, "-format", "UDZO", "-ov", output.path])
+    public static func dmg(root: URL, output: URL, encrypted: Bool = false) -> Command {
+        var args = ["create", "-srcfolder", root.path, "-format", "UDZO"]
+        if encrypted { args += ["-encryption", "AES-256", "-stdinpass"] }   // passphrase via stdin
+        args += ["-ov", output.path]
+        return Command("/usr/bin/hdiutil", args)
     }
 
     /// ditto preserves ACLs / resource forks / xattrs — a plain zip would not.
@@ -75,17 +79,23 @@ public enum ArchivePlan {
         Command("/usr/bin/split", ["-b", "\(cap)", file.path, prefix])
     }
 
-    public static func sparseBundleCreate(output: URL, name: String, sizeGB: Int, bandSectors: Int) -> Command {
-        Command("/usr/bin/hdiutil", ["create", "-type", "SPARSEBUNDLE", "-fs", "APFS",
-                                     "-size", "\(sizeGB)g", "-volname", name,
-                                     "-imagekey", "sparse-band-size=\(bandSectors)", output.path])
+    public static func sparseBundleCreate(output: URL, name: String, sizeGB: Int, bandSectors: Int,
+                                          encrypted: Bool = false) -> Command {
+        var args = ["create", "-type", "SPARSEBUNDLE", "-fs", "APFS",
+                    "-size", "\(sizeGB)g", "-volname", name,
+                    "-imagekey", "sparse-band-size=\(bandSectors)"]
+        if encrypted { args += ["-encryption", "AES-256", "-stdinpass"] }
+        args += [output.path]
+        return Command("/usr/bin/hdiutil", args)
     }
 
     /// attach a sparsebundle or dmg at a known mountpoint. `readonly` for
-    /// verification mounts; read-write for the live-mirror rsync.
-    public static func attach(image: URL, mountpoint: URL, readonly: Bool = false) -> Command {
+    /// verification mounts; read-write for the live-mirror rsync. `encrypted` adds
+    /// `-stdinpass` so the passphrase is read from stdin.
+    public static func attach(image: URL, mountpoint: URL, readonly: Bool = false, encrypted: Bool = false) -> Command {
         var args = ["attach", image.path, "-mountpoint", mountpoint.path, "-nobrowse", "-owners", "on"]
         if readonly { args.append("-readonly") }
+        if encrypted { args.append("-stdinpass") }
         return Command("/usr/bin/hdiutil", args)
     }
 

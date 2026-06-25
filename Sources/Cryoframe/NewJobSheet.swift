@@ -33,12 +33,37 @@ struct NewJobSheet: View {
 
     @State private var verification: VerificationPolicy = .checksumOnly
     @State private var runPolicy: RunPolicy = .proceed
+    @State private var encrypt = false
+    @State private var passphrase = ""
+    @State private var passphraseConfirm = ""
+    @State private var retentionKind = "all"        // all | lastN | gfs
+    @State private var keepN = 7
+    @State private var gfsDaily = 7
+    @State private var gfsWeekly = 4
+    @State private var gfsMonthly = 6
 
     enum FreqKind: String, CaseIterable, Identifiable { case daily, everyHours, once, manual; var id: String { rawValue } }
 
     private var selectedLibraries: [ContentType] { libraries.filter { selectedLibraryIDs.contains($0.id) } }
     private var target: Target? { targets.first { $0.id == selectedTargetID } }
     private var isEditing: Bool { editing != nil }
+
+    private var isSealedFormat: Bool { if case .liveMirror = format { return false }; return true }
+    private var retentionPolicy: RetentionPolicy {
+        switch retentionKind {
+        case "lastN": return .keepLast(max(1, keepN))
+        case "gfs":   return .gfs(daily: gfsDaily, weekly: gfsWeekly, monthly: gfsMonthly)
+        default:      return .keepAll
+        }
+    }
+
+    /// when encrypting, a new passphrase must be entered and confirmed — unless
+    /// editing a job that's already encrypted and leaving the fields blank to keep it.
+    private var encryptionValid: Bool {
+        guard encrypt else { return true }
+        if passphrase.isEmpty && passphraseConfirm.isEmpty && editing?.encrypted == true { return true }
+        return !passphrase.isEmpty && passphrase == passphraseConfirm
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -101,7 +126,7 @@ struct NewJobSheet: View {
                 Section("Format") {
                     Picker("Format", selection: formatBinding) {
                         Text("Live mirror").tag("mirror")
-                        Text("Sealed zip").tag("zip")
+                        if !encrypt { Text("Sealed zip").tag("zip") }   // zip can't be strongly encrypted
                         Text("Sealed DMG").tag("dmg")
                     }
                     if case .liveMirror = format {
@@ -120,6 +145,52 @@ struct NewJobSheet: View {
                             .labelsHidden()
                             .frame(width: 72)
                         }
+                    }
+                }
+
+                Section {
+                    Toggle("Encrypt with AES-256", isOn: $encrypt)
+                        .onChange(of: encrypt) { _, on in
+                            if on, case .sealedZip = format { format = .sealedDMG }   // zip can't be encrypted
+                        }
+                    if encrypt {
+                        SecureField("Passphrase", text: $passphrase)
+                        SecureField("Confirm passphrase", text: $passphraseConfirm)
+                        if isEditing, editing?.encrypted == true {
+                            Text("Leave blank to keep the current passphrase.").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Encryption")
+                } footer: {
+                    if encrypt {
+                        Text("The archive is encrypted with AES-256; the passphrase is kept in your Keychain. Lose it and the backup can't be recovered — there is no reset. Sealed zip isn't available when encrypting.")
+                            .font(.caption).foregroundStyle(.orange)
+                    } else {
+                        Text("Encrypt sealed-DMG and live-mirror archives so a copy on a drive, NAS, or cloud folder is unreadable without your passphrase.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                if isSealedFormat {
+                    Section {
+                        Picker("Keep", selection: $retentionKind) {
+                            Text("All versions").tag("all")
+                            Text("Last N versions").tag("lastN")
+                            Text("Daily / weekly / monthly").tag("gfs")
+                        }
+                        if retentionKind == "lastN" {
+                            Stepper("Keep \(keepN) version\(keepN == 1 ? "" : "s")", value: $keepN, in: 1...365)
+                        } else if retentionKind == "gfs" {
+                            Stepper("Keep \(gfsDaily) daily", value: $gfsDaily, in: 0...60)
+                            Stepper("Keep \(gfsWeekly) weekly", value: $gfsWeekly, in: 0...52)
+                            Stepper("Keep \(gfsMonthly) monthly", value: $gfsMonthly, in: 0...60)
+                        }
+                    } header: {
+                        Text("Versions to keep")
+                    } footer: {
+                        Text("Each run of a sealed job is saved as a dated version, so you can restore a point in time. Versions beyond this policy are pruned after a run. (Live mirror keeps a single up-to-date copy instead.)")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
 
@@ -157,7 +228,7 @@ struct NewJobSheet: View {
                 Spacer()
                 Button("Cancel") { isPresented = false }.keyboardShortcut(.cancelAction)
                 Button(isEditing ? "Save" : "Create") { create() }.keyboardShortcut(.defaultAction)
-                    .disabled(selectedLibraries.isEmpty || target == nil)
+                    .disabled(selectedLibraries.isEmpty || target == nil || !encryptionValid)
             }
             .padding(20)
         }
@@ -224,6 +295,12 @@ struct NewJobSheet: View {
                 else { liveMirrorValue = g; liveMirrorUnit = "GB" }
             }
             verification = job.verification; runPolicy = job.runPolicy
+            encrypt = job.encrypted
+            switch job.retention {
+            case .keepAll: retentionKind = "all"
+            case .keepLast(let n): retentionKind = "lastN"; keepN = n
+            case .gfs(let d, let w, let m): retentionKind = "gfs"; gfsDaily = d; gfsWeekly = w; gfsMonthly = m
+            }
             seedFrequency(job.frequency)
         } else {
             selectedTargetID = targets.first?.id ?? ""
@@ -252,14 +329,22 @@ struct NewJobSheet: View {
     }
 
     private func create() {
-        guard !selectedLibraries.isEmpty, let tgt = target else { return }
+        guard !selectedLibraries.isEmpty, let tgt = target, encryptionValid else { return }
         var fmt = format
         if case .liveMirror = fmt { fmt = .liveMirror(sizeGB: liveMirrorGB) }
-        model.addJob(BackupJob(id: editing?.id ?? UUID().uuidString,
+        let id = editing?.id ?? UUID().uuidString
+        if encrypt {
+            if !passphrase.isEmpty { KeychainArchiveKey.save(passphrase, jobID: id) }   // else: keep existing
+        } else if editing?.encrypted == true {
+            KeychainArchiveKey.delete(jobID: id)                                        // encryption turned off
+        }
+        model.addJob(BackupJob(id: id,
                                name: name.isEmpty ? defaultName : name,
                                libraries: selectedLibraries, target: tgt, format: fmt,
                                frequency: frequency(), verification: verification, runPolicy: runPolicy,
-                               enabled: editing?.enabled ?? true, createdAt: editing?.createdAt ?? Date()))
+                               enabled: editing?.enabled ?? true, encrypted: encrypt,
+                               retention: isSealedFormat ? retentionPolicy : .keepAll,
+                               createdAt: editing?.createdAt ?? Date()))
         isPresented = false
     }
 

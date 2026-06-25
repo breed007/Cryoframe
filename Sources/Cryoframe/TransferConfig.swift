@@ -39,6 +39,7 @@ enum TransferConfig {
                     scratchBase: scratchBase(),
                     chunkSize: chunkSize(),
                     pendingStore: PendingTransferStore.standard(),
-                    jobStore: store)
+                    jobStore: store,
+                    passphraseProvider: { KeychainArchiveKey.load(jobID: $0) })
     }
 }

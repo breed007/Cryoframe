@@ -20,16 +20,30 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
     public var chunkSize: UInt64
     public var targetDir: String
     public var format: ArchiveFormat
+    public var encrypted: Bool               // the staged archive is AES-256 encrypted
     public var completed: [ArtifactDigest]   // parts already shipped, in order
 
     public var totalParts: Int { Int((totalBytes + chunkSize - 1) / max(chunkSize, 1)) }
 
     public init(jobID: String, sourceFile: String, baseName: String, totalBytes: UInt64,
                 chunkSize: UInt64, targetDir: String, format: ArchiveFormat,
-                completed: [ArtifactDigest] = []) {
+                encrypted: Bool = false, completed: [ArtifactDigest] = []) {
         self.jobID = jobID; self.sourceFile = sourceFile; self.baseName = baseName
         self.totalBytes = totalBytes; self.chunkSize = chunkSize; self.targetDir = targetDir
-        self.format = format; self.completed = completed
+        self.format = format; self.encrypted = encrypted; self.completed = completed
+    }
+
+    public init(from decoder: Decoder) throws {       // tolerate records written before `encrypted` existed
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        jobID = try c.decode(String.self, forKey: .jobID)
+        sourceFile = try c.decode(String.self, forKey: .sourceFile)
+        baseName = try c.decode(String.self, forKey: .baseName)
+        totalBytes = try c.decode(UInt64.self, forKey: .totalBytes)
+        chunkSize = try c.decode(UInt64.self, forKey: .chunkSize)
+        targetDir = try c.decode(String.self, forKey: .targetDir)
+        format = try c.decode(ArchiveFormat.self, forKey: .format)
+        encrypted = try c.decodeIfPresent(Bool.self, forKey: .encrypted) ?? false
+        completed = try c.decodeIfPresent([ArtifactDigest].self, forKey: .completed) ?? []
     }
 }
 
@@ -131,7 +145,8 @@ public struct ChunkedShipper: Sendable {
             onPart?(state.completed.count, state.totalParts)
         }
 
-        let manifest = VerificationManifest(format: state.format, artifacts: state.completed)
+        let manifest = VerificationManifest(format: state.format, artifacts: state.completed,
+                                            encrypted: state.encrypted ? true : nil)
         try ArchiveManifest.write(manifest, toDir: targetDir)   // completion marker, written last
         return manifest
     }

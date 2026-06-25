@@ -43,11 +43,17 @@ public struct JobExecutor: Sendable {
                 chunkSize: UInt64 = 2 * 1_000_000_000,
                 pendingStore: PendingTransferStore? = nil,
                 jobStore: JobStore? = nil,
-                dataVolume: VolumeRef = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: "")) {
+                dataVolume: VolumeRef = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: ""),
+                passphraseProvider: @escaping @Sendable (String) -> String? = { _ in nil }) {
         self.helper = helper; self.detector = detector; self.probe = probe; self.locator = locator
         self.scratchBase = scratchBase; self.chunkSize = chunkSize
         self.pendingStore = pendingStore; self.jobStore = jobStore; self.dataVolume = dataVolume
+        self.passphraseProvider = passphraseProvider
     }
+
+    /// resolves the AES-256 passphrase for an encrypted job (jobID → passphrase),
+    /// e.g. from the Keychain. Returns nil for plaintext jobs.
+    let passphraseProvider: @Sendable (String) -> String?
 
     private struct Staged: Sendable {
         let library: ContentType
@@ -80,6 +86,8 @@ public struct JobExecutor: Sendable {
         let sealed = Self.sealedKind(job.format)
         let targetBase = job.target.destinationDir
         let count = job.libraries.count
+        let passphrase = job.encrypted ? passphraseProvider(job.id) : nil
+        if job.encrypted, passphrase?.isEmpty ?? true { throw ArchiveError.passphraseUnavailable }
 
         onStage(.preparing)
         let coordinator = SnapshotCoordinator(helper: helper)
@@ -91,7 +99,10 @@ public struct JobExecutor: Sendable {
                 let idx = offset + 1
                 if control.isCancelled { cancelled = true; break }
                 onLibrary(library.displayName)
-                let dest = targetBase.appendingPathComponent(library.displayName, isDirectory: true)
+                // sealed formats are versioned into a timestamped subfolder; the live
+                // mirror updates one copy in place.
+                let libDir = targetBase.appendingPathComponent(library.displayName, isDirectory: true)
+                let dest = sealed != nil ? libDir.appendingPathComponent(VersionStamp.string(now), isDirectory: true) : libDir
                 guard let root = self.locator.frozenRoots(of: library, mountPoint: mount.mountPoint).first else {
                     results.append(.notFound(library: library.displayName)); continue
                 }
@@ -105,10 +116,12 @@ public struct JobExecutor: Sendable {
                 do {
                     if isStaged, let sealed {
                         staged.append(try self.stage(job: job, library: library, index: idx, source: source,
-                                                     sealed: sealed, dest: dest, runner: runner, onStage: onStage))
+                                                     sealed: sealed, dest: dest, runner: runner,
+                                                     passphrase: passphrase, onStage: onStage))
                     } else {
                         results.append(try self.direct(job: job, library: library, source: source,
-                                                       dest: dest, runner: runner, onStage: onStage))
+                                                       dest: dest, runner: runner,
+                                                       passphrase: passphrase, onStage: onStage))
                     }
                     poller.cancel()
                 } catch is CancelledError {
@@ -160,9 +173,29 @@ public struct JobExecutor: Sendable {
             }
         }
 
+        if sealed != nil {      // prune old sealed versions per the retention policy
+            Self.pruneVersions(target: targetBase, libraries: job.libraries, policy: job.retention)
+        }
         onStage(.completed)
         jobStore?.recordRun(id: job.id, at: now)
         return .finished(results: results, warning: decision.warning)
+    }
+
+    /// delete sealed-archive version folders the retention policy doesn't keep.
+    static func pruneVersions(target: URL, libraries: [ContentType], policy: RetentionPolicy) {
+        guard policy != .keepAll else { return }
+        let fm = FileManager.default
+        for library in libraries {
+            let libDir = target.appendingPathComponent(library.displayName, isDirectory: true)
+            let entries = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+            let versions = entries.compactMap { e -> (url: URL, date: Date)? in
+                guard (try? e.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
+                      let d = VersionStamp.date(e.lastPathComponent) else { return nil }
+                return (e, d)
+            }
+            let prune = retentionPrune(versions.map(\.date), policy: policy)
+            for v in versions where prune.contains(v.date) { try? fm.removeItem(at: v.url) }
+        }
     }
 
     // MARK: progress
@@ -218,11 +251,11 @@ public struct JobExecutor: Sendable {
 
     private func stage(job: BackupJob, library: ContentType, index: Int, source: ArchiveSource,
                        sealed: SealedArchiveEngine.Sealed, dest: URL, runner: CommandRunner,
-                       onStage: @escaping @Sendable (BackupStage) -> Void) throws -> Staged {
+                       passphrase: String?, onStage: @escaping @Sendable (BackupStage) -> Void) throws -> Staged {
         let fm = FileManager.default
         let scratchDir = scratchBase.appendingPathComponent("\(job.id)/\(Self.safe(library.id))", isDirectory: true)
         try fm.createDirectory(at: scratchDir, withIntermediateDirectories: true)
-        let archive = try SealedArchiveEngine(sealed, split: .none, runner: runner).archive(source, to: scratchDir)
+        let archive = try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase).archive(source, to: scratchDir)
         guard let file = archive.artifacts.first,
               let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? UInt64 else {
             throw ArchiveError.noArtifactProduced(scratchDir)
@@ -230,25 +263,28 @@ public struct JobExecutor: Sendable {
         var verified: Bool?
         if job.verification == .mountAndOpen {
             onStage(.verifying)
-            verified = try StrongVerifier(runner: runner).verify(archive, type: library).passed
+            verified = try StrongVerifier(runner: runner).verify(archive, type: library, passphrase: passphrase).passed
         }
         let pending = PendingTransfer(jobID: "\(job.id):\(library.id)", sourceFile: file.path,
                                       baseName: file.lastPathComponent, totalBytes: size,
-                                      chunkSize: chunkSize, targetDir: dest.path, format: archive.format)
+                                      chunkSize: chunkSize, targetDir: dest.path, format: archive.format,
+                                      encrypted: passphrase != nil)
         pendingStore?.save(pending)
         return Staged(library: library, index: index, pending: pending, scratchDir: scratchDir, verified: verified)
     }
 
     private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL,
-                        runner: CommandRunner, onStage: @escaping @Sendable (BackupStage) -> Void) throws -> LibraryRunResult {
+                        runner: CommandRunner, passphrase: String?,
+                        onStage: @escaping @Sendable (BackupStage) -> Void) throws -> LibraryRunResult {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
-        let archive = try EngineFactory.engine(for: job.format, target: job.target, runner: runner).archive(source, to: dest)
+        let archive = try EngineFactory.engine(for: job.format, target: job.target, runner: runner,
+                                               passphrase: passphrase).archive(source, to: dest)
         onStage(.checksumming)
-        try ArchiveManifest.write(try ArchiveManifest.build(for: archive), toDir: dest)
+        try ArchiveManifest.write(try ArchiveManifest.build(for: archive, encrypted: passphrase != nil), toDir: dest)
         var verified: Bool?
         if job.verification == .mountAndOpen {
             onStage(.verifying)
-            verified = try StrongVerifier(runner: runner).verify(archive, type: library).passed
+            verified = try StrongVerifier(runner: runner).verify(archive, type: library, passphrase: passphrase).passed
         }
         let bytes = archive.artifacts.reduce(UInt64(0)) { sum, url in
             sum + ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? UInt64 ?? 0)

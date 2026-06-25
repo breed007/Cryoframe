@@ -23,18 +23,21 @@ public enum TargetError: Error, Equatable {
 
 /// builds an ArchiveEngine for a (format, target) pair, applying target constraints.
 public enum EngineFactory {
+    /// `passphrase` (non-nil) turns on AES-256 for the hdiutil formats — sealed DMG
+    /// and live mirror. Sealed zip can't be strongly encrypted, so it ignores it.
     public static func engine(for choice: FormatChoice, target: Target,
-                              runner: CommandRunner = ProcessCommandRunner()) throws -> ArchiveEngine {
+                              runner: CommandRunner = ProcessCommandRunner(),
+                              passphrase: String? = nil) throws -> ArchiveEngine {
         switch choice {
         case .sealedDMG:
-            return SealedArchiveEngine(.dmg, split: target.constraints.splitPolicy, runner: runner)
+            return SealedArchiveEngine(.dmg, split: target.constraints.splitPolicy, runner: runner, passphrase: passphrase)
         case .sealedZip:
             return SealedArchiveEngine(.zip, split: target.constraints.splitPolicy, runner: runner)
         case .liveMirror(let sizeGB):
             guard target.constraints.supportsIncremental else {
                 throw TargetError.incrementalUnsupported(target.displayName)
             }
-            return SparseBundleMirrorEngine(sizeGB: sizeGB, runner: runner)
+            return SparseBundleMirrorEngine(sizeGB: sizeGB, runner: runner, passphrase: passphrase)
         }
     }
 }

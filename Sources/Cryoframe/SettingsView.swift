@@ -139,6 +139,7 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.maxConcurrent) private var maxConcurrent = 2
     @AppStorage(Prefs.keepAwake) private var keepAwake = true
     @AppStorage(Prefs.wakeForSchedule) private var wakeForSchedule = false
+    @AppStorage(Prefs.notifyPolicy) private var notifyPolicy = "failure"
 
     var body: some View {
         Form {
@@ -151,6 +152,17 @@ private struct GeneralSettings: View {
                 Text("Running")
             } footer: {
                 Text("Keeping awake prevents idle sleep during a run. Waking for a schedule changes the system power schedule and asks the helper for permission; it can't wake a Mac that's shut down or one with its lid closed.")
+            }
+            Section {
+                Picker("Notify me", selection: $notifyPolicy) {
+                    Text("Never").tag("never")
+                    Text("On failure").tag("failure")
+                    Text("On every run").tag("all")
+                }
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Cryoframe stays in the menu bar so it can notify you of scheduled-run results even when the window is closed. Quit it from the menu bar to stop.")
             }
             Section("Defaults for new jobs") {
                 Picker("Format", selection: $format) {

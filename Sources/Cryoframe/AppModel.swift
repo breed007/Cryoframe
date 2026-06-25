@@ -40,6 +40,8 @@ final class AppModel: ObservableObject {
     private var queue: [String] = []                    // job ids waiting for a run slot
     private var controls: [String: RunControl] = [:]
     private let sleepGuard = SleepGuard()
+    private var notifiedIDs = Set<String>()             // run records already notified this session
+    private var historyWatcher: DirWatcher?
     private var maxConcurrent: Int {
         let n = UserDefaults.standard.integer(forKey: Prefs.maxConcurrent)
         return n > 0 ? n : 2
@@ -54,6 +56,9 @@ final class AppModel: ObservableObject {
         jobs = store.load().jobs
         reloadHistory()                         // last-run badges, persisted across launches
         for r in history.all().prefix(8).reversed() { log(Self.historyLine(r)) }   // seed the activity log
+        notifiedIDs = Set(history.all().map(\.id))   // don't notify for runs that predate this launch
+        Notifier.requestAuthorization()
+        startHistoryWatch()                     // catch scheduled runs while resident in the menu bar
         refreshDiskAccess()
         revalidate()
         Task { await helper.reloadIfStale() }   // pick up a new helper binary after an app update
@@ -71,6 +76,33 @@ final class AppModel: ObservableObject {
 
     /// recent runs across all jobs, newest first, for the History view.
     func runHistory() -> [RunRecord] { history.all() }
+
+    /// watch the data directory so a scheduled run the agent records shows up (and
+    /// notifies) while the GUI is resident in the menu bar.
+    private func startHistoryWatch() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("app.cryoframe", isDirectory: true)
+        historyWatcher = DirWatcher(url: dir) { [weak self] in self?.historyChanged() }
+    }
+
+    private func historyChanged() {
+        reloadHistory()
+        for r in history.all() { maybeNotify(r) }
+    }
+
+    /// post a notification for a record once per session (policy is applied inside).
+    private func maybeNotify(_ record: RunRecord) {
+        guard !notifiedIDs.contains(record.id) else { return }
+        notifiedIDs.insert(record.id)
+        Notifier.notify(record)
+    }
+
+    /// the menu-bar glyph reflecting overall backup health.
+    var menuBarSymbol: String {
+        if !runningJobIDs.isEmpty { return "arrow.triangle.2.circlepath" }
+        if jobs.contains(where: { lastRecords[$0.id]?.outcome == .failed }) { return "exclamationmark.triangle.fill" }
+        return "checkmark.circle"
+    }
 
     func refreshDiskAccess() { fullDiskAccess = DiskAccess.hasFullDiskAccess() }
 
@@ -114,7 +146,7 @@ final class AppModel: ObservableObject {
     // MARK: jobs / targets
 
     func addJob(_ job: BackupJob) { store.upsert(job); jobs = store.load().jobs; revalidate(); armWake() }
-    func deleteJob(_ id: String) { stopJob(id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
+    func deleteJob(_ id: String) { stopJob(id); KeychainArchiveKey.delete(jobID: id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
     func addTarget(_ target: Target) { targets.removeAll { $0.id == target.id }; targets.append(target) }
 
     func setEnabled(_ job: BackupJob, _ enabled: Bool) {
@@ -217,6 +249,7 @@ final class AppModel: ObservableObject {
         lastRecords[record.jobID] = record
         if let w = record.warning { log("⚠︎ \(w)") }
         log(Self.historyLine(record))
+        maybeNotify(record)
     }
 
     static func symbol(_ kind: RunOutcomeKind) -> String {

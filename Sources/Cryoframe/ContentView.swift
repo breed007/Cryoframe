@@ -12,10 +12,11 @@ import AppKit
 import CryoframeKit
 
 struct ContentView: View {
-    @StateObject private var model = AppModel()
+    @ObservedObject var model: AppModel
     @State private var showNewJob = false
     @State private var showHelp = false
     @State private var showHistory = false
+    @State private var showRestore = false
     @State private var editingJob: BackupJob?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -26,6 +27,8 @@ struct ContentView: View {
                     .resizable().frame(width: 38, height: 38)
                 Text("Cryoframe").font(.largeTitle.bold())
                 Spacer()
+                Button { showRestore = true } label: { Label("Restore", systemImage: "arrow.uturn.backward.circle") }
+                    .help("Restore a library from an archive")
                 Button { showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
                     .help("Past runs, including scheduled ones")
                 Button { showHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
@@ -67,6 +70,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showHelp) { HelpView(isPresented: $showHelp) }
         .sheet(isPresented: $showHistory) { HistoryView(model: model, isPresented: $showHistory) }
+        .sheet(isPresented: $showRestore) { RestoreView(model: model, isPresented: $showRestore) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 model.refreshDiskAccess(); model.revalidate(); model.resumeTransfers()
@@ -173,8 +177,14 @@ private struct JobRow: View {
                     Text(job.name).font(.callout.bold())
                     statusBadge
                 }
-                Text("\(librarySummary) → \(job.target.displayName)  ·  \(job.format.label)")
-                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    Text("\(librarySummary) → \(job.target.displayName)  ·  \(job.format.label)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if job.encrypted {
+                        Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
+                            .help("Encrypted with AES-256")
+                    }
+                }
                 libraryStatusRow
                 progressRow
                 lastRunRow

@@ -50,19 +50,23 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
     public var verification: VerificationPolicy
     public var runPolicy: RunPolicy
     public var enabled: Bool            // false = paused (scheduler skips it; Run now still works)
+    public var encrypted: Bool          // AES-256; passphrase lives in the Keychain, never in the job
+    public var retention: RetentionPolicy   // version pruning for sealed archives (mirrors are single-copy)
     public var createdAt: Date
 
     public init(id: String = UUID().uuidString, name: String,
                 libraries: [ContentType], target: Target, format: FormatChoice,
                 frequency: BackupFrequency, verification: VerificationPolicy = .checksumOnly,
-                runPolicy: RunPolicy = .proceed, enabled: Bool = true, createdAt: Date) {
+                runPolicy: RunPolicy = .proceed, enabled: Bool = true, encrypted: Bool = false,
+                retention: RetentionPolicy = .keepAll, createdAt: Date) {
         self.id = id; self.name = name; self.libraries = libraries; self.target = target
         self.format = format; self.frequency = frequency; self.verification = verification
-        self.runPolicy = runPolicy; self.enabled = enabled; self.createdAt = createdAt
+        self.runPolicy = runPolicy; self.enabled = enabled; self.encrypted = encrypted
+        self.retention = retention; self.createdAt = createdAt
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, libraries, contentType, target, format, frequency, verification, runPolicy, enabled, createdAt
+        case id, name, libraries, contentType, target, format, frequency, verification, runPolicy, enabled, encrypted, retention, createdAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -81,6 +85,8 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         verification = try c.decodeIfPresent(VerificationPolicy.self, forKey: .verification) ?? .checksumOnly
         runPolicy = try c.decodeIfPresent(RunPolicy.self, forKey: .runPolicy) ?? .proceed
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        encrypted = try c.decodeIfPresent(Bool.self, forKey: .encrypted) ?? false
+        retention = try c.decodeIfPresent(RetentionPolicy.self, forKey: .retention) ?? .keepAll
         createdAt = try c.decode(Date.self, forKey: .createdAt)
     }
 
@@ -95,6 +101,8 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         try c.encode(verification, forKey: .verification)
         try c.encode(runPolicy, forKey: .runPolicy)
         try c.encode(enabled, forKey: .enabled)
+        try c.encode(encrypted, forKey: .encrypted)
+        try c.encode(retention, forKey: .retention)
         try c.encode(createdAt, forKey: .createdAt)
     }
 
