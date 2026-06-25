@@ -12,7 +12,7 @@ import Foundation
 import CryoframeShared
 
 public enum LibraryRunResult: Sendable, Equatable {
-    case completed(library: String, parts: Int, verified: Bool?)
+    case completed(library: String, parts: Int, bytes: UInt64, verified: Bool?)
     case notFound(library: String)
     case failed(library: String, error: String)
 }
@@ -131,19 +131,28 @@ public struct JobExecutor: Sendable {
         for item in pass.staged {
             if control.isCancelled { pass.staged.forEach(cleanup); return .cancelled }
             onStage(.transferring)
+            let tStart = Date()
+            let chunk = item.pending.chunkSize, totalBytes = item.pending.totalBytes
             do {
                 let manifest = try ChunkedShipper().ship(
                     item.pending,
                     persist: { pendingStore?.save($0) },
                     control: control,
                     onPart: { done, total in
+                        let bytesDone = min(UInt64(done) * chunk, totalBytes)
+                        let elapsed = Date().timeIntervalSince(tStart)
+                        let rate: Double? = elapsed > 0 ? Double(bytesDone) / elapsed : nil       // cumulative avg
+                        let remaining = totalBytes > bytesDone ? totalBytes - bytesDone : 0
+                        let eta: TimeInterval? = (rate ?? 0) > 0 ? Double(remaining) / rate! : nil
                         onProgress(RunProgress(stage: .transferring, libraryIndex: item.index, libraryCount: count,
                                                fraction: total > 0 ? Double(done) / Double(total) : nil,
-                                               detail: "part \(done) of \(total)"))
+                                               detail: "part \(done) of \(total)",
+                                               speed: rate, eta: eta, elapsed: elapsed))
                     })
                 try? FileManager.default.removeItem(at: item.scratchDir)
                 pendingStore?.remove(jobID: item.pending.jobID)
-                results.append(.completed(library: item.library.displayName, parts: manifest.artifacts.count, verified: item.verified))
+                results.append(.completed(library: item.library.displayName, parts: manifest.artifacts.count,
+                                          bytes: item.pending.totalBytes, verified: item.verified))
             } catch is CancelledError {
                 pass.staged.forEach(cleanup); return .cancelled
             } catch {
@@ -164,11 +173,26 @@ public struct JobExecutor: Sendable {
                                onProgress: @escaping @Sendable (RunProgress) -> Void) -> Task<Void, Never> {
         Task.detached {
             let total = Self.directorySize(root)        // computed off the archive's thread
+            let start = Date()
+            var lastBytes: UInt64 = 0
+            var lastTime = start
+            var rate: Double?                            // bytes/sec, EWMA-smoothed
             while !Task.isCancelled {
                 let written = Self.directorySize(outputDir)
+                let now = Date()
+                let dt = now.timeIntervalSince(lastTime)
+                if dt >= 0.1 {
+                    let delta = written >= lastBytes ? Double(written - lastBytes) : 0
+                    let instant = delta / dt
+                    rate = rate.map { 0.65 * $0 + 0.35 * instant } ?? instant
+                    lastBytes = written; lastTime = now
+                }
+                let remaining = total > written ? total - written : 0
+                let eta: TimeInterval? = (rate ?? 0) > 0 ? Double(remaining) / rate! : nil
                 let fraction = total > 0 ? min(0.99, Double(written) / Double(total)) : nil
                 onProgress(RunProgress(stage: .archiving, libraryIndex: idx, libraryCount: count, fraction: fraction,
-                                       detail: total > 0 ? "\(Self.human(written)) of \(Self.human(total))" : Self.human(written)))
+                                       detail: total > 0 ? "\(Self.human(written)) of \(Self.human(total))" : Self.human(written),
+                                       speed: rate, eta: eta, elapsed: now.timeIntervalSince(start)))
                 try? await Task.sleep(nanoseconds: 600_000_000)
             }
         }
@@ -226,7 +250,10 @@ public struct JobExecutor: Sendable {
             onStage(.verifying)
             verified = try StrongVerifier(runner: runner).verify(archive, type: library).passed
         }
-        return .completed(library: library.displayName, parts: archive.artifacts.count, verified: verified)
+        let bytes = archive.artifacts.reduce(UInt64(0)) { sum, url in
+            sum + ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? UInt64 ?? 0)
+        }
+        return .completed(library: library.displayName, parts: archive.artifacts.count, bytes: bytes, verified: verified)
     }
 
     private func cleanup(_ s: Staged) {

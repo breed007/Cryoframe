@@ -135,6 +135,7 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.runPolicy) private var runPolicy = RunPolicy.proceed.rawValue
     @AppStorage(Prefs.archiveDir) private var archiveDir = ""
     @AppStorage(Prefs.mirrorGB) private var mirrorGB = 500
+    @AppStorage(Prefs.mirrorUnit) private var mirrorUnit = "GB"
     @AppStorage(Prefs.maxConcurrent) private var maxConcurrent = 2
     @AppStorage(Prefs.keepAwake) private var keepAwake = true
     @AppStorage(Prefs.wakeForSchedule) private var wakeForSchedule = false
@@ -158,7 +159,21 @@ private struct GeneralSettings: View {
                     Text("Sealed DMG").tag("dmg")
                 }
                 if format == "mirror" {
-                    Stepper("Mirror size: \(mirrorGB) GB", value: $mirrorGB, in: 50...8000, step: 50)
+                    HStack {
+                        Text("Mirror size")
+                        Spacer()
+                        TextField("", value: $mirrorGB, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 64)
+                            .onChange(of: mirrorGB) { _, v in if v < 1 { mirrorGB = 1 } }
+                        Picker("", selection: $mirrorUnit) {
+                            Text("GB").tag("GB")
+                            Text("TB").tag("TB")
+                        }
+                        .labelsHidden()
+                        .frame(width: 72)
+                    }
                 }
                 Picker("Verify", selection: $verify) {
                     Text("Checksum").tag(VerificationPolicy.checksumOnly.rawValue)

@@ -20,6 +20,7 @@ enum AgentMain {
             let sleepGuard = SleepGuard(); sleepGuard.begin()   // don't idle-sleep mid scheduled run
             let executor = TransferConfig.makeExecutor(detector: WorkspaceProcessDetector(), store: store)
             let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
+            let historyStore = RunHistoryStore.standard()       // so scheduled runs leave a record
             let limit = DispatchSemaphore(value: TransferConfig.maxConcurrentJobs())
             let group = DispatchGroup()
 
@@ -28,7 +29,15 @@ enum AgentMain {
                 group.enter()
                 let resolved = job.resolvingLibraries(in: registry)
                 Task {
-                    _ = try? await executor.run(resolved, ownerUID: getuid(), now: Date())
+                    let started = Date()
+                    do {
+                        let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date())
+                        historyStore.append(RunRecord.make(job: job, outcome: outcome,
+                                                           startedAt: started, finishedAt: Date(), trigger: "scheduled"))
+                    } catch {
+                        historyStore.append(RunRecord.failure(job: job, error: error.localizedDescription,
+                                                              startedAt: started, finishedAt: Date(), trigger: "scheduled"))
+                    }
                     limit.signal()
                     group.leave()
                 }

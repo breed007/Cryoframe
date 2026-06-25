@@ -22,11 +22,12 @@ final class AppModel: ObservableObject {
     /// sheet reflects changes made in Settings).
     var registry: ContentTypeRegistry { ContentTypeRegistry.withOverrides(LibraryOverrides.load()) }
     private let store = JobStore.standard()
+    private let history = RunHistoryStore.standard()
 
     @Published var jobs: [BackupJob] = []
     @Published var targets: [Target] = []
     @Published var activity: [String] = []
-    @Published var lastResults: [String: RunResult] = [:]
+    @Published var lastRecords: [String: RunRecord] = [:]   // latest run per job (persisted)
     @Published var runningJobIDs: Set<String> = []      // jobs currently executing
     @Published var pausedJobIDs: Set<String> = []       // running jobs whose tool is suspended
     @Published var jobStage: [String: BackupStage] = [:]
@@ -44,8 +45,6 @@ final class AppModel: ObservableObject {
         return n > 0 ? n : 2
     }
 
-    enum RunResult: Equatable { case verified(String), completed(String), deferred(String), failed(String), cancelled(String) }
-
     init() {
         let pref = UserDefaults.standard.string(forKey: Prefs.archiveDir)
         let dir = (pref.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
@@ -53,12 +52,25 @@ final class AppModel: ObservableObject {
                 .appendingPathComponent("Cryoframe Archives", isDirectory: true)
         targets = [.localVolume(id: "local-default", name: dir.lastPathComponent, dir: dir)]
         jobs = store.load().jobs
+        reloadHistory()                         // last-run badges, persisted across launches
+        for r in history.all().prefix(8).reversed() { log(Self.historyLine(r)) }   // seed the activity log
         refreshDiskAccess()
         revalidate()
         Task { await helper.reloadIfStale() }   // pick up a new helper binary after an app update
         resumeTransfers()
         armWake()                               // align the optional pmset wake with the schedule
     }
+
+    /// rebuild the per-job latest-run map from the durable history (also picks up
+    /// runs the scheduled agent recorded while the GUI was closed).
+    func reloadHistory() {
+        var latest: [String: RunRecord] = [:]
+        for r in history.all() where latest[r.jobID] == nil { latest[r.jobID] = r }   // newest-first → first wins
+        lastRecords = latest
+    }
+
+    /// recent runs across all jobs, newest first, for the History view.
+    func runHistory() -> [RunRecord] { history.all() }
 
     func refreshDiskAccess() { fullDiskAccess = DiskAccess.hasFullDiskAccess() }
 
@@ -102,7 +114,7 @@ final class AppModel: ObservableObject {
     // MARK: jobs / targets
 
     func addJob(_ job: BackupJob) { store.upsert(job); jobs = store.load().jobs; revalidate(); armWake() }
-    func deleteJob(_ id: String) { stopJob(id); store.remove(id: id); jobs = store.load().jobs; lastResults[id] = nil; revalidate(); armWake() }
+    func deleteJob(_ id: String) { stopJob(id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
     func addTarget(_ target: Target) { targets.removeAll { $0.id == target.id }; targets.append(target) }
 
     func setEnabled(_ job: BackupJob, _ enabled: Bool) {
@@ -125,7 +137,6 @@ final class AppModel: ObservableObject {
 
     func runNow(_ job: BackupJob) {
         guard !runningJobIDs.contains(job.id), !queue.contains(job.id) else { return }
-        lastResults[job.id] = nil
         queue.append(job.id)
         pump()
     }
@@ -171,6 +182,7 @@ final class AppModel: ObservableObject {
 
     private func startRun(_ job: BackupJob) {
         let id = job.id
+        let startedAt = Date()
         runningJobIDs.insert(id)
         refreshSleepGuard()
         let control = RunControl(); controls[id] = control
@@ -182,12 +194,12 @@ final class AppModel: ObservableObject {
             do {
                 let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date(), control: control,
                     onStage: { s in Task { @MainActor in self.jobStage[id] = s } },
-                    onLibrary: { lib in Task { @MainActor in self.jobLibrary[id] = lib } },
+                    onLibrary: { lib in Task { @MainActor in self.jobLibrary[id] = lib; self.log("  ▸ \(lib)") } },
                     onProgress: { p in Task { @MainActor in self.jobProgress[id] = p } })
-                handle(job, outcome)
+                apply(RunRecord.make(job: job, outcome: outcome, startedAt: startedAt, finishedAt: Date(), trigger: "manual"))
             } catch {
-                log("✗ \(job.name): \(error.localizedDescription)")
-                lastResults[id] = .failed(error.localizedDescription)
+                apply(RunRecord.failure(job: job, error: error.localizedDescription,
+                                        startedAt: startedAt, finishedAt: Date(), trigger: "manual"))
             }
             runningJobIDs.remove(id); controls[id] = nil; jobStage[id] = nil; jobLibrary[id] = nil; jobProgress[id] = nil
             pausedJobIDs.remove(id)
@@ -199,44 +211,27 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func handle(_ job: BackupJob, _ outcome: JobOutcome) {
-        switch outcome {
-        case .deferred(let r):
-            log("⏸ \(job.name): \(r)"); lastResults[job.id] = .deferred(r)
-        case .cancelled:
-            log("⏹ \(job.name): stopped"); lastResults[job.id] = .cancelled("stopped")
-        case .finished(let results, let warning):
-            if let warning { log("⚠︎ \(warning)") }
-            let s = Self.summarize(results)
-            lastResults[job.id] = s.result
-            log("\(s.symbol) \(job.name): \(s.text)")
+    /// persist a finished run, update its badge, and narrate the result.
+    private func apply(_ record: RunRecord) {
+        history.append(record)
+        lastRecords[record.jobID] = record
+        if let w = record.warning { log("⚠︎ \(w)") }
+        log(Self.historyLine(record))
+    }
+
+    static func symbol(_ kind: RunOutcomeKind) -> String {
+        switch kind {
+        case .verified, .completed: return "✓"
+        case .failed:               return "✗"
+        case .deferred:             return "⏸"
+        case .cancelled:            return "⏹"
         }
     }
 
-    static func summarize(_ results: [LibraryRunResult]) -> (result: RunResult, symbol: String, text: String) {
-        var done = 0, verified = 0, failed = 0, notFound = 0
-        for r in results {
-            switch r {
-            case .completed(_, _, let v): if v == false { failed += 1 } else { done += 1; if v == true { verified += 1 } }
-            case .notFound: notFound += 1
-            case .failed: failed += 1
-            }
-        }
-        let total = results.count
-        func plural(_ n: Int) -> String { n == 1 ? "library" : "libraries" }
-        if failed > 0 || notFound > 0 {
-            var parts = ["\(done)/\(total) archived"]
-            if notFound > 0 { parts.append("\(notFound) not found") }
-            if failed > 0 { parts.append("\(failed) failed") }
-            let text = parts.joined(separator: ", ")
-            return (.failed(text), "✗", text)
-        }
-        if total > 0, verified == total {
-            let text = "\(total) \(plural(total)) verified"
-            return (.verified(text), "✓", text)
-        }
-        let text = "\(total) \(plural(total)) archived"
-        return (.completed(text), "✓", text)
+    static func historyLine(_ r: RunRecord) -> String {
+        let when = r.finishedAt.formatted(date: .abbreviated, time: .shortened)
+        let tag = r.trigger == "scheduled" ? " (scheduled)" : ""
+        return "\(symbol(r.outcome)) \(r.jobName)\(tag): \(r.summary) · \(when)"
     }
 
     private func log(_ line: String) {
@@ -263,7 +258,8 @@ extension FormatChoice {
         switch self {
         case .sealedDMG: return "Sealed DMG"
         case .sealedZip: return "Sealed zip"
-        case .liveMirror(let g): return "Live mirror · \(g)GB"
+        case .liveMirror(let g):
+            return "Live mirror · " + ((g >= 1000 && g % 1000 == 0) ? "\(g / 1000) TB" : "\(g) GB")
         }
     }
 }

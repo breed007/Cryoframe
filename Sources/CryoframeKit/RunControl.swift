@@ -19,9 +19,14 @@ public struct RunProgress: Sendable {
     public var libraryCount: Int
     public var fraction: Double?
     public var detail: String
-    public init(stage: BackupStage, libraryIndex: Int, libraryCount: Int, fraction: Double?, detail: String) {
+    public var speed: Double?           // bytes/sec, smoothed (nil until known)
+    public var eta: TimeInterval?       // seconds remaining at the current rate (nil if unknown)
+    public var elapsed: TimeInterval?   // seconds since this phase started
+    public init(stage: BackupStage, libraryIndex: Int, libraryCount: Int, fraction: Double?, detail: String,
+                speed: Double? = nil, eta: TimeInterval? = nil, elapsed: TimeInterval? = nil) {
         self.stage = stage; self.libraryIndex = libraryIndex; self.libraryCount = libraryCount
         self.fraction = fraction; self.detail = detail
+        self.speed = speed; self.eta = eta; self.elapsed = elapsed
     }
 }
 

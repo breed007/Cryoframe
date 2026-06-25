@@ -12,7 +12,8 @@ enum Prefs {
     static let verify = "default.verify"          // VerificationPolicy.rawValue
     static let runPolicy = "default.runPolicy"    // RunPolicy.rawValue
     static let archiveDir = "default.archiveDir"  // absolute path
-    static let mirrorGB = "default.mirrorGB"      // Int
+    static let mirrorGB = "default.mirrorGB"      // Int — mirror size value (paired with mirrorUnit)
+    static let mirrorUnit = "default.mirrorUnit"  // "GB" | "TB", default "GB"
     static let libraryOverrides = "library.overrides"  // [contentTypeID: absolute path]
     static let transferChunkValue = "transfer.chunkValue"  // Int, default 2
     static let transferChunkUnit = "transfer.chunkUnit"    // "GB" | "TB", default "GB"

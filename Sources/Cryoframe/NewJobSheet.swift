@@ -22,7 +22,9 @@ struct NewJobSheet: View {
     @State private var targets: [Target] = []
     @State private var selectedTargetID = "local-default"
     @State private var format: FormatChoice = .liveMirror(sizeGB: 500)
-    @State private var liveMirrorGB = 500
+    @State private var liveMirrorValue = 500
+    @State private var liveMirrorUnit = "GB"
+    private var liveMirrorGB: Int { liveMirrorUnit == "TB" ? liveMirrorValue * 1000 : liveMirrorValue }
 
     @State private var freqKind = FreqKind.daily
     @State private var dailyTime = Calendar.current.date(bySettingHour: 2, minute: 0, second: 0, of: Date()) ?? Date()
@@ -103,7 +105,21 @@ struct NewJobSheet: View {
                         Text("Sealed DMG").tag("dmg")
                     }
                     if case .liveMirror = format {
-                        Stepper("Mirror size: \(liveMirrorGB) GB", value: $liveMirrorGB, in: 50...8000, step: 50)
+                        HStack {
+                            Text("Mirror size")
+                            Spacer()
+                            TextField("", value: $liveMirrorValue, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 64)
+                                .onChange(of: liveMirrorValue) { _, v in if v < 1 { liveMirrorValue = 1 } }
+                            Picker("", selection: $liveMirrorUnit) {
+                                Text("GB").tag("GB")
+                                Text("TB").tag("TB")
+                            }
+                            .labelsHidden()
+                            .frame(width: 72)
+                        }
                     }
                 }
 
@@ -202,14 +218,18 @@ struct NewJobSheet: View {
             switch job.format {
             case .sealedDMG: format = .sealedDMG
             case .sealedZip: format = .sealedZip
-            case .liveMirror(let g): format = .liveMirror(sizeGB: g); liveMirrorGB = g
+            case .liveMirror(let g):
+                format = .liveMirror(sizeGB: g)
+                if g >= 1000, g % 1000 == 0 { liveMirrorValue = g / 1000; liveMirrorUnit = "TB" }
+                else { liveMirrorValue = g; liveMirrorUnit = "GB" }
             }
             verification = job.verification; runPolicy = job.runPolicy
             seedFrequency(job.frequency)
         } else {
             selectedTargetID = targets.first?.id ?? ""
             let d = UserDefaults.standard
-            if d.integer(forKey: Prefs.mirrorGB) > 0 { liveMirrorGB = d.integer(forKey: Prefs.mirrorGB) }
+            if d.integer(forKey: Prefs.mirrorGB) > 0 { liveMirrorValue = d.integer(forKey: Prefs.mirrorGB) }
+            if let u = d.string(forKey: Prefs.mirrorUnit) { liveMirrorUnit = u }
             switch d.string(forKey: Prefs.format) {
             case "dmg": format = .sealedDMG
             case "zip": format = .sealedZip

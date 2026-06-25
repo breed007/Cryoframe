@@ -2,6 +2,16 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [0.3.2] — 2026-06-25
+
+### Added
+- Live throughput while a job runs: current speed, time elapsed, and estimated time remaining under the progress bar (smoothed for archives, cumulative for transfers).
+- Persistent run history. Every run — manual or scheduled — is recorded with its outcome, per-library detail, duration, size, and any error, and survives quitting the app. A new History button (top right) lists past runs, including scheduled ones that ran while the app was closed. Each job also shows a last-run summary, and the activity log is seeded from recent history and narrates per library during a run.
+- Mirror size is now a numeric field with a GB/TB unit picker (matching the resumable-transfer part size), in the New Job sheet and Settings.
+
+### Changed
+- The job row shows which library is being processed during a multi-library run.
+
 ## [0.3.1] — 2026-06-25
 
 ### Added
@@ -49,6 +59,7 @@ First public release. Signed with a Developer ID and notarized.
 - Targets for local disks, network shares, and cloud-sync folders, each with a size cap and an availability preflight.
 - Scheduling through a launchd agent, with per-job control over what happens when the owning app is open.
 
+[0.3.2]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.2
 [0.3.1]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.1
 [0.3.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.0
 [0.2.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.2.0

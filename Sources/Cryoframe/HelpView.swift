@@ -43,6 +43,7 @@ struct HelpView: View {
                         bullet("The ⋯ menu has Edit, Disable/Enable schedule, and Delete. A disabled job won't run automatically (no next-run time) but still runs from Run now.")
                         bullet("Several jobs can run at once, up to the limit in Settings ▸ General (default 2).")
                         bullet("Each job shows a green check or red ✗ for whether its libraries are found, with a Fix in Settings link for built-ins.")
+                        bullet("Each job shows its last run — result, duration, size, and when. The History button (top right) lists every past run, including scheduled ones run while the app was closed, with per-library detail and any error. Run records persist across launches.")
                     }
 
                     section("Sleep & scheduled wake") {

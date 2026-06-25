@@ -15,6 +15,7 @@ struct ContentView: View {
     @StateObject private var model = AppModel()
     @State private var showNewJob = false
     @State private var showHelp = false
+    @State private var showHistory = false
     @State private var editingJob: BackupJob?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -25,6 +26,8 @@ struct ContentView: View {
                     .resizable().frame(width: 38, height: 38)
                 Text("Cryoframe").font(.largeTitle.bold())
                 Spacer()
+                Button { showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
+                    .help("Past runs, including scheduled ones")
                 Button { showHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
                     .help("How to use Cryoframe, with examples")
             }
@@ -63,8 +66,12 @@ struct ContentView: View {
                         editing: job)
         }
         .sheet(isPresented: $showHelp) { HelpView(isPresented: $showHelp) }
+        .sheet(isPresented: $showHistory) { HistoryView(model: model, isPresented: $showHistory) }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.refreshDiskAccess(); model.revalidate(); model.resumeTransfers() }
+            if phase == .active {
+                model.refreshDiskAccess(); model.revalidate(); model.resumeTransfers()
+                model.reloadHistory()      // pick up any scheduled runs since we last looked
+            }
         }
     }
 
@@ -170,6 +177,7 @@ private struct JobRow: View {
                     .font(.caption).foregroundStyle(.secondary)
                 libraryStatusRow
                 progressRow
+                lastRunRow
                 HStack(spacing: 10) {
                     Text(job.frequency.label).font(.caption2)
                     if job.enabled, let due = model.nextDue(job) {
@@ -237,9 +245,17 @@ private struct JobRow: View {
                 }
                 HStack(spacing: 8) {
                     Text(p.detail).font(.caption2).foregroundStyle(.secondary)
-                    if p.libraryCount > 1 {
-                        Text("library \(p.libraryIndex)/\(p.libraryCount)").font(.caption2).foregroundStyle(.tertiary)
+                    if p.libraryCount > 1, let lib = model.jobLibrary[job.id] {
+                        Text("· \(lib) (\(p.libraryIndex)/\(p.libraryCount))").font(.caption2).foregroundStyle(.tertiary)
                     }
+                }
+                if !model.isPaused(job.id), p.speed != nil || p.elapsed != nil {
+                    HStack(spacing: 8) {
+                        if let s = p.speed, s > 0 { Text(Self.rate(s)) }
+                        if let e = p.elapsed { Text("\(Self.duration(e)) elapsed") }
+                        if let eta = p.eta, eta.isFinite, eta > 0 { Text("~\(Self.duration(eta)) left") }
+                    }
+                    .font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             .padding(.vertical, 2)
@@ -256,16 +272,44 @@ private struct JobRow: View {
             badge("queued", .blue)
         } else if !job.enabled {
             badge("disabled", .gray)
-        } else {
-            switch model.lastResults[job.id] {
-            case .verified(let s):  badge(s, .green)
-            case .completed(let s): badge(s, .green)
-            case .deferred:         badge("deferred", .orange)
-            case .cancelled:        badge("stopped", .orange)
-            case .failed(let s):    badge(s, .red)
-            case .none:             EmptyView()
+        } else if let r = model.lastRecords[job.id] {
+            switch r.outcome {
+            case .verified, .completed: badge(r.summary, .green)
+            case .deferred:             badge("deferred", .orange)
+            case .cancelled:            badge("stopped", .orange)
+            case .failed:               badge(r.summary, .red)
             }
+        } else {
+            EmptyView()
         }
+    }
+
+    @ViewBuilder private var lastRunRow: some View {
+        if !isRunning, !isQueued, let r = model.lastRecords[job.id] {
+            HStack(spacing: 6) {
+                Text("Last run:").foregroundStyle(.tertiary)
+                Text("\(AppModel.symbol(r.outcome)) \(r.summary)").foregroundStyle(outcomeColor(r.outcome))
+                Text("· \(Self.duration(r.duration))").foregroundStyle(.tertiary)
+                if r.bytes > 0 { Text("· \(Self.size(r.bytes))").foregroundStyle(.tertiary) }
+                Text("· \(r.finishedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
+            }
+            .font(.caption2)
+        }
+    }
+
+    static func rate(_ bytesPerSec: Double) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytesPerSec), countStyle: .file) + "/s"
+    }
+
+    /// h:mm:ss when over an hour, else m:ss.
+    static func duration(_ seconds: TimeInterval) -> String {
+        let t = max(0, Int(seconds.rounded()))
+        let h = t / 3600, m = (t % 3600) / 60, s = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+
+    static func size(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
     private func badge(_ text: String, _ color: Color) -> some View {
@@ -273,5 +317,107 @@ private struct JobRow: View {
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(color.opacity(0.18)))
             .foregroundStyle(color)
+    }
+}
+
+private func outcomeColor(_ kind: RunOutcomeKind) -> Color {
+    switch kind {
+    case .verified, .completed: return .green
+    case .failed:               return .red
+    case .deferred, .cancelled: return .orange
+    }
+}
+
+// MARK: - History
+
+private struct HistoryView: View {
+    @ObservedObject var model: AppModel
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Run History").font(.title2.bold())
+                Spacer()
+                Button("Done") { isPresented = false }.keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            Divider()
+
+            let records = model.runHistory()
+            if records.isEmpty {
+                Spacer()
+                Text("No runs yet — they'll show here once a job runs, including scheduled ones.")
+                    .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
+                Spacer()
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(records) { r in
+                            HistoryRow(record: r)
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 560, height: 540)
+    }
+}
+
+private struct HistoryRow: View {
+    let record: RunRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(AppModel.symbol(record.outcome)).foregroundStyle(outcomeColor(record.outcome))
+                Text(record.jobName).font(.callout.bold())
+                if record.trigger == "scheduled" {
+                    Text("scheduled").font(.caption2)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(record.finishedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 10) {
+                Text(record.summary).foregroundStyle(outcomeColor(record.outcome))
+                Text(JobRow.duration(record.duration)).foregroundStyle(.tertiary)
+                if record.bytes > 0 { Text(JobRow.size(record.bytes)).foregroundStyle(.tertiary) }
+            }
+            .font(.caption)
+            if let w = record.warning {
+                Text("⚠︎ \(w)").font(.caption2).foregroundStyle(.orange)
+            }
+            ForEach(record.libraries) { lib in
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text("·").foregroundStyle(.tertiary)
+                        Text(lib.library)
+                        Text(lib.status).foregroundStyle(statusColor(lib.status))
+                        if lib.bytes > 0 { Text(JobRow.size(lib.bytes)).foregroundStyle(.tertiary) }
+                        if lib.parts > 1 { Text("\(lib.parts) parts").foregroundStyle(.tertiary) }
+                    }
+                    if let e = lib.error {
+                        Text(e).foregroundStyle(.red).lineLimit(3).padding(.leading, 12)
+                    }
+                }
+                .font(.caption2)
+            }
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        switch status {
+        case "verified", "archived": return .green
+        case "failed", "verify failed": return .red
+        case "not found": return .orange
+        default: return .secondary
+        }
     }
 }
