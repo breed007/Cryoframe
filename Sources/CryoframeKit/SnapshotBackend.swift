@@ -45,9 +45,12 @@ public protocol CommandRunner: Sendable {
     func run(_ launchPath: String, _ args: [String]) throws -> CommandResult
 }
 
-/// Real runner over Foundation `Process`. Used by the helper at runtime.
+/// Real runner over Foundation `Process`. Used by the helper at runtime. When a
+/// `RunControl` is attached, a cancel terminates the in-flight process.
 public struct ProcessCommandRunner: CommandRunner {
-    public init() {}
+    let control: RunControl?
+    public init(control: RunControl? = nil) { self.control = control }
+
     public func run(_ launchPath: String, _ args: [String]) throws -> CommandResult {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: launchPath)
@@ -55,11 +58,15 @@ public struct ProcessCommandRunner: CommandRunner {
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
+        control?.waitWhilePaused()                  // don't launch the next command while paused
+        if let control, !control.attach(p) { throw CancelledError() }
         try p.run()
         // read before waitUntilExit to avoid pipe-buffer deadlock on large output
         let outData = out.fileHandleForReading.readDataToEndOfFile()
         let errData = err.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
+        control?.detach()
+        if control?.isCancelled == true { throw CancelledError() }
         return CommandResult(
             status: p.terminationStatus,
             stdout: String(decoding: outData, as: UTF8.self),

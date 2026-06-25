@@ -21,9 +21,12 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 ## Features
 
 - Consistent snapshots of live libraries using APFS, created and torn down per run.
-- Two output formats: a sealed DMG or zip (immutable, checksummed, split into volumes when the target caps file size), or an incremental sparsebundle mirror that only rewrites the bands that changed.
+- Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
+- Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG — immutable, checksummed, split into volumes when the target caps file size.
+- Resumable transfers to network shares and external drives: the archive ships in part files and picks up from the last whole part after a dropped connection or unplugged drive.
 - Verification built in: a checksum manifest on every archive, plus an optional mount-and-open check that confirms the library's database opens clean. Cold archives can be re-verified later.
 - Targets for local disks, network shares, and cloud-sync folders, each with its own size cap and an availability preflight so a run never starts against an unmounted drive.
+- Run jobs concurrently up to a configurable limit, with live progress, and pause, resume, or stop a run in flight.
 - Scheduling through a launchd agent, with per-job control over what happens if the owning app is open.
 - Owns its snapshots end to end. It never touches Time Machine's snapshots.
 
@@ -100,8 +103,8 @@ Press New Job and pick a library, a destination, a format, and how often to run.
 
 Formats:
 
-- Sealed DMG or zip. One immutable, checksummed file for cold storage. Larger than the target's cap splits into volumes, so it fits cloud single-file limits.
-- Live mirror. A sparsebundle with about 8 MB bands. The first run copies everything; later runs only write the bands that changed.
+- Live mirror (default). A sparsebundle with about 8 MB bands. The first run copies everything; later runs only write the bands that changed.
+- Sealed zip or DMG. One immutable, checksummed file for cold storage. Larger than the target's cap splits into volumes, so it fits cloud single-file limits.
 
 <p align="center">
   <img src="docs/screenshots/format-options.png" alt="Archive format options: sealed DMG, sealed zip, or live mirror" width="430">

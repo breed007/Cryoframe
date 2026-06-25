@@ -94,8 +94,9 @@ public enum ArchivePlan {
     }
 
     /// incremental sync into the attached mirror; --delete prunes removed files,
+    /// --partial keeps partially-transferred files so a dropped run resumes them,
     /// and the sparsebundle only rewrites the ~8MB bands that actually changed.
     public static func rsync(root: URL, into destination: URL) -> Command {
-        Command("/usr/bin/rsync", ["-a", "--delete", root.path + "/", destination.path + "/"])
+        Command("/usr/bin/rsync", ["-a", "--delete", "--partial", root.path + "/", destination.path + "/"])
     }
 }

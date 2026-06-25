@@ -34,12 +34,20 @@ struct HelpView: View {
                     }
 
                     section("Making a job") {
-                        para("Press New Job and pick a library, a destination, a format, and how often to run. Each field has a tooltip on hover.")
+                        para("Press New Job, then check one or more libraries, pick a destination, a format, and how often to run. Every library you check is frozen in a single snapshot and archived together, each into its own folder at the destination, so they're a consistent point-in-time set.")
+                    }
+
+                    section("Managing jobs") {
+                        bullet("Run now starts a job. While it runs you can Pause it — the in-flight tool is suspended in place and the snapshot held — then Resume to pick up where it left off. Pause is offered for sealed-zip and live-mirror archives and for transfers; sealed-DMG imaging can't be safely paused (macOS's disk-image tool crashes if frozen), so a DMG job shows only Stop while it's building.")
+                        bullet("Stop cancels a running or queued job and tears the snapshot down. A sealed archive can't resume mid-build, so a stopped job starts over; an interrupted transfer to a network or external drive does resume from its last whole part on reconnect.")
+                        bullet("The ⋯ menu has Edit, Disable/Enable schedule, and Delete. A disabled job won't run automatically (no next-run time) but still runs from Run now.")
+                        bullet("Several jobs can run at once, up to the limit in Settings ▸ General (default 2).")
+                        bullet("Each job shows a green check or red ✗ for whether its libraries are found, with a Fix in Settings link for built-ins.")
                     }
 
                     section("Formats") {
-                        bullet("Sealed DMG or zip: one immutable, checksummed file for cold storage. Splits into volumes when the target caps file size, so it fits cloud limits.")
-                        bullet("Live mirror: a sparsebundle that updates in place. Only the parts that changed get rewritten. Good for a frequent working backup.")
+                        bullet("Live mirror (default): a sparsebundle that updates in place. Only the parts that changed get rewritten — fast for a frequent working backup, and it can be paused mid-run.")
+                        bullet("Sealed zip or DMG: one immutable, checksummed file for cold storage. Splits into volumes when the target caps file size, so it fits cloud limits. (DMG imaging can't be paused mid-build.)")
                     }
 
                     section("Verification") {
@@ -63,6 +71,15 @@ struct HelpView: View {
                         bullet("Run: Daily, late")
                         bullet("Verify: Checksum")
                         para("The first run copies the whole library. Later runs only write what changed, so they finish fast.")
+                    }
+
+                    section("Resumable transfers to network or external drives") {
+                        para("When a destination is a network share or an external drive, a long sealed-archive copy can be cut off by a dropped connection or an unplugged drive. Pick \"Network or external drive\" when you add the destination, and Cryoframe ships the archive so it can resume.")
+                        bullet("The archive is built locally first, then sent to the drive in parts (2 GB by default, set in Settings ▸ Transfers).")
+                        bullet("If the link drops, the next run — or the next time the drive reconnects — picks up from the last completed part instead of starting over. No re-snapshot, no re-archive.")
+                        bullet("Building locally first needs scratch space of about one archive. The scratch location is in Settings ▸ Transfers; the default is your system cache.")
+                        bullet("The archive lands as numbered parts (Library.dmg.part.000, .001, …). Reassemble with `cat Library.dmg.part.* > Library.dmg` before mounting.")
+                        para("Local destinations write a single file directly. Cloud-sync folders are left to the sync client, which resumes uploads on its own. Live mirrors resume by re-running the sync.")
                     }
 
                     section("Good to know") {

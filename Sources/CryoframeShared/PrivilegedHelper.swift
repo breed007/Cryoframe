@@ -113,6 +113,12 @@ public protocol PrivilegedHelper: Sendable {
 
     /// M5: mount a network target as root. Declared now to freeze the contract.
     func mountNetworkTarget(_ spec: NetworkTargetSpec) async throws -> MountRef
+
+    /// ask the daemon to exit so launchd respawns the updated on-disk binary. The
+    /// on-demand daemon otherwise runs resident forever (dispatchMain) and an app
+    /// update never takes effect until reboot. Called only at app launch (no job
+    /// in flight). Old helpers predating this method just error — caller falls back.
+    func reloadForUpdate() async throws
 }
 
 // MARK: - XPC wire protocol (NSXPCConnection needs @objc + reply blocks)
@@ -129,6 +135,7 @@ public protocol PrivilegedHelper: Sendable {
     func listSnapshots(volume: Data, reply: @escaping (Data?, Error?) -> Void)
     func reconcile(reply: @escaping (Data?, Error?) -> Void)
     func mountNetworkTarget(spec: Data, reply: @escaping (Data?, Error?) -> Void)
+    func reloadForUpdate(reply: @escaping (Error?) -> Void)
 }
 
 public enum CryoframeHelper {

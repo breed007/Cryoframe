@@ -2,6 +2,22 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [0.3.0] — 2026-06-25
+
+### Added
+- Multiple libraries per job. A job takes one APFS snapshot and archives every selected library from that single point-in-time set, each into its own subfolder at the destination. Libraries are now picked from one unified checklist (built-ins, templates, and folders together).
+- Resumable transfers to network shares and external drives. The archive is built locally, then shipped in numbered part files (default 2 GB, configurable in GB or TB under Settings ▸ Transfers). A dropped connection or unplugged drive resumes from the last whole part on reconnect.
+- Concurrent jobs, bounded by a "maximum jobs running at once" setting (default 2). Snapshot creation is serialized in the helper so parallel jobs stay consistent.
+- Job controls: Run now, Stop, Pause/Resume, Edit, Delete, and enable/disable scheduling — from the job row and its ⋯ menu. Pause suspends the in-flight tool in place; it's offered for live-mirror and sealed-zip archives and for transfers (sealed-DMG imaging can't be safely paused, so a DMG job shows only Stop while building).
+- Live progress: a determinate bar with bytes-written and percentage during archiving, and part counts during transfers.
+
+### Changed
+- Live mirror is now the default output format, ahead of sealed zip and sealed DMG.
+- After an app update the helper reloads itself on next launch, so helper fixes take effect without a reboot.
+
+### Fixed
+- Snapshot unmount retries and force-unmounts when the mount is briefly busy after a run, instead of failing with "Resource busy".
+
 ## [0.2.0] — 2026-06-24
 
 ### Added
@@ -24,5 +40,6 @@ First public release. Signed with a Developer ID and notarized.
 - Targets for local disks, network shares, and cloud-sync folders, each with a size cap and an availability preflight.
 - Scheduling through a launchd agent, with per-job control over what happens when the owning app is open.
 
+[0.3.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.3.0
 [0.2.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.2.0
 [0.1.0]: https://github.com/breed007/Cryoframe/releases/tag/v0.1.0

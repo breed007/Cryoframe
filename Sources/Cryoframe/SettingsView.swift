@@ -11,13 +11,64 @@ import AppKit
 import CryoframeKit
 
 struct SettingsView: View {
+    @AppStorage("settings.selectedTab") private var tab = "General"
+
     var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            LibrariesSettings().tabItem { Label("Libraries", systemImage: "books.vertical") }
-            ScheduleSettings().tabItem { Label("Schedule", systemImage: "clock") }
+        TabView(selection: $tab) {
+            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag("General")
+            LibrariesSettings().tabItem { Label("Libraries", systemImage: "books.vertical") }.tag("Libraries")
+            TransferSettings().tabItem { Label("Transfers", systemImage: "arrow.up.arrow.down") }.tag("Transfers")
+            ScheduleSettings().tabItem { Label("Schedule", systemImage: "clock") }.tag("Schedule")
         }
         .frame(width: 500, height: 440)
+    }
+}
+
+private struct TransferSettings: View {
+    @AppStorage(Prefs.transferChunkValue) private var chunkValue = 2
+    @AppStorage(Prefs.transferChunkUnit) private var chunkUnit = "GB"
+    @AppStorage(Prefs.scratchDir) private var scratchDir = ""
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    Text("Part size")
+                    Spacer()
+                    TextField("", value: $chunkValue, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 64)
+                        .onChange(of: chunkValue) { _, v in if v < 1 { chunkValue = 1 } }
+                    Picker("", selection: $chunkUnit) {
+                        Text("GB").tag("GB")
+                        Text("TB").tag("TB")
+                    }
+                    .labelsHidden()
+                    .frame(width: 72)
+                }
+                HStack {
+                    Text("Scratch location")
+                    Spacer()
+                    Text(scratchDir.isEmpty ? "System cache (default)" : scratchDir)
+                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(scratchDir)
+                    Button("Change…") { chooseScratch() }
+                    if !scratchDir.isEmpty { Button("Reset") { scratchDir = "" } }
+                }
+            } header: {
+                Text("Resumable transfers")
+            } footer: {
+                Text("Sealed archives sent to a network share or external drive are built locally in the scratch location, then shipped in parts of this size. A dropped transfer resumes from the last completed part. The scratch location needs about one archive of free space.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func chooseScratch() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        if panel.runModal() == .OK, let url = panel.url { scratchDir = url.path }
     }
 }
 
@@ -79,19 +130,23 @@ private struct LibrariesSettings: View {
 }
 
 private struct GeneralSettings: View {
-    @AppStorage(Prefs.format) private var format = "dmg"
+    @AppStorage(Prefs.format) private var format = "mirror"
     @AppStorage(Prefs.verify) private var verify = VerificationPolicy.checksumOnly.rawValue
     @AppStorage(Prefs.runPolicy) private var runPolicy = RunPolicy.proceed.rawValue
     @AppStorage(Prefs.archiveDir) private var archiveDir = ""
     @AppStorage(Prefs.mirrorGB) private var mirrorGB = 500
+    @AppStorage(Prefs.maxConcurrent) private var maxConcurrent = 2
 
     var body: some View {
         Form {
+            Section("Running") {
+                Stepper("Maximum jobs running at once: \(maxConcurrent)", value: $maxConcurrent, in: 1...8)
+            }
             Section("Defaults for new jobs") {
                 Picker("Format", selection: $format) {
-                    Text("Sealed DMG").tag("dmg")
-                    Text("Sealed zip").tag("zip")
                     Text("Live mirror").tag("mirror")
+                    Text("Sealed zip").tag("zip")
+                    Text("Sealed DMG").tag("dmg")
                 }
                 if format == "mirror" {
                     Stepper("Mirror size: \(mirrorGB) GB", value: $mirrorGB, in: 50...8000, step: 50)

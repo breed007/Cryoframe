@@ -69,6 +69,8 @@ public actor FakePrivilegedHelper: PrivilegedHelper {
                  snapshot: SnapshotRef(name: "n/a", volume: VolumeRef(mountPoint: "", bsdDevice: ""),
                                        createdAt: Date(timeIntervalSince1970: 0)))
     }
+
+    public func reloadForUpdate() async throws {}
 }
 
 /// Scriptable CommandRunner for backend tests — maps argv to canned results.

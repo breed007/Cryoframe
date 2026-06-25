@@ -27,6 +27,6 @@ public struct Scheduler: Sendable {
     }
 
     public func dueJobs(_ state: ScheduleState, now: Date, calendar: Calendar = .current) -> [BackupJob] {
-        state.jobs.filter { isDue($0, lastRun: state.lastRun[$0.id], now: now, calendar: calendar) }
+        state.jobs.filter { $0.enabled && isDue($0, lastRun: state.lastRun[$0.id], now: now, calendar: calendar) }
     }
 }

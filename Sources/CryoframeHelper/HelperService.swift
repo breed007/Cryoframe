@@ -31,9 +31,15 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
         }
     }
 
+    // serialize snapshot create/delete/reconcile across all XPC connections: the
+    // tmutil set-diff identification and the ledger file must not race when two
+    // concurrent jobs snapshot at once.
+    private static let snapshotLock = NSLock()
+
     func createSnapshot(volume: Data, reply: @escaping (Data?, Error?) -> Void) {
         respond(reply) {
             let vol = try Wire.decode(VolumeRef.self, from: volume)
+            Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
             let snap = try self.backend.create(on: vol)
             self.ledger.record(snap.name)         // own it before anything can fail
             return snap
@@ -57,6 +63,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     func deleteSnapshot(snapshot: Data, reply: @escaping (Error?) -> Void) {
         respondVoid(reply) {
             let snap = try Wire.decode(SnapshotRef.self, from: snapshot)
+            Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
             // ownership guard: only delete what we recorded creating.
             guard self.ledger.all().contains(snap.name) else {
                 throw HelperError.refusedForeignSnapshot(name: snap.name)
@@ -74,12 +81,26 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     }
 
     func reconcile(reply: @escaping (Data?, Error?) -> Void) {
-        respond(reply) { try self.runReconcile() }
+        respond(reply) {
+            Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
+            return try self.runReconcile()
+        }
     }
 
     func mountNetworkTarget(spec: Data, reply: @escaping (Data?, Error?) -> Void) {
         respond(reply) { () -> MountRef in
             throw HelperError.internalError("mountNetworkTarget: not implemented until M5")
+        }
+    }
+
+    func reloadForUpdate(reply: @escaping (Error?) -> Void) {
+        reply(nil)
+        // exit so launchd respawns us from the (updated) binary on the next XPC
+        // connection. The short delay lets the reply flush; the lock makes sure we
+        // aren't mid snapshot create/delete/reconcile when we go.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            Self.snapshotLock.lock()
+            exit(0)
         }
     }
 
@@ -114,7 +135,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
 
     // MARK: reply plumbing
 
-    static let version = "0.1.0-m1"
+    static let version = "0.3.0"
 
     private func respond<T: Encodable>(_ reply: (Data?, Error?) -> Void, _ work: () throws -> T) {
         do { reply(try Wire.encode(try work()), nil) }

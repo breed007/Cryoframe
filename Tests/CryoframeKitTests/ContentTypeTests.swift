@@ -52,14 +52,14 @@ import Foundation
     let registry = ContentTypeRegistry.withOverrides(["com.apple.photos": moved])
     let target = Target.localVolume(id: "t", name: "Disk", dir: URL(fileURLWithPath: "/tmp"))
 
-    let builtInJob = BackupJob(name: "p", contentType: .photos, target: target,
+    let builtInJob = BackupJob(name: "p", libraries: [.photos], target: target,
                                format: .sealedZip, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
-    #expect(builtInJob.resolvingContentType(in: registry).contentType.paths == [moved])
+    #expect(builtInJob.resolvingLibraries(in: registry).libraries.first?.paths == [moved])
 
     let folder = ContentType.genericFolder(id: "/x", displayName: "x", path: .home("x"))
-    let folderJob = BackupJob(name: "f", contentType: folder, target: target,
+    let folderJob = BackupJob(name: "f", libraries: [folder], target: target,
                               format: .sealedZip, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
-    #expect(folderJob.resolvingContentType(in: registry).contentType.id == "/x")   // unaffected
+    #expect(folderJob.resolvingLibraries(in: registry).libraries.first?.id == "/x")   // unaffected
 }
 
 @Test func templateAttachesOwnerAndPathToAPickedLibrary() {

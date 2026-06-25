@@ -28,7 +28,7 @@ public struct BackupOutcome: Sendable {
 
 /// coarse phase progress for the UI (the engines run synchronously).
 public enum BackupStage: String, Sendable {
-    case preparing, archiving, checksumming, verifying, completed
+    case preparing, archiving, checksumming, verifying, transferring, completed
 }
 
 public struct BackupRunner: Sendable {

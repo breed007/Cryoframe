@@ -20,25 +20,9 @@ private func at(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
 private func tempURL() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent("cf-sch-\(UUID().uuidString).json")
 }
-private func tempDir() -> URL {
-    let d = FileManager.default.temporaryDirectory.appendingPathComponent("cf-sch-\(UUID().uuidString)")
-    try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-    return d
-}
-
-private final class RecordingEngine: ArchiveEngine, @unchecked Sendable {
-    var ran = false
-    func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
-        ran = true
-        try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
-        let a = destinationDir.appendingPathComponent("out.zip"); try Data("z".utf8).write(to: a)
-        return ArchiveResult(artifacts: [a], format: .sealedZip)
-    }
-}
-
 private func job(_ freq: BackupFrequency, policy: RunPolicy = .proceed,
                  created: Date, dir: URL = URL(fileURLWithPath: "/tmp")) -> BackupJob {
-    BackupJob(id: "j1", name: "Photos→Disk", contentType: .photos,
+    BackupJob(id: "j1", name: "Photos→Disk", libraries: [.photos],
               target: .localVolume(id: "t", name: "Disk", dir: dir),
               format: .sealedZip, frequency: freq, runPolicy: policy, createdAt: created)
 }
@@ -80,9 +64,9 @@ private func job(_ freq: BackupFrequency, policy: RunPolicy = .proceed,
     let s = Scheduler()
     let ct = ContentType.photos
     let tgt = Target.localVolume(id: "t", name: "Disk", dir: URL(fileURLWithPath: "/tmp"))
-    let a = BackupJob(id: "a", name: "a", contentType: ct, target: tgt,
+    let a = BackupJob(id: "a", name: "a", libraries: [ct], target: tgt,
                       format: .sealedZip, frequency: .everyHours(1), createdAt: at(2026,1,1,0,0))
-    let b = BackupJob(id: "b", name: "b", contentType: ct, target: tgt,
+    let b = BackupJob(id: "b", name: "b", libraries: [ct], target: tgt,
                       format: .sealedZip, frequency: .daily(hour: 23, minute: 0), createdAt: at(2026,1,1,0,0))
     let state = ScheduleState(jobs: [a, b], lastRun: [:])
     let due = s.dueJobs(state, now: at(2026,1,1,2,0), calendar: cal)
@@ -94,11 +78,11 @@ private func job(_ freq: BackupFrequency, policy: RunPolicy = .proceed,
 @Test func runPolicyDecisions() {
     let running = FakeProcessDetector(runningBundleIDs: ["com.apple.Photos"])
     let idle = FakeProcessDetector()
-    #expect(decide(.proceed, type: .photos, detector: running) == .proceed)
-    if case .proceedWithWarning = decide(.warnIfRunning, type: .photos, detector: running) {} else { Issue.record("expected warning") }
-    #expect(decide(.warnIfRunning, type: .photos, detector: idle) == .proceed)
-    if case .deferred = decide(.deferIfRunning, type: .photos, detector: running) {} else { Issue.record("expected deferred") }
-    #expect(decide(.deferIfRunning, type: .photos, detector: idle) == .proceed)
+    #expect(decide(.proceed, libraries: [.photos], detector: running) == .proceed)
+    if case .proceedWithWarning = decide(.warnIfRunning, libraries: [.photos], detector: running) {} else { Issue.record("expected warning") }
+    #expect(decide(.warnIfRunning, libraries: [.photos], detector: idle) == .proceed)
+    if case .deferred = decide(.deferIfRunning, libraries: [.photos], detector: running) {} else { Issue.record("expected deferred") }
+    #expect(decide(.deferIfRunning, libraries: [.photos], detector: idle) == .proceed)
 }
 
 // MARK: - persistence
@@ -114,41 +98,46 @@ private func job(_ freq: BackupFrequency, policy: RunPolicy = .proceed,
     #expect(store.load().jobs.isEmpty)
 }
 
-// MARK: - job runner
+@Test func migratesLegacySingleLibraryJob() throws {
+    // simulate a pre-0.3.0 job: one `contentType`, no `libraries`/`enabled`.
+    let current = job(.manual, created: at(2026,1,1,0,0))
+    var dict = try JSONSerialization.jsonObject(with: JSONEncoder().encode(current)) as! [String: Any]
+    dict["contentType"] = (dict["libraries"] as! [Any])[0]
+    dict.removeValue(forKey: "libraries")
+    dict.removeValue(forKey: "enabled")
 
-@Test func jobRunnerDefersWhenOwningAppOpen() async throws {
-    let helper = FakePrivilegedHelper()
-    let engine = RecordingEngine()
-    let targeted = TargetedBackupRunner(
-        backup: BackupRunner(helper: helper, locator: ContentLocator(exists: { _ in true })),
-        probe: FakeTargetProbe(TargetAvailability(reachable: true, writable: true)),
-        engineProvider: { _, _ in engine })
-    let runner = JobRunner(targeted: targeted, detector: FakeProcessDetector(runningBundleIDs: ["com.apple.Photos"]))
-
-    let result = try await runner.run(job(.manual, policy: .deferIfRunning, created: at(2026,1,1,0,0)),
-                                      ownerUID: 501, now: at(2026,1,1,1,0))
-    guard case .deferred = result else { Issue.record("expected deferred"); return }
-    #expect(!engine.ran)
-    #expect(await helper.calls.isEmpty)              // nothing ran
+    let decoded = try JSONDecoder().decode(BackupJob.self, from: JSONSerialization.data(withJSONObject: dict))
+    #expect(decoded.libraries.map(\.id) == ["com.apple.photos"])   // migrated to a one-element set
+    #expect(decoded.enabled)                                       // defaulted to true
 }
 
-@Test func jobRunnerCompletesAndRecordsRun() async throws {
+// MARK: - job executor
+
+@Test func executorDefersWhenAnyOwningAppOpen() async throws {
     let helper = FakePrivilegedHelper()
-    let engine = RecordingEngine()
-    let out = tempDir(); defer { try? FileManager.default.removeItem(at: out) }
-    let store = JobStore(url: tempURL())
-    let targeted = TargetedBackupRunner(
-        backup: BackupRunner(helper: helper, locator: ContentLocator(exists: { _ in true })),
-        probe: FakeTargetProbe(TargetAvailability(reachable: true, writable: true)),
-        engineProvider: { _, _ in engine })
-    let runner = JobRunner(targeted: targeted, detector: FakeProcessDetector(), store: store)
+    let exec = JobExecutor(helper: helper,
+                           detector: FakeProcessDetector(runningBundleIDs: ["com.apple.Photos"]),
+                           probe: FakeTargetProbe(TargetAvailability(reachable: true, writable: true)))
+    let j = job(.manual, policy: .deferIfRunning, created: at(2026,1,1,0,0))
+    guard case .deferred = try await exec.run(j, ownerUID: 501, now: at(2026,1,1,1,0)) else {
+        Issue.record("expected deferred"); return
+    }
+    #expect(await helper.calls.isEmpty)
+}
 
-    let j = job(.everyHours(6), policy: .proceed, created: at(2026,1,1,0,0), dir: out)
-    store.upsert(j)
-    let result = try await runner.run(j, ownerUID: 501, now: at(2026,1,1,6,0))
+@Test func executorTakesOneSnapshotForAllLibrariesAndTearsDown() async throws {
+    let helper = FakePrivilegedHelper()
+    let out = FileManager.default.temporaryDirectory.appendingPathComponent("cf-exec-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: out) }
+    let exec = JobExecutor(helper: helper, detector: FakeProcessDetector(),
+                           probe: FakeTargetProbe(TargetAvailability(reachable: true, writable: true)))
+    let j = BackupJob(name: "multi", libraries: [.photos, .appleMusic],
+                      target: .localVolume(id: "t", name: "Disk", dir: out),
+                      format: .sealedZip, frequency: .manual, createdAt: at(2026,1,1,0,0))
 
-    guard case .completed = result else { Issue.record("expected completed"); return }
-    #expect(engine.ran)
-    #expect(await helper.calls == ["create", "mount", "unmount", "delete"])
-    #expect(store.load().lastRun[j.id] == at(2026,1,1,6,0))
+    guard case .finished(let results, _) = try await exec.run(j, ownerUID: 501, now: at(2026,1,1,0,0)) else {
+        Issue.record("expected finished"); return
+    }
+    #expect(results.count == 2)                              // both libraries processed in the run
+    #expect(await helper.calls == ["create", "mount", "unmount", "delete"])  // exactly one snapshot for the job
 }

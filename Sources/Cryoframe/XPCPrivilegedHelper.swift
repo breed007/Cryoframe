@@ -57,6 +57,9 @@ final class XPCPrivilegedHelper: PrivilegedHelper, @unchecked Sendable {
         let s = try Wire.encode(spec)
         return try await call { $0.mountNetworkTarget(spec: s, reply: $1) }
     }
+    func reloadForUpdate() async throws {
+        try await callVoid { $0.reloadForUpdate(reply: $1) }
+    }
 
     // MARK: continuation plumbing (single-resume guarded)
 

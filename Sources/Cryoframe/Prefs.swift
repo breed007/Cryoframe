@@ -14,4 +14,8 @@ enum Prefs {
     static let archiveDir = "default.archiveDir"  // absolute path
     static let mirrorGB = "default.mirrorGB"      // Int
     static let libraryOverrides = "library.overrides"  // [contentTypeID: absolute path]
+    static let transferChunkValue = "transfer.chunkValue"  // Int, default 2
+    static let transferChunkUnit = "transfer.chunkUnit"    // "GB" | "TB", default "GB"
+    static let scratchDir = "transfer.scratchDir"          // absolute path (empty = system cache)
+    static let maxConcurrent = "run.maxConcurrent"         // Int, default 2
 }

@@ -43,7 +43,18 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
     }
 
     public func unmount(_ mount: MountRef) throws {
-        try sh("/sbin/umount", [mount.mountPoint])
+        // after a Stop, the archiver may still be releasing the mount, so umount
+        // returns "Resource busy". Retry briefly, then force with diskutil.
+        for attempt in 0..<6 {
+            if let r = try? runner.run("/sbin/umount", [mount.mountPoint]), r.ok {
+                try? FileManager.default.removeItem(atPath: mount.mountPoint); return
+            }
+            if attempt < 5 { Thread.sleep(forTimeInterval: 0.5) }
+        }
+        let forced = try runner.run("/usr/sbin/diskutil", ["unmount", "force", mount.mountPoint])
+        guard forced.ok else {
+            throw SnapshotBackendError.commandFailed(tool: "diskutil", status: forced.status, stderr: forced.stderr)
+        }
         try? FileManager.default.removeItem(atPath: mount.mountPoint)
     }
 

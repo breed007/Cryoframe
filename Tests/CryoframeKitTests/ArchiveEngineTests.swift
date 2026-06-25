@@ -60,7 +60,7 @@ private func tempOutDir() -> URL {
 @Test func rsyncPlanIsArchiveDeleteWithTrailingSlashes() {
     let c = ArchivePlan.rsync(root: URL(fileURLWithPath: "/m/lib"), into: URL(fileURLWithPath: "/v/lib"))
     #expect(c.tool == "/usr/bin/rsync")
-    #expect(c.args == ["-a", "--delete", "/m/lib/", "/v/lib/"])
+    #expect(c.args == ["-a", "--delete", "--partial", "/m/lib/", "/v/lib/"])
 }
 
 // MARK: - real runs

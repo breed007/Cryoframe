@@ -26,10 +26,15 @@ public struct TargetConstraints: Sendable, Equatable, Codable {
     public let maxSingleFileBytes: UInt64?
     /// whether a sparsebundle live mirror is allowed here.
     public let supportsIncremental: Bool
+    /// fragile link (network share, external drive): stage the sealed archive
+    /// locally and ship it in resumable parts instead of writing it in place.
+    public let resumableTransfer: Bool
 
-    public init(maxSingleFileBytes: UInt64? = nil, supportsIncremental: Bool = true) {
+    public init(maxSingleFileBytes: UInt64? = nil, supportsIncremental: Bool = true,
+                resumableTransfer: Bool = false) {
         self.maxSingleFileBytes = maxSingleFileBytes
         self.supportsIncremental = supportsIncremental
+        self.resumableTransfer = resumableTransfer
     }
 
     /// the split policy a sealed archive should use for this target.
@@ -69,10 +74,19 @@ public extension Target {
     }
 
     /// network share — must be mounted before a run (preflight enforces this).
+    /// Fragile link, so sealed archives ship as resumable parts.
     static func networkShare(id: String, name: String, dir: URL, mount: NetworkMountSpec,
                              supportsIncremental: Bool = true) -> Target {
         Target(id: id, displayName: name, kind: .networkShare, destinationDir: dir,
-               constraints: TargetConstraints(maxSingleFileBytes: nil, supportsIncremental: supportsIncremental),
+               constraints: TargetConstraints(maxSingleFileBytes: nil, supportsIncremental: supportsIncremental,
+                                              resumableTransfer: true),
                networkMount: mount)
+    }
+
+    /// a removable/external drive — a local mount path that can vanish, so sealed
+    /// archives ship as resumable parts (and preflight catches it if unplugged).
+    static func externalDrive(id: String, name: String, dir: URL) -> Target {
+        Target(id: id, displayName: name, kind: .local, destinationDir: dir,
+               constraints: TargetConstraints(resumableTransfer: true))
     }
 }
