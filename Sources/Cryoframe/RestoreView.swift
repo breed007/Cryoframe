@@ -22,11 +22,128 @@ final class RestoreModel: ObservableObject {
     @Published var running = false
     @Published var stage = ""
     @Published var results: [Outcome] = []
+    @Published var pendingInPlace: RestorableArchive?    // awaiting the replace-in-place confirmation
+    @Published var pendingDelete: RestorableArchive?     // awaiting the delete-version confirmation
+    @Published var errorMessage: String?
+    @Published var browsingName: String?                 // an archive is mounted for in-app browsing
+    @Published var browseRoot: URL?                       // the opened tree to browse, drives the sheet
+    private var opened: OpenedArchive?
 
     struct Outcome: Identifiable { let id = UUID(); let name: String; let ok: Bool; let detail: String; let url: URL? }
 
-    /// any selected archive is encrypted → a passphrase is required to open it.
-    var needsPassphrase: Bool { archives.contains { selected.contains($0.id) && $0.encrypted } }
+    /// a passphrase is needed if any archive in the list is encrypted (covers
+    /// restore, restore-in-place, and browse).
+    var needsPassphrase: Bool { archives.contains { $0.encrypted } }
+
+    /// the live location of a library by display name, if Cryoframe knows it — gates
+    /// the restore-in-place option.
+    func liveLocation(forLibraryNamed name: String) -> (type: ContentType, url: URL)? {
+        let reg = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
+        guard let type = reg.types.first(where: { $0.displayName == name }),
+              let url = ContentLocator().liveRoots(of: type).first else { return nil }
+        return (type, url)
+    }
+
+    func canRestoreInPlace(_ a: RestorableArchive) -> Bool { liveLocation(forLibraryNamed: a.libraryName) != nil }
+
+    /// validate, then ask for confirmation (the actual replace runs in confirmInPlace).
+    func requestInPlace(_ a: RestorableArchive) {
+        guard let (type, _) = liveLocation(forLibraryNamed: a.libraryName) else { return }
+        if a.encrypted, passphrase.isEmpty { errorMessage = "Enter the archive's passphrase first."; return }
+        if let proc = type.owningProcess, WorkspaceProcessDetector().isRunning(proc) {
+            errorMessage = "Quit \(proc.displayName) before replacing its library in place."; return
+        }
+        pendingInPlace = a
+    }
+
+    func confirmInPlace() {
+        guard let a = pendingInPlace, let (_, liveURL) = liveLocation(forLibraryNamed: a.libraryName) else { pendingInPlace = nil; return }
+        pendingInPlace = nil
+        let pass = a.encrypted ? passphrase : nil
+        running = true; stage = "\(a.bundleName): replacing in place…"; results = []
+        Task {
+            results = [await Self.inPlace(a, liveURL: liveURL, passphrase: pass)]
+            running = false; stage = ""
+        }
+    }
+
+    private nonisolated static func inPlace(_ a: RestorableArchive, liveURL: URL, passphrase: String?) async -> Outcome {
+        await Task.detached {
+            let fm = FileManager.default
+            let parent = liveURL.deletingLastPathComponent()
+            let staging = parent.appendingPathComponent(".cryoframe-restore-\(UUID().uuidString)", isDirectory: true)
+            defer { try? fm.removeItem(at: staging) }
+            do {
+                // 1. restore + verify into a staging copy FIRST — the live library is
+                //    never touched until we have a good copy in hand.
+                let restored = try RestoreEngine().restore(a, to: staging, verify: true, passphrase: passphrase)
+                // 2. move the current library to the Trash (reversible).
+                if fm.fileExists(atPath: liveURL.path) { try fm.trashItem(at: liveURL, resultingItemURL: nil) }
+                // 3. swap the verified copy into the exact original location (also
+                //    fixes any archived-vs-live name mismatch).
+                do {
+                    try fm.moveItem(at: restored, to: liveURL)
+                } catch {
+                    // move failed — rescue the verified copy OUT of staging first, or
+                    // the defer below deletes the very file this message points at.
+                    var rescued = parent.appendingPathComponent("\(liveURL.lastPathComponent) (recovered)")
+                    if fm.fileExists(atPath: rescued.path) {
+                        rescued = parent.appendingPathComponent("\(liveURL.lastPathComponent) (recovered \(UUID().uuidString.prefix(8)))")
+                    }
+                    let finalURL = (try? fm.moveItem(at: restored, to: rescued)) != nil ? rescued : restored
+                    return Outcome(name: a.bundleName, ok: false,
+                                   detail: "restored and verified, but couldn't move it into place — the good copy is at \(finalURL.path)",
+                                   url: finalURL)
+                }
+                return Outcome(name: a.bundleName, ok: true,
+                               detail: "restored in place — the previous version is in the Trash", url: liveURL)
+            } catch {
+                return Outcome(name: a.bundleName, ok: false,
+                               detail: "in-place restore failed — \(Self.message(error, encrypted: a.encrypted)). Your live library was left untouched.",
+                               url: nil)
+            }
+        }.value
+    }
+
+    /// mount/extract an archive read-only and open the in-app file browser so the
+    /// user can pull individual files out. Stays open until endBrowse().
+    func browse(_ a: RestorableArchive) {
+        if a.encrypted, passphrase.isEmpty { errorMessage = "Enter the archive's passphrase first."; return }
+        let pass = a.encrypted ? passphrase : nil
+        let result = a.archiveResult()
+        stage = "\(a.bundleName): opening…"
+        Task {
+            do {
+                let o = try await Task.detached { try ArchiveReader().open(result, passphrase: pass) }.value
+                opened?.close()
+                opened = o
+                browsingName = a.bundleName
+                browseRoot = o.root
+                stage = ""
+            } catch {
+                stage = ""
+                errorMessage = "Couldn't open \(a.bundleName)" + (a.encrypted ? " — check the passphrase." : ".")
+            }
+        }
+    }
+
+    func endBrowse() {
+        opened?.close()
+        opened = nil
+        browsingName = nil
+        browseRoot = nil
+    }
+
+    func confirmDelete() {
+        guard let a = pendingDelete else { return }
+        pendingDelete = nil
+        do {
+            try FileManager.default.removeItem(at: a.dir)
+            if let folder = sourceFolder { scan(folder) }
+        } catch {
+            errorMessage = "Couldn't delete: \((error as NSError).localizedDescription)"
+        }
+    }
 
     func scan(_ folder: URL) {
         sourceFolder = folder
@@ -95,6 +212,29 @@ struct RestoreView: View {
             ScrollView { content.padding() }
         }
         .frame(width: 580, height: 580)
+        .onDisappear { r.endBrowse() }
+        .sheet(isPresented: Binding(get: { r.browseRoot != nil }, set: { if !$0 { r.endBrowse() } })) {
+            if let root = r.browseRoot {
+                FileBrowserView(archiveName: r.browsingName ?? "archive", root: root) { r.endBrowse() }
+            }
+        }
+        .alert("Replace your live library?",
+               isPresented: Binding(get: { r.pendingInPlace != nil }, set: { if !$0 { r.pendingInPlace = nil } })) {
+            Button("Cancel", role: .cancel) { r.pendingInPlace = nil }
+            Button("Replace", role: .destructive) { r.confirmInPlace() }
+        } message: {
+            Text("Your current “\(r.pendingInPlace?.bundleName ?? "library")” will be moved to the Trash and replaced with this archive. You can recover it from the Trash if needed.")
+        }
+        .alert("Restore", isPresented: Binding(get: { r.errorMessage != nil }, set: { if !$0 { r.errorMessage = nil } })) {
+            Button("OK") { r.errorMessage = nil }
+        } message: { Text(r.errorMessage ?? "") }
+        .alert("Delete this archive version?",
+               isPresented: Binding(get: { r.pendingDelete != nil }, set: { if !$0 { r.pendingDelete = nil } })) {
+            Button("Cancel", role: .cancel) { r.pendingDelete = nil }
+            Button("Delete", role: .destructive) { r.confirmDelete() }
+        } message: {
+            Text("Permanently delete this version of “\(r.pendingDelete?.bundleName ?? "")”\(r.pendingDelete?.version.map { " from " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")? This can't be undone.")
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -114,10 +254,11 @@ struct RestoreView: View {
                     Text(s.path).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             }
-            if !model.targets.isEmpty {
+            let sources = model.restoreSources
+            if !sources.isEmpty {
                 HStack(spacing: 6) {
                     Text("Quick pick:").font(.caption).foregroundStyle(.tertiary)
-                    ForEach(model.targets) { t in
+                    ForEach(sources) { t in
                         Button(t.displayName) { r.scan(t.destinationDir) }.buttonStyle(.link).font(.caption)
                     }
                 }
@@ -133,18 +274,28 @@ struct RestoreView: View {
                 Text("No Cryoframe archives found in that folder.").font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(r.archives) { a in
-                    Toggle(isOn: selection(a.id)) {
-                        HStack(spacing: 8) {
-                            Text(a.bundleName)
-                            if a.encrypted { Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary) }
-                            if let v = a.version {
-                                Text(v.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption2).foregroundStyle(.blue)
+                    HStack(spacing: 4) {
+                        Toggle(isOn: selection(a.id)) {
+                            HStack(spacing: 8) {
+                                Text(a.bundleName)
+                                if a.encrypted { Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary) }
+                                if let v = a.version {
+                                    Text(v.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption2).foregroundStyle(.blue)
+                                }
+                                Text(formatLabel(a.format)).font(.caption2).foregroundStyle(.tertiary)
+                                Text(ByteCountFormatter.string(fromByteCount: Int64(a.bytes), countStyle: .file))
+                                    .font(.caption2).foregroundStyle(.tertiary)
                             }
-                            Text(formatLabel(a.format)).font(.caption2).foregroundStyle(.tertiary)
-                            Text(ByteCountFormatter.string(fromByteCount: Int64(a.bytes), countStyle: .file))
-                                .font(.caption2).foregroundStyle(.tertiary)
                         }
+                        Spacer(minLength: 0)
+                        Menu {
+                            if r.canRestoreInPlace(a) { Button("Restore in place…") { r.requestInPlace(a) } }
+                            Button("Browse contents…") { r.browse(a) }
+                            Divider()
+                            Button("Delete this version…", role: .destructive) { r.pendingDelete = a }
+                        } label: { Image(systemName: "ellipsis.circle") }
+                        .menuStyle(.borderlessButton).fixedSize()
                     }
                 }
             }

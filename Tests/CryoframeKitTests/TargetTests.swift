@@ -43,6 +43,24 @@ private func tempDir() -> URL {
     #expect(FileSystemTargetProbe().availability(of: target).ok)
 }
 
+/// A reported 0 (network shares, many non-APFS volumes) means "this filesystem
+/// doesn't answer," not "the disk is full." If we read 0 as full we false-fail
+/// every NAS backup with "only Zero KB free" — the regression that shipped in the
+/// free-space preflight.
+@Test func usableFreeTreatsZeroAsUnknownNotFull() {
+    #expect(JobExecutor.usableFree(importantUsage: 0, available: 0) == nil)        // share answers all-zero
+    #expect(JobExecutor.usableFree(importantUsage: nil, available: nil) == nil)    // key absent
+    #expect(JobExecutor.usableFree(importantUsage: 0, available: 500) == 500)      // fall back to plain avail
+    #expect(JobExecutor.usableFree(importantUsage: 1_000, available: 9) == 1_000)  // prefer important-usage
+    #expect(JobExecutor.usableFree(importantUsage: nil, available: 42) == 42)
+}
+
+/// A live volume that genuinely reports space still gates correctly.
+@Test func freeSpaceReturnsAPositiveNumberForTheBootVolume() {
+    let free = JobExecutor.freeSpace(for: URL(fileURLWithPath: NSHomeDirectory()))
+    #expect(free != nil && free! > 0)
+}
+
 // MARK: - engine selection
 
 @Test func engineFactoryRejectsLiveMirrorOnNonIncrementalTarget() {

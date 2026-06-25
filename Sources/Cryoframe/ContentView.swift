@@ -17,6 +17,9 @@ struct ContentView: View {
     @State private var showHelp = false
     @State private var showHistory = false
     @State private var showRestore = false
+    @State private var showStorage = false
+    @State private var showOnboarding = false
+    @AppStorage("onboarding.completed") private var onboardingCompleted = false
     @State private var editingJob: BackupJob?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -29,6 +32,8 @@ struct ContentView: View {
                 Spacer()
                 Button { showRestore = true } label: { Label("Restore", systemImage: "arrow.uturn.backward.circle") }
                     .help("Restore a library from an archive")
+                Button { showStorage = true } label: { Label("Storage", systemImage: "internaldrive") }
+                    .help("Space used by archives, and free space on each target")
                 Button { showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
                     .help("Past runs, including scheduled ones")
                 Button { showHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
@@ -71,10 +76,16 @@ struct ContentView: View {
         .sheet(isPresented: $showHelp) { HelpView(isPresented: $showHelp) }
         .sheet(isPresented: $showHistory) { HistoryView(model: model, isPresented: $showHistory) }
         .sheet(isPresented: $showRestore) { RestoreView(model: model, isPresented: $showRestore) }
+        .sheet(isPresented: $showStorage) { StorageView(model: model, isPresented: $showStorage) }
+        .sheet(isPresented: $showOnboarding) { OnboardingView(model: model, isPresented: $showOnboarding) }
+        .onAppear {
+            if !onboardingCompleted { showOnboarding = true }   // shown once; "Get Started" marks it done
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 model.refreshDiskAccess(); model.revalidate(); model.resumeTransfers()
                 model.reloadHistory()      // pick up any scheduled runs since we last looked
+                model.reloadHealth()
             }
         }
     }
@@ -124,6 +135,9 @@ struct ContentView: View {
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
             Button { showNewJob = true } label: { Label("New Job", systemImage: "plus") }
                 .controlSize(.large)
+            if !(model.helper.isEnabled && model.fullDiskAccess) {
+                Button("Setup guide…") { showOnboarding = true }.controlSize(.small)
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -188,6 +202,7 @@ private struct JobRow: View {
                 libraryStatusRow
                 progressRow
                 lastRunRow
+                healthRow
                 HStack(spacing: 10) {
                     Text(job.frequency.label).font(.caption2)
                     if job.enabled, let due = model.nextDue(job) {
@@ -215,6 +230,11 @@ private struct JobRow: View {
                 }
                 Menu {
                     Button("Edit…") { onEdit(job) }
+                    Button("Verify archives") { model.verifyArchives(job) }
+                        .disabled(model.verifyingJobIDs.contains(job.id))
+                    if model.hasStoredPassphrase(job) {
+                        Button("Copy passphrase") { model.copyPassphrase(job) }
+                    }
                     Button(job.enabled ? "Disable schedule" : "Enable schedule") { model.setEnabled(job, !job.enabled) }
                     Divider()
                     Button("Delete", role: .destructive) { model.deleteJob(job.id) }
@@ -291,6 +311,31 @@ private struct JobRow: View {
             }
         } else {
             EmptyView()
+        }
+    }
+
+    @ViewBuilder private var healthRow: some View {
+        if model.verifyingJobIDs.contains(job.id) {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking archives…").foregroundStyle(.secondary)
+            }.font(.caption2)
+        } else if let h = model.lastHealth[job.id] {
+            HStack(spacing: 6) {
+                if h.archivesChecked == 0 {
+                    Image(systemName: "questionmark.circle.fill").foregroundStyle(.orange)
+                    Text("No archives found to check").foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: h.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(h.passed ? .green : .red)
+                    Text(h.passed ? "Archives verified (\(h.archivesChecked))" : "\(h.failures.count) archive check(s) failed")
+                        .foregroundStyle(h.passed ? Color.secondary : Color.red)
+                }
+                Text("· \(h.checkedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
+            }
+            .font(.caption2)
+            .help(h.archivesChecked == 0 ? "Nothing was checked — the target may be offline, or the job hasn't run yet."
+                  : (h.passed ? "Re-verified against checksums" : h.failures.joined(separator: "\n")))
         }
     }
 

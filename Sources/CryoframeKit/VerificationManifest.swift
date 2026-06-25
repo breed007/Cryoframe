@@ -30,8 +30,7 @@ public enum ArchiveManifest {
     /// hash every artifact and build the manifest.
     public static func build(for result: ArchiveResult, encrypted: Bool = false) throws -> VerificationManifest {
         let digests = try result.artifacts.map { url -> ArtifactDigest in
-            let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) ?? 0
-            return ArtifactDigest(name: url.lastPathComponent, size: size, sha256: try Checksum.sha256(of: url))
+            ArtifactDigest(name: url.lastPathComponent, size: Checksum.byteSize(of: url), sha256: try Checksum.digest(of: url))
         }
         return VerificationManifest(format: result.format, artifacts: digests, encrypted: encrypted ? true : nil)
     }

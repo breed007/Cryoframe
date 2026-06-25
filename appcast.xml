@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Cryoframe</title>
+    <link>https://raw.githubusercontent.com/breed007/Cryoframe/main/appcast.xml</link>
+    <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
+    <language>en</language>
+    <item>
+      <title>1.0.0</title>
+      <description><![CDATA[Cryoframe 1.0 — archive health monitoring, in-app updates, recovery-key escrow, restore in place, in-app archive browser, and storage overview.]]></description>
+      <pubDate>Thu, 25 Jun 2026 23:40:47 +0000</pubDate>
+      <sparkle:version>20260625.1938</sparkle:version>
+      <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.0.0/Cryoframe-1.0.0.dmg" type="application/octet-stream" sparkle:edSignature="4vJl5YKqpmPpFeTOWbF5qA55HExgwKmHj7BjycNSSzwACf2LAgrObzSQJYthqzwr/Uo+9e5OdzPr1Yvt+vfZAg==" length="3029242" />
+    </item>
+  </channel>
+</rss>

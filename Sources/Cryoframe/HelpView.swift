@@ -46,6 +46,10 @@ struct HelpView: View {
                         bullet("Each job shows its last run — result, duration, size, and when. The History button (top right) lists every past run, including scheduled ones run while the app was closed, with per-library detail and any error. Run records persist across launches.")
                     }
 
+                    section("Updates") {
+                        bullet("Cryoframe updates itself. Choose Cryoframe ▸ Check for Updates… (or the menu-bar item), or let it check automatically. Updates are cryptographically signed and verified before they install.")
+                    }
+
                     section("Notifications & the menu bar") {
                         bullet("Cryoframe shows a status item in the menu bar — a glance at each job's last run, with a red triangle if anything failed. It also keeps the app resident, so it can notify you of scheduled runs even with the window closed. Quit it from the menu bar's Quit item.")
                         bullet("Choose when to be notified in Settings ▸ General ▸ Notifications: never, on failure (default), or on every run.")
@@ -60,6 +64,17 @@ struct HelpView: View {
                     section("Formats") {
                         bullet("Live mirror (default): a sparsebundle that updates in place. Only the parts that changed get rewritten — fast for a frequent working backup, and it can be paused mid-run.")
                         bullet("Sealed zip or DMG: one immutable, checksummed file for cold storage. Splits into volumes when the target caps file size, so it fits cloud limits. (DMG imaging can't be paused mid-build.)")
+                    }
+
+                    section("Storage & space") {
+                        bullet("The Storage button (top right) shows how much space each job's archives use and how full each target volume is — handy when versioning is set to keep many copies.")
+                        bullet("Before a run, Cryoframe checks the target has room and stops with a clear message if it doesn't, rather than failing partway through.")
+                    }
+
+                    section("Archive health") {
+                        bullet("Cold archives can rot — a flipped bit, a file a drive quietly dropped. Cryoframe can re-check existing archives against the checksums recorded when they were made, so corruption is caught long before a restore needs them.")
+                        bullet("Verify a job's archives any time from its ⋯ menu, or set a schedule in Settings ▸ General ▸ Archive health (weekly or monthly). Each job shows its last check; a failure turns the menu-bar item red and notifies you.")
+                        bullet("Sealed archives are verified byte-for-byte against their checksums. A live mirror is verified structurally — its files and sizes — which catches dropped or truncated pieces but not an in-place bit flip (full-hashing a mirror every check would defeat its incremental nature).")
                     }
 
                     section("Versions & retention") {
@@ -78,6 +93,7 @@ struct HelpView: View {
                         bullet("Click Restore (top right), point it at the folder holding your archives (or use a Quick pick for a destination you back up to), and it lists the libraries it finds.")
                         bullet("Pick what to restore and a destination folder. Cryoframe verifies the checksums, then mounts or extracts the archive and copies the library out with its original folder name.")
                         bullet("It restores next to anything already there — never over your live library. Once it's done, move the restored library into place, or double-click it to open in its app.")
+                        bullet("Each archive's ⋯ menu also offers Restore in place (replaces your live library — the current one moves to the Trash, so it's reversible; quit the owning app first) and Browse contents (mounts the archive read-only and opens it in Finder so you can pull out just the files you need).")
                     }
 
                     section("Verification") {

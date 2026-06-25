@@ -10,9 +10,11 @@
 import SwiftUI
 import AppKit
 import CryoframeKit
+import Sparkle
 
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
+    let updater: SPUUpdater
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -28,7 +30,11 @@ struct MenuBarView: View {
             Text("\(model.runningJobIDs.count) running")
         }
         Divider()
+        if !model.jobs.isEmpty {
+            Button("Verify all archives") { model.verifyAllArchives() }
+        }
         Button("Open Cryoframe") { openMain() }
+        Button("Check for Updates…") { updater.checkForUpdates() }
         Button("Quit Cryoframe") { NSApplication.shared.terminate(nil) }
     }
 

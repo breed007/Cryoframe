@@ -48,7 +48,7 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
         return (n as NSString).deletingPathExtension
     }
 
-    func archiveResult() -> ArchiveResult {
+    public func archiveResult() -> ArchiveResult {
         ArchiveResult(artifacts: artifactNames.map { dir.appendingPathComponent($0) }, format: format)
     }
 }

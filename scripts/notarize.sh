@@ -28,6 +28,7 @@ xcodebuild build -scheme Cryoframe -configuration Release -derivedDataPath build
   -destination 'platform=macOS' -quiet
 
 APP="build/Build/Products/Release/Cryoframe.app"
+./scripts/sign-sparkle.sh "$APP"
 codesign --verify --deep --strict "$APP"
 echo "  signed OK"
 

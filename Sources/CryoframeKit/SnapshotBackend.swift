@@ -52,6 +52,19 @@ public extension CommandRunner {
     func run(_ launchPath: String, _ args: [String]) throws -> CommandResult {
         try run(launchPath, args, stdin: nil)
     }
+
+    /// run, retrying briefly on the transient "Resource busy" the disk-image
+    /// subsystem returns when concurrent jobs hit hdiutil at once.
+    func runRetryingBusy(_ launchPath: String, _ args: [String], stdin: Data? = nil, attempts: Int = 4) throws -> CommandResult {
+        var result = try run(launchPath, args, stdin: stdin)
+        var tries = 1
+        while !result.ok, tries < attempts, result.stderr.localizedCaseInsensitiveContains("resource busy") {
+            Thread.sleep(forTimeInterval: 0.5 * Double(tries))
+            result = try run(launchPath, args, stdin: stdin)
+            tries += 1
+        }
+        return result
+    }
 }
 
 /// Real runner over Foundation `Process`. Used by the helper at runtime. When a

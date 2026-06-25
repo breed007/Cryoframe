@@ -18,6 +18,7 @@ xcodebuild build -scheme Cryoframe -configuration Release -derivedDataPath build
   -destination 'platform=macOS' -quiet
 
 APP="build/Build/Products/Release/Cryoframe.app"
+./scripts/sign-sparkle.sh "$APP"
 echo "== verifying signature + embedded helper =="
 codesign --verify --deep --strict "$APP"
 codesign -v -R='identifier "app.cryoframe.helper" and anchor apple generic and certificate leaf[subject.OU] = "YA83Q8FTH3"' \

@@ -16,8 +16,10 @@ enum AgentMain {
         TransferResumer.resumeAll(store: PendingTransferStore.standard())   // finish interrupted transfers first
 
         let due = Scheduler().dueJobs(store.load(), now: Date())
+        let healthDue = HealthSchedule.isDue(now: Date())
+        let sleepGuard = SleepGuard()
+        if !due.isEmpty || healthDue { sleepGuard.begin() }     // don't idle-sleep mid scheduled work
         if !due.isEmpty {
-            let sleepGuard = SleepGuard(); sleepGuard.begin()   // don't idle-sleep mid scheduled run
             let executor = TransferConfig.makeExecutor(detector: WorkspaceProcessDetector(), store: store)
             let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
             let historyStore = RunHistoryStore.standard()       // so scheduled runs leave a record
@@ -43,8 +45,10 @@ enum AgentMain {
                 }
             }
             group.wait()
-            sleepGuard.end()
         }
+
+        HealthSchedule.runIfDue(store: store, now: Date())     // re-verify cold archives if due
+        sleepGuard.end()
 
         // re-point the optional pmset wake at the next due job (lastRun may have changed).
         let sem = DispatchSemaphore(value: 0)

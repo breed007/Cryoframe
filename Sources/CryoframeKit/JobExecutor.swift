@@ -112,7 +112,26 @@ public struct JobExecutor: Sendable {
                 let outputDir = isStaged
                     ? self.scratchBase.appendingPathComponent("\(job.id)/\(Self.safe(library.id))", isDirectory: true)
                     : dest
-                let poller = self.archivePoller(root: root, outputDir: outputDir, idx: idx, count: count, onProgress: onProgress)
+
+                // preflight free space: a sealed run writes a full archive each time; a
+                // mirror only for its first (full) copy. Fail fast with a clear message.
+                let sourceSize = Self.directorySize(root)
+                let mirrorExists = sealed == nil &&
+                    FileManager.default.fileExists(atPath: libDir.appendingPathComponent(source.name + ".sparsebundle").path)
+                if !mirrorExists {
+                    let needed = sourceSize + sourceSize / 20
+                    // staged runs build in scratch first, then ship to the target — both need room.
+                    let checks: [(name: String, url: URL)] = isStaged
+                        ? [("the scratch volume", self.scratchBase), (job.target.displayName, job.target.destinationDir)]
+                        : [(job.target.displayName, job.target.destinationDir)]
+                    if let bad = checks.first(where: { (Self.freeSpace(for: $0.url) ?? .max) < needed }) {
+                        results.append(.failed(library: library.displayName,
+                            error: "not enough space on \(bad.name): needs ~\(Self.human(sourceSize)), only \(Self.human(Self.freeSpace(for: bad.url) ?? 0)) free"))
+                        continue
+                    }
+                }
+
+                let poller = self.archivePoller(total: sourceSize, outputDir: outputDir, idx: idx, count: count, onProgress: onProgress)
                 do {
                     if isStaged, let sealed {
                         staged.append(try self.stage(job: job, library: library, index: idx, source: source,
@@ -136,6 +155,7 @@ public struct JobExecutor: Sendable {
 
         if pass.cancelled {
             pass.staged.forEach(cleanup)
+            if sealed != nil { Self.pruneVersions(target: targetBase, libraries: job.libraries, policy: job.retention) }
             return .cancelled
         }
         var results = pass.results
@@ -181,31 +201,70 @@ public struct JobExecutor: Sendable {
         return .finished(results: results, warning: decision.warning)
     }
 
-    /// delete sealed-archive version folders the retention policy doesn't keep.
+    /// sweep empty/partial sealed-version folders left by failed or cancelled runs,
+    /// then delete completed versions the retention policy doesn't keep. Only version
+    /// folders with a manifest count as real versions — otherwise a failed run's empty
+    /// husk could occupy a "keep" slot and evict a good archive.
     static func pruneVersions(target: URL, libraries: [ContentType], policy: RetentionPolicy) {
-        guard policy != .keepAll else { return }
         let fm = FileManager.default
         for library in libraries {
             let libDir = target.appendingPathComponent(library.displayName, isDirectory: true)
             let entries = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-            let versions = entries.compactMap { e -> (url: URL, date: Date)? in
+            var complete: [(url: URL, date: Date)] = []
+            for e in entries {
                 guard (try? e.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
-                      let d = VersionStamp.date(e.lastPathComponent) else { return nil }
-                return (e, d)
+                      let d = VersionStamp.date(e.lastPathComponent) else { continue }
+                if fm.fileExists(atPath: e.appendingPathComponent(ArchiveManifest.sidecarName).path) {
+                    complete.append((e, d))
+                } else {
+                    try? fm.removeItem(at: e)        // junk from a failed/cancelled run
+                }
             }
-            let prune = retentionPrune(versions.map(\.date), policy: policy)
-            for v in versions where prune.contains(v.date) { try? fm.removeItem(at: v.url) }
+            guard policy != .keepAll else { continue }
+            let prune = retentionPrune(complete.map(\.date), policy: policy)
+            for v in complete where prune.contains(v.date) { try? fm.removeItem(at: v.url) }
         }
+    }
+
+    /// usable free space at `url` (or its nearest existing ancestor), for preflight.
+    /// Returns nil when the filesystem doesn't report it — network shares (SMB/AFP)
+    /// and many non-APFS volumes return 0 for the "important usage" key, which must
+    /// be read as "unknown," never as "full," or we'd false-fail valid backups.
+    static func freeSpace(for url: URL) -> UInt64? {
+        var dir = url
+        for _ in 0..<8 {
+            // first existing ancestor IS the target volume — read it and stop, even if
+            // it answers "unknown" (nil). Walking further would cross into /Volumes on
+            // the boot disk and report the wrong volume's free space.
+            if let v = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey,
+                                                         .volumeAvailableCapacityKey]) {
+                return usableFree(importantUsage: v.volumeAvailableCapacityForImportantUsage,
+                                  available: v.volumeAvailableCapacity)
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent == dir { break }
+            dir = parent
+        }
+        return nil
+    }
+
+    /// pick a trustworthy free-space figure: APFS "important usage" when it's a real
+    /// number, else plain available capacity, else nil. A reported 0 means "this
+    /// filesystem doesn't answer," so we keep walking to the parent / give up rather
+    /// than treat the target as full.
+    static func usableFree(importantUsage: Int64?, available: Int?) -> UInt64? {
+        if let imp = importantUsage, imp > 0 { return UInt64(imp) }
+        if let avail = available, avail > 0 { return UInt64(avail) }
+        return nil
     }
 
     // MARK: progress
 
-    /// polls the output directory's size against the source library size while an
+    /// polls the output directory's size against the (known) source size while an
     /// archive runs, so the UI shows a moving bytes-written bar.
-    private func archivePoller(root: URL, outputDir: URL, idx: Int, count: Int,
+    private func archivePoller(total: UInt64, outputDir: URL, idx: Int, count: Int,
                                onProgress: @escaping @Sendable (RunProgress) -> Void) -> Task<Void, Never> {
         Task.detached {
-            let total = Self.directorySize(root)        // computed off the archive's thread
             let start = Date()
             var lastBytes: UInt64 = 0
             var lastTime = start

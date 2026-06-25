@@ -43,19 +43,61 @@ private func archive(_ kind: SealedArchiveEngine.Sealed, _ lib: URL, to dir: URL
     #expect(name(["Music.sparsebundle"]) == "Music")
 }
 
+// MARK: - directory (sparsebundle) checksums — the mirror manifest fix
+
+@Test func directoryDigestIsStableAndCatchesChanges() throws {
+    let fm = FileManager.default
+    let base = tmp(); defer { try? fm.removeItem(at: base) }
+    let bundle = base.appendingPathComponent("Lib.sparsebundle")
+    try fm.createDirectory(at: bundle.appendingPathComponent("bands"), withIntermediateDirectories: true)
+    try Data("info".utf8).write(to: bundle.appendingPathComponent("Info.plist"))
+    try Data("band-zero".utf8).write(to: bundle.appendingPathComponent("bands/0"))
+
+    let d1 = try Checksum.digest(of: bundle)
+    #expect(!d1.isEmpty)
+    #expect(try Checksum.digest(of: bundle) == d1)        // stable across calls
+    #expect(Checksum.byteSize(of: bundle) > 0)
+
+    try fm.removeItem(at: bundle.appendingPathComponent("bands/0"))   // a dropped band
+    #expect(try Checksum.digest(of: bundle) != d1)
+}
+
+@Test func manifestBuildsAndVerifiesADirectoryArtifact() throws {
+    let fm = FileManager.default
+    let base = tmp(); defer { try? fm.removeItem(at: base) }
+    let dir = base.appendingPathComponent("out")
+    let bundle = dir.appendingPathComponent("Lib.sparsebundle")
+    try fm.createDirectory(at: bundle, withIntermediateDirectories: true)
+    try Data("token".utf8).write(to: bundle.appendingPathComponent("token"))
+
+    // before the fix this threw (sha256 on a directory); now it works.
+    try ArchiveManifest.write(try ArchiveManifest.build(for: ArchiveResult(artifacts: [bundle], format: .liveMirror)), toDir: dir)
+    #expect(try ChecksumVerifier().reverify(archiveDir: dir).passed)
+
+    try Data("tampered".utf8).write(to: bundle.appendingPathComponent("token"))
+    #expect(try !ChecksumVerifier().reverify(archiveDir: dir).passed)
+}
+
 // MARK: - version pruning (filesystem only)
 
-@Test func pruneVersionsKeepsNewestPerPolicy() throws {
+@Test func pruneVersionsKeepsNewestCompleteAndSweepsPartials() throws {
     let fm = FileManager.default
     let base = tmp(); defer { try? fm.removeItem(at: base) }
     let lib = base.appendingPathComponent("target/Photos")
-    let stamps = ["2026-06-21-120000", "2026-06-22-120000", "2026-06-23-120000", "2026-06-24-120000", "2026-06-25-120000"]
-    for s in stamps { try fm.createDirectory(at: lib.appendingPathComponent(s), withIntermediateDirectories: true) }
+    // four completed versions (have a manifest) …
+    for s in ["2026-06-21-120000", "2026-06-22-120000", "2026-06-23-120000", "2026-06-24-120000"] {
+        let v = lib.appendingPathComponent(s)
+        try fm.createDirectory(at: v, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: v.appendingPathComponent(ArchiveManifest.sidecarName))
+    }
+    // … and one empty partial from a failed run (no manifest), which is the newest by name.
+    try fm.createDirectory(at: lib.appendingPathComponent("2026-06-25-120000"), withIntermediateDirectories: true)
 
     JobExecutor.pruneVersions(target: base.appendingPathComponent("target"), libraries: [.photos], policy: .keepLast(2))
 
     let remaining = (try fm.contentsOfDirectory(atPath: lib.path)).sorted()
-    #expect(remaining == ["2026-06-24-120000", "2026-06-25-120000"])
+    // partial swept; the two newest COMPLETE versions kept (not the empty husk).
+    #expect(remaining == ["2026-06-23-120000", "2026-06-24-120000"])
 }
 
 // MARK: - discovery + round trips
@@ -135,6 +177,42 @@ private func archive(_ kind: SealedArchiveEngine.Sealed, _ lib: URL, to dir: URL
     let a = try #require(RestoreDiscovery.archive(at: dir))
     #expect(a.encrypted)
     let restored = try RestoreEngine().restore(a, to: base.appendingPathComponent("restored"), passphrase: "pw")
+    #expect(try String(contentsOf: restored.appendingPathComponent("database/index.db"), encoding: .utf8) == "hello")
+}
+
+@Test func healthCheckCatchesTamperedArchive() throws {
+    let fm = FileManager.default
+    let base = tmp(); defer { try? fm.removeItem(at: base) }
+    let lib = try makeLibrary(in: base)
+    let target = base.appendingPathComponent("target")
+    let versionDir = target.appendingPathComponent("Photos/2026-06-25-120000")
+    _ = try archive(.zip, lib, to: versionDir)
+    let job = BackupJob(name: "j", libraries: [.photos],
+                        target: .localVolume(id: "t", name: "Disk", dir: target),
+                        format: .sealedZip, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+
+    var report = HealthChecker().check(job: job)
+    #expect(report.checks.count == 1)
+    #expect(report.passed)                                          // freshly made, intact
+
+    try Data("corrupted".utf8).write(to: versionDir.appendingPathComponent("MyLib.photoslibrary.zip"))
+    report = HealthChecker().check(job: job)
+    #expect(!report.passed)                                         // checksum mismatch detected
+    #expect(HealthRecord.from(job: job, report: report, at: Date()).failures.count == 1)
+}
+
+@Test func restoreMirrorRoundTripsLibrary() throws {
+    let base = tmp(); defer { try? FileManager.default.removeItem(at: base) }
+    let lib = try makeLibrary(in: base)
+    let dir = base.appendingPathComponent("out")
+    let result = try SparseBundleMirrorEngine(sizeGB: 1)
+        .archive(ArchiveSource(name: lib.lastPathComponent, root: lib), to: dir)
+    try ArchiveManifest.write(try ArchiveManifest.build(for: result), toDir: dir)
+
+    let a = try #require(RestoreDiscovery.archive(at: dir))
+    #expect(a.format == .liveMirror)
+    let restored = try RestoreEngine().restore(a, to: base.appendingPathComponent("restored"))
+    #expect(restored.lastPathComponent == "MyLib.photoslibrary")
     #expect(try String(contentsOf: restored.appendingPathComponent("database/index.db"), encoding: .utf8) == "hello")
 }
 

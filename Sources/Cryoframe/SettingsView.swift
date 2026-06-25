@@ -18,6 +18,7 @@ struct SettingsView: View {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag("General")
             LibrariesSettings().tabItem { Label("Libraries", systemImage: "books.vertical") }.tag("Libraries")
             TransferSettings().tabItem { Label("Transfers", systemImage: "arrow.up.arrow.down") }.tag("Transfers")
+            EscrowView().tabItem { Label("Security", systemImage: "key.fill") }.tag("Security")
             ScheduleSettings().tabItem { Label("Schedule", systemImage: "clock") }.tag("Schedule")
         }
         .frame(width: 500, height: 440)
@@ -140,6 +141,8 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.keepAwake) private var keepAwake = true
     @AppStorage(Prefs.wakeForSchedule) private var wakeForSchedule = false
     @AppStorage(Prefs.notifyPolicy) private var notifyPolicy = "failure"
+    @AppStorage(Prefs.healthInterval) private var healthInterval = "off"
+    @AppStorage(Prefs.healthScope) private var healthScope = "latest"
 
     var body: some View {
         Form {
@@ -163,6 +166,21 @@ private struct GeneralSettings: View {
                 Text("Notifications")
             } footer: {
                 Text("Cryoframe stays in the menu bar so it can notify you of scheduled-run results even when the window is closed. Quit it from the menu bar to stop.")
+            }
+            Section {
+                Picker("Re-verify archives", selection: $healthInterval) {
+                    Text("Off").tag("off")
+                    Text("Weekly").tag("weekly")
+                    Text("Monthly").tag("monthly")
+                }
+                Picker("Scope", selection: $healthScope) {
+                    Text("Latest version only").tag("latest")
+                    Text("All versions").tag("all")
+                }
+            } header: {
+                Text("Archive health")
+            } footer: {
+                Text("Periodically re-checks existing archives against their checksums to catch corruption (bit rot) before a restore needs them. \"Latest version only\" keeps the I/O down on large versioned jobs. You can also verify a job's archives any time from its ⋯ menu.")
             }
             Section("Defaults for new jobs") {
                 Picker("Format", selection: $format) {

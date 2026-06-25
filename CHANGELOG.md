@@ -2,6 +2,25 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.0.0] — 2026-06-25
+
+The 1.0 release: the archives now watch themselves, recover themselves, and update themselves.
+
+### Added
+- **Archive health monitoring.** Cold archives can rot — a flipped bit, a file a NAS quietly dropped. Cryoframe re-hashes existing archives against the manifest written when they were made, catching corruption long before a restore needs it. Runs on demand from a job's ⋯ menu, or on a weekly/monthly schedule (Settings ▸ Archive health), scoped to the latest version per library or all versions. Works on encrypted archives with no passphrase, since checksums are over the on-disk bytes. A "Verify all archives" command in the menu bar checks every job at once.
+- **In-app updates.** Cryoframe checks an Ed25519-signed appcast and can download and install new versions itself (Check for Updates, in the menu bar). Updates are signed and verified end to end.
+- **Recovery-key escrow.** Settings ▸ Security exports every archive passphrase into one file encrypted with a master password you choose (PBKDF2 + AES-GCM), so encrypted backups are recoverable on a new Mac. Restore-from-file shows the saved passphrases to copy into a restore prompt.
+- **Restore in place.** Restore an archive directly over its live library: the verified copy is staged first and the current library is moved to the Trash, so the live data is never at risk and the swap is reversible.
+- **Browse inside an archive.** "Browse contents…" opens an in-app file browser over a mounted archive — drill into folders, select individual files, and extract just those, without restoring the whole library.
+- **Storage overview.** A Storage window shows how much space each job's archives use, broken down per version, against the free space on the destination volume — so you can tune retention before a disk fills.
+- **Onboarding.** A first-run walkthrough covers the helper, Full Disk Access, and creating a first job.
+- **Manual version management.** Delete an individual archive version from the Restore window.
+
+### Fixed
+- Backups to network shares and non-APFS volumes no longer false-fail the free-space preflight (those filesystems report 0 for the capacity key macOS uses for local disks; a 0 is now read as "unknown," never "full").
+- The mirror format's manifest no longer fails on directory-shaped artifacts (sparsebundles).
+- Failed or cancelled runs no longer leave empty version folders that could occupy a retention slot.
+
 ## [0.5.0] — 2026-06-25
 
 Closes the loop and hardens the archives.

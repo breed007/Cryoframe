@@ -66,7 +66,7 @@ public struct SealedArchiveEngine: ArchiveEngine {
     }
 
     private func execute(_ command: Command, stdin: Data? = nil) throws {
-        let r = try runner.run(command.tool, command.args, stdin: stdin)
+        let r = try runner.runRetryingBusy(command.tool, command.args, stdin: stdin)
         guard r.ok else {
             throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent,
                                           status: r.status, stderr: r.stderr)

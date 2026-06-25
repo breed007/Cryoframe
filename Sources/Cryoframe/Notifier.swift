@@ -41,6 +41,25 @@ enum Notifier {
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: record.id, content: content, trigger: nil))
     }
+
+    /// post for an archive health check. Failures alert unless notifications are off;
+    /// clean results alert only on the "every run" policy.
+    static func notifyHealth(_ record: HealthRecord) {
+        let policy = current()
+        let clean = record.passed && record.archivesChecked > 0
+        if clean { guard policy == .all else { return } } else { guard policy != .never else { return } }
+        let content = UNMutableNotificationContent()
+        content.title = "Cryoframe — \(record.jobName)"
+        if record.archivesChecked == 0 {
+            content.body = "⚠️ no archives found to check — is the target connected?"
+        } else if record.passed {
+            content.body = "✓ \(record.archivesChecked) archive\(record.archivesChecked == 1 ? "" : "s") verified"
+        } else {
+            content.body = "⚠️ archive check failed — \(record.failures.first ?? "corruption detected")"
+        }
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "health-\(record.id)", content: content, trigger: nil))
+    }
 }
 
 /// fires `onChange` when anything in a directory changes — used to notice runs the

@@ -36,6 +36,7 @@ struct NewJobSheet: View {
     @State private var encrypt = false
     @State private var passphrase = ""
     @State private var passphraseConfirm = ""
+    @State private var revealedPassphrase: String?
     @State private var retentionKind = "all"        // all | lastN | gfs
     @State private var keepN = 7
     @State private var gfsDaily = 7
@@ -61,7 +62,10 @@ struct NewJobSheet: View {
     /// editing a job that's already encrypted and leaving the fields blank to keep it.
     private var encryptionValid: Bool {
         guard encrypt else { return true }
-        if passphrase.isEmpty && passphraseConfirm.isEmpty && editing?.encrypted == true { return true }
+        // only allow "keep the current passphrase" when one is actually stored —
+        // otherwise (e.g. a lost Keychain item) require entering a new one.
+        if passphrase.isEmpty, passphraseConfirm.isEmpty,
+           let id = editing?.id, editing?.encrypted == true, KeychainArchiveKey.exists(jobID: id) { return true }
         return !passphrase.isEmpty && passphrase == passphraseConfirm
     }
 
@@ -157,14 +161,23 @@ struct NewJobSheet: View {
                         SecureField("Passphrase", text: $passphrase)
                         SecureField("Confirm passphrase", text: $passphraseConfirm)
                         if isEditing, editing?.encrypted == true {
-                            Text("Leave blank to keep the current passphrase.").font(.caption2).foregroundStyle(.secondary)
+                            if let saved = revealedPassphrase {
+                                HStack {
+                                    Text(saved).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                                    Spacer()
+                                    Button("Copy") { copyToClipboard(saved) }
+                                }
+                                Text("Leave the fields above blank to keep this passphrase.").font(.caption2).foregroundStyle(.secondary)
+                            } else {
+                                Button("Reveal saved passphrase…") { revealedPassphrase = KeychainArchiveKey.load(jobID: editing?.id ?? "") }
+                            }
                         }
                     }
                 } header: {
                     Text("Encryption")
                 } footer: {
                     if encrypt {
-                        Text("The archive is encrypted with AES-256; the passphrase is kept in your Keychain. Lose it and the backup can't be recovered — there is no reset. Sealed zip isn't available when encrypting.")
+                        Text("The archive is encrypted with AES-256; the passphrase is kept only in this Mac's Keychain. Copy it into your password manager now — if you lose it (or lose this Mac), the backup can't be decrypted. There is no reset. Sealed zip isn't available when encrypting.")
                             .font(.caption).foregroundStyle(.orange)
                     } else {
                         Text("Encrypt sealed-DMG and live-mirror archives so a copy on a drive, NAS, or cloud folder is unreadable without your passphrase.")
@@ -241,6 +254,11 @@ struct NewJobSheet: View {
     private func selectionBinding(_ id: String) -> Binding<Bool> {
         Binding(get: { selectedLibraryIDs.contains(id) },
                 set: { if $0 { selectedLibraryIDs.insert(id) } else { selectedLibraryIDs.remove(id) } })
+    }
+
+    private func copyToClipboard(_ s: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(s, forType: .string)
     }
 
     private func pathCaption(_ path: String) -> some View {

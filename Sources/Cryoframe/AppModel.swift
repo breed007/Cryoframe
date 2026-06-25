@@ -23,11 +23,14 @@ final class AppModel: ObservableObject {
     var registry: ContentTypeRegistry { ContentTypeRegistry.withOverrides(LibraryOverrides.load()) }
     private let store = JobStore.standard()
     private let history = RunHistoryStore.standard()
+    private let healthStore = HealthStore.standard()
 
     @Published var jobs: [BackupJob] = []
     @Published var targets: [Target] = []
     @Published var activity: [String] = []
     @Published var lastRecords: [String: RunRecord] = [:]   // latest run per job (persisted)
+    @Published var lastHealth: [String: HealthRecord] = [:] // latest archive health check per job
+    @Published var verifyingJobIDs: Set<String> = []        // jobs whose archives are being re-verified
     @Published var runningJobIDs: Set<String> = []      // jobs currently executing
     @Published var pausedJobIDs: Set<String> = []       // running jobs whose tool is suspended
     @Published var jobStage: [String: BackupStage] = [:]
@@ -41,6 +44,7 @@ final class AppModel: ObservableObject {
     private var controls: [String: RunControl] = [:]
     private let sleepGuard = SleepGuard()
     private var notifiedIDs = Set<String>()             // run records already notified this session
+    private var notifiedHealthIDs = Set<String>()       // health records already notified this session
     private var historyWatcher: DirWatcher?
     private var maxConcurrent: Int {
         let n = UserDefaults.standard.integer(forKey: Prefs.maxConcurrent)
@@ -56,12 +60,15 @@ final class AppModel: ObservableObject {
         jobs = store.load().jobs
         reloadHistory()                         // last-run badges, persisted across launches
         for r in history.all().prefix(8).reversed() { log(Self.historyLine(r)) }   // seed the activity log
+        reloadHealth()
         notifiedIDs = Set(history.all().map(\.id))   // don't notify for runs that predate this launch
+        notifiedHealthIDs = Set(healthStore.all().map(\.id))
         Notifier.requestAuthorization()
         startHistoryWatch()                     // catch scheduled runs while resident in the menu bar
         refreshDiskAccess()
         revalidate()
         Task { await helper.reloadIfStale() }   // pick up a new helper binary after an app update
+        Task.detached { ArchiveReader.sweepStaleOpens() }   // clean any browse mounts a crash left attached
         resumeTransfers()
         armWake()                               // align the optional pmset wake with the schedule
     }
@@ -87,7 +94,74 @@ final class AppModel: ObservableObject {
 
     private func historyChanged() {
         reloadHistory()
+        reloadHealth()
         for r in history.all() { maybeNotify(r) }
+        for h in healthStore.all() { maybeNotifyHealth(h) }
+    }
+
+    /// rebuild the per-job latest archive-health map from disk.
+    func reloadHealth() {
+        var latest: [String: HealthRecord] = [:]
+        for r in healthStore.all() where latest[r.jobID] == nil { latest[r.jobID] = r }
+        lastHealth = latest
+    }
+
+    /// re-verify a job's existing archives against their checksums, off the main thread.
+    func verifyArchives(_ job: BackupJob) {
+        guard !verifyingJobIDs.contains(job.id) else { return }
+        verifyingJobIDs.insert(job.id)
+        log("🔍 \(job.name): checking archives…")
+        let resolved = job.resolvingLibraries(in: registry)
+        let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
+        Task.detached {
+            let report = HealthChecker().check(job: resolved, latestOnly: latestOnly)
+            let record = HealthRecord.from(job: resolved, report: report, at: Date())
+            await MainActor.run {
+                self.verifyingJobIDs.remove(job.id)
+                self.applyHealth(record)
+            }
+        }
+    }
+
+    /// re-verify every job's archives — serially, so we don't saturate the disk with
+    /// one full re-hash per job at once.
+    func verifyAllArchives() {
+        let pending = jobs.filter { !verifyingJobIDs.contains($0.id) }
+        guard !pending.isEmpty else { return }
+        for j in pending { verifyingJobIDs.insert(j.id) }
+        let resolved = pending.map { $0.resolvingLibraries(in: registry) }
+        let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
+        log("🔍 verifying \(resolved.count) job\(resolved.count == 1 ? "" : "s")…")
+        Task.detached {
+            for job in resolved {
+                let report = HealthChecker().check(job: job, latestOnly: latestOnly)
+                let record = HealthRecord.from(job: job, report: report, at: Date())
+                await MainActor.run {
+                    self.verifyingJobIDs.remove(job.id)
+                    self.applyHealth(record)
+                }
+            }
+        }
+    }
+
+    private func applyHealth(_ record: HealthRecord) {
+        healthStore.append(record)
+        lastHealth[record.jobID] = record
+        log(Self.healthLine(record))
+        maybeNotifyHealth(record)
+    }
+
+    private func maybeNotifyHealth(_ record: HealthRecord) {
+        guard !notifiedHealthIDs.contains(record.id) else { return }
+        notifiedHealthIDs.insert(record.id)
+        Notifier.notifyHealth(record)
+    }
+
+    static func healthLine(_ r: HealthRecord) -> String {
+        let when = r.checkedAt.formatted(date: .abbreviated, time: .shortened)
+        return r.passed
+            ? "🔍 \(r.jobName): \(r.archivesChecked) archive\(r.archivesChecked == 1 ? "" : "s") verified · \(when)"
+            : "⚠︎ \(r.jobName): \(r.failures.count) archive check(s) failed · \(when)"
     }
 
     /// post a notification for a record once per session (policy is applied inside).
@@ -149,9 +223,31 @@ final class AppModel: ObservableObject {
     func deleteJob(_ id: String) { stopJob(id); KeychainArchiveKey.delete(jobID: id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
     func addTarget(_ target: Target) { targets.removeAll { $0.id == target.id }; targets.append(target) }
 
+    /// distinct destinations to offer in Restore — the session targets plus every
+    /// destination a job actually backs up to (NAS, external, cloud), deduped by path.
+    var restoreSources: [Target] {
+        var seen = Set<String>(), out: [Target] = []
+        for t in targets + jobs.map(\.target) where seen.insert(t.destinationDir.path).inserted { out.append(t) }
+        return out
+    }
+
     func setEnabled(_ job: BackupJob, _ enabled: Bool) {
         var j = job; j.enabled = enabled; store.upsert(j); jobs = store.load().jobs; armWake()
     }
+
+    /// copy an encrypted job's passphrase to the clipboard so the user can escrow it
+    /// (a password manager). The key is machine-bound — losing it means the backup
+    /// can't be decrypted, so escrow is the only recovery path.
+    func copyPassphrase(_ job: BackupJob) {
+        guard job.encrypted, let pass = KeychainArchiveKey.load(jobID: job.id), !pass.isEmpty else {
+            log("⚠︎ \(job.name): no saved passphrase to copy"); return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(pass, forType: .string)
+        log("🔑 \(job.name): passphrase copied — save it somewhere safe")
+    }
+
+    func hasStoredPassphrase(_ job: BackupJob) -> Bool { job.encrypted && KeychainArchiveKey.exists(jobID: job.id) }
 
     func owningAppRunning(_ type: ContentType) -> Bool { type.owningProcessRunning(detector) }
     func openOwners(_ job: BackupJob) -> [String] {

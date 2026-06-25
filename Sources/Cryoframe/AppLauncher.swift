@@ -12,7 +12,10 @@ import Foundation
 @main
 enum AppLauncher {
     static func main() {
-        if ProcessInfo.processInfo.environment["CRYOFRAME_AGENT"] == "1" {
+        let env = ProcessInfo.processInfo.environment
+        if let mode = env["CRYOFRAME_KCPROBE"] {
+            KeychainProbe.run(mode)  // keychain cross-process diagnostic — never returns
+        } else if env["CRYOFRAME_AGENT"] == "1" {
             AgentMain.run()          // runs due jobs, then exits — never returns
         } else {
             CryoframeApp.main()

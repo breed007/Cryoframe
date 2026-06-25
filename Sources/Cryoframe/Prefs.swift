@@ -22,4 +22,7 @@ enum Prefs {
     static let keepAwake = "run.keepAwake"                 // Bool, default true — prevent idle sleep during a run
     static let wakeForSchedule = "run.wakeForSchedule"     // Bool, default false — pmset wake before a due job
     static let notifyPolicy = "run.notifyPolicy"           // "never" | "failure" | "all", default "failure"
+    static let healthInterval = "health.interval"          // "off" | "weekly" | "monthly", default "off"
+    static let lastHealthCheck = "health.lastCheck"        // Double epoch — when the agent last re-verified
+    static let healthScope = "health.scope"                // "latest" | "all", default "latest"
 }

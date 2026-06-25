@@ -35,7 +35,7 @@ public struct ChecksumVerifier: Sendable {
         for a in manifest.artifacts {
             let url = dir.appendingPathComponent(a.name)
             guard FileManager.default.fileExists(atPath: url.path) else { failures.append("missing: \(a.name)"); continue }
-            if try Checksum.sha256(of: url) != a.sha256 { failures.append("checksum mismatch: \(a.name)") }
+            if try Checksum.digest(of: url) != a.sha256 { failures.append("checksum mismatch: \(a.name)") }
         }
         return report(.checksum, failures.isEmpty,
                       failures.isEmpty ? "\(manifest.artifacts.count) artifact(s) verified" : failures.joined(separator: "; "),

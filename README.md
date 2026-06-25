@@ -24,10 +24,14 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
 - Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG — immutable, checksummed, split into volumes when the target caps file size.
 - Resumable transfers to network shares and external drives: the archive ships in part files and picks up from the last whole part after a dropped connection or unplugged drive.
-- Restore built in: find an archive, verify it, and copy the library back out with its original folder name — beside the live one, never over it.
+- Restore built in: find an archive, verify it, and copy the library back out with its original folder name — beside the live one, or in place over it (staged and verified first, with the old copy moved to the Trash). Browse inside an archive and extract just the files you need.
 - Optional AES-256 encryption for sealed-DMG and live-mirror archives, with the passphrase kept in the Keychain so scheduled runs encrypt without prompting.
 - Versioned sealed archives with a retention policy — keep all, the last N, or a daily/weekly/monthly scheme — so you can restore a point in time without the disk filling up.
-- Verification built in: a checksum manifest on every archive, plus an optional mount-and-open check that confirms the library's database opens clean. Cold archives can be re-verified later.
+- Verification built in: a checksum manifest on every archive, plus an optional mount-and-open check that confirms the library's database opens clean.
+- Archive health monitoring: re-hash existing archives against their manifests on demand or on a weekly/monthly schedule, to catch bit rot before a restore needs them — works on encrypted archives with no passphrase.
+- Recovery-key escrow: export every archive passphrase into one master-password-encrypted file (PBKDF2 + AES-GCM), so encrypted backups survive a lost Mac.
+- Storage overview: per-job, per-version sizes against the free space on each destination volume.
+- In-app updates over an Ed25519-signed appcast, and a first-run walkthrough for the helper and Full Disk Access.
 - Targets for local disks, network shares, and cloud-sync folders, each with its own size cap and an availability preflight so a run never starts against an unmounted drive.
 - Run jobs concurrently up to a configurable limit, with live progress — speed, time elapsed, and time remaining — and pause, resume, or stop a run in flight.
 - Durable run history: every run, manual or scheduled, is recorded with its outcome, per-library detail, duration, size, and any error, and survives quitting the app.
