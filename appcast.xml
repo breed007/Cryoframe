@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.0.1</title>
+      <description><![CDATA[Cryoframe 1.0.1 — full user guide, in-app Help brought up to date, and a smaller window title that no longer wraps.]]></description>
+      <pubDate>Thu, 25 Jun 2026 23:54:27 +0000</pubDate>
+      <sparkle:version>20260625.1952</sparkle:version>
+      <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.0.1/Cryoframe-1.0.1.dmg" type="application/octet-stream" sparkle:edSignature="QAJeNqo1u8mgxo0r4Gc5RzfGOl1L24zc+WgG0DpXDfWz/S7hJHAM1sNgATvGMfBNmSos/4FsN04Z5YcdB2MHAg==" length="3030980" />
+    </item>
+    <item>
       <title>1.0.0</title>
       <description><![CDATA[Cryoframe 1.0 — archive health monitoring, in-app updates, recovery-key escrow, restore in place, in-app archive browser, and storage overview.]]></description>
       <pubDate>Thu, 25 Jun 2026 23:40:47 +0000</pubDate>

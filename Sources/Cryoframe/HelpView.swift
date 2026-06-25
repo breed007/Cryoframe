@@ -73,7 +73,7 @@ struct HelpView: View {
 
                     section("Archive health") {
                         bullet("Cold archives can rot — a flipped bit, a file a drive quietly dropped. Cryoframe can re-check existing archives against the checksums recorded when they were made, so corruption is caught long before a restore needs them.")
-                        bullet("Verify a job's archives any time from its ⋯ menu, or set a schedule in Settings ▸ General ▸ Archive health (weekly or monthly). Each job shows its last check; a failure turns the menu-bar item red and notifies you.")
+                        bullet("Verify one job's archives any time from its ⋯ menu, or every job at once with Verify all archives in the menu-bar item. Set a schedule in Settings ▸ General ▸ Archive health (weekly or monthly), and a scope: latest version per library, or all versions. Each job shows its last check; a failure turns the menu-bar item red and notifies you.")
                         bullet("Sealed archives are verified byte-for-byte against their checksums. A live mirror is verified structurally — its files and sizes — which catches dropped or truncated pieces but not an in-place bit flip (full-hashing a mirror every check would defeat its incremental nature).")
                     }
 
@@ -85,15 +85,17 @@ struct HelpView: View {
 
                     section("Encryption") {
                         bullet("Turn on \"Encrypt with AES-256\" when making a job to encrypt the archive — good for copies kept on an external drive, a NAS, or a cloud-sync folder. It applies to sealed-DMG and live-mirror formats (sealed zip can't be strongly encrypted).")
-                        bullet("The passphrase is stored in your Keychain so scheduled runs encrypt without prompting; it's never written into the job. Restoring or verifying an encrypted archive asks for it.")
-                        bullet("There is no recovery if you lose the passphrase — the backup is unreadable without it. Keep it somewhere safe.")
+                        bullet("The passphrase is stored in your Keychain so scheduled runs encrypt without prompting; it's never written into the job. Restoring or verifying an encrypted archive asks for it. You can read a saved passphrase any time with Copy passphrase in the job's ⋯ menu.")
+                        bullet("There is no recovery if you lose the passphrase: the backup is unreadable without it. Keep it somewhere safe.")
+                        bullet("Recovery keys (Settings ▸ Security) export every saved passphrase into one file, encrypted with a master password you choose, so encrypted backups are recoverable on a new Mac. The Keychain copy only protects the Mac that made the backup; keep a recovery file somewhere separate for the case where that Mac is gone.")
                     }
 
                     section("Restoring a library") {
                         bullet("Click Restore (top right), point it at the folder holding your archives (or use a Quick pick for a destination you back up to), and it lists the libraries it finds.")
                         bullet("Pick what to restore and a destination folder. Cryoframe verifies the checksums, then mounts or extracts the archive and copies the library out with its original folder name.")
                         bullet("It restores next to anything already there — never over your live library. Once it's done, move the restored library into place, or double-click it to open in its app.")
-                        bullet("Each archive's ⋯ menu also offers Restore in place (replaces your live library — the current one moves to the Trash, so it's reversible; quit the owning app first) and Browse contents (mounts the archive read-only and opens it in Finder so you can pull out just the files you need).")
+                        bullet("Each archive's ⋯ menu also offers Restore in place (replaces your live library: the current one moves to the Trash, so it's reversible; quit the owning app first) and Browse contents (opens the archive in an in-app file browser so you can drill in and extract just the files you need).")
+                    bullet("The ⋯ menu also lets you delete a single archive version you no longer need.")
                     }
 
                     section("Verification") {
@@ -132,6 +134,12 @@ struct HelpView: View {
                         bullet("You don't need to quit Photos or Music. \"If app is open\" only matters if you'd rather defer a run while it's in use.")
                         bullet("Cloud-sync targets split sealed archives under 250GB to fit OneDrive's single-file limit.")
                         bullet("Snapshots are created and deleted per run. Cryoframe never touches Time Machine's snapshots.")
+                    }
+
+                    section("Full guide") {
+                        para("This covers the essentials. The full guide goes deeper on every feature, with worked examples and troubleshooting.")
+                        Link("Open the Cryoframe user guide", destination: URL(string: "https://github.com/breed007/Cryoframe/blob/main/docs/guide/README.md")!)
+                            .font(.callout)
                     }
                 }
                 .padding(20)

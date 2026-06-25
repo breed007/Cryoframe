@@ -28,7 +28,7 @@ struct ContentView: View {
             HStack(alignment: .center, spacing: 12) {
                 Image(nsImage: NSApplication.shared.applicationIconImage)
                     .resizable().frame(width: 38, height: 38)
-                Text("Cryoframe").font(.largeTitle.bold())
+                Text("Cryoframe").font(.title2.bold()).lineLimit(1).fixedSize()
                 Spacer()
                 Button { showRestore = true } label: { Label("Restore", systemImage: "arrow.uturn.backward.circle") }
                     .help("Restore a library from an archive")

@@ -2,6 +2,15 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.0.1] — 2026-06-25
+
+### Added
+- A full user guide under `docs/guide/`, covering setup, jobs, formats and destinations, encryption and recovery keys, versions and retention, health and verification, restoring, scheduling, and troubleshooting. The in-app Help links to it.
+
+### Changed
+- Smaller, non-wrapping window title so it no longer hyphenates to "Cry-oframe" on a narrow window.
+- In-app Help updated to match 1.0: Browse contents opens an in-app file browser (not Finder), and Help now covers recovery keys, Verify all archives, archive-health scope, and deleting a single version.
+
 ## [1.0.0] — 2026-06-25
 
 The 1.0 release: the archives now watch themselves, recover themselves, and update themselves.

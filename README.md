@@ -4,6 +4,8 @@ Back up live macOS media libraries into sealed, verifiable archives, on a schedu
 
 macOS 15+ · Apple Silicon · MIT licensed
 
+📖 **[User guide](docs/guide/README.md)** — install, jobs, formats, encryption, restoring, and troubleshooting.
+
 <p align="center">
   <img src="docs/screenshots/main-window.png" alt="Cryoframe main window" width="520">
 </p>
@@ -155,7 +157,7 @@ Snapshot create runs through `tmutil localsnapshot`, which needs no special enti
 - `CryoframeHelper` — the root LaunchDaemon
 - `Cryoframe` — the SwiftUI app
 - `spike/` — the throwaway spikes that proved the snapshot and syscall approach
-- `docs/` — design notes
+- `docs/guide/` — the user guide; `docs/` also holds design notes
 - `scripts/` — build, install, icon, notarize, and DMG scripts
 
 ## Building and testing
