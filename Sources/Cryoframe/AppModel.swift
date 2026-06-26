@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
     @Published var fullDiskAccess = false
     @Published var libraryValid: [String: Bool] = [:]   // built-in id  -> resolved path exists
     @Published var jobValid: [String: Bool] = [:]       // job id       -> all libraries resolve
+    @Published var showHelp = false                     // drives the Help sheet from the in-window button AND the Help menu
 
     private var queue: [String] = []                    // job ids waiting for a run slot
     private var controls: [String: RunControl] = [:]

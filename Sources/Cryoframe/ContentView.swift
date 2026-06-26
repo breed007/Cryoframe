@@ -14,7 +14,6 @@ import CryoframeKit
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var showNewJob = false
-    @State private var showHelp = false
     @State private var showHistory = false
     @State private var showRestore = false
     @State private var showStorage = false
@@ -36,7 +35,7 @@ struct ContentView: View {
                     .help("Space used by archives, and free space on each target")
                 Button { showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
                     .help("Past runs, including scheduled ones")
-                Button { showHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
+                Button { model.showHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
                     .help("How to use Cryoframe, with examples")
             }
 
@@ -73,7 +72,7 @@ struct ContentView: View {
                         isPresented: Binding(get: { editingJob != nil }, set: { if !$0 { editingJob = nil } }),
                         editing: job)
         }
-        .sheet(isPresented: $showHelp) { HelpView(isPresented: $showHelp) }
+        .sheet(isPresented: $model.showHelp) { HelpView(isPresented: $model.showHelp) }
         .sheet(isPresented: $showHistory) { HistoryView(model: model, isPresented: $showHistory) }
         .sheet(isPresented: $showRestore) { RestoreView(model: model, isPresented: $showRestore) }
         .sheet(isPresented: $showStorage) { StorageView(model: model, isPresented: $showStorage) }

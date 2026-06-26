@@ -19,6 +19,16 @@ struct CryoframeApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.updater.checkForUpdates() }
             }
+            // Replace macOS's default "Cryoframe Help" item, which looks for a Help
+            // Book we don't ship and errors with "Help isn't available." Point it at
+            // the in-app help sheet instead.
+            CommandGroup(replacing: .help) {
+                Button("Cryoframe Help") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    model.showHelp = true
+                }
+                .keyboardShortcut("?", modifiers: .command)
+            }
         }
 
         MenuBarExtra {

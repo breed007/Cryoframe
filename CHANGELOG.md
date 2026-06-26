@@ -7,6 +7,9 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 ### Added
 - A full user guide under `docs/guide/`, covering setup, jobs, formats and destinations, encryption and recovery keys, versions and retention, health and verification, restoring, scheduling, and troubleshooting. The in-app Help links to it.
 
+### Fixed
+- The macOS Help menu (Help ▸ Cryoframe Help, ⌘?) opened a Help Book that was never shipped and errored with "Help isn't available for Cryoframe." It now opens the in-app help, same as the window's Help button.
+
 ### Changed
 - Smaller, non-wrapping window title so it no longer hyphenates to "Cry-oframe" on a narrow window.
 - In-app Help updated to match 1.0: Browse contents opens an in-app file browser (not Finder), and Help now covers recovery keys, Verify all archives, archive-health scope, and deleting a single version.
