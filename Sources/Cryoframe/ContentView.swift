@@ -56,16 +56,15 @@ struct ContentView: View {
                     VStack(spacing: 8) {
                         ForEach(model.jobs) { JobRow(model: model, job: $0, onEdit: { editingJob = $0 }) }
                     }
-                }.frame(maxHeight: 260)
+                }.frame(maxHeight: .infinity)
                 if !model.activity.isEmpty {
                     Divider()
                     activity
                 }
-                Spacer(minLength: 0)
             }
         }
         .padding(20)
-        .frame(width: 640, height: 680)
+        .frame(minWidth: 600, minHeight: 560)
         .sheet(isPresented: $showNewJob) { NewJobSheet(model: model, isPresented: $showNewJob) }
         .sheet(item: $editingJob) { job in
             NewJobSheet(model: model,

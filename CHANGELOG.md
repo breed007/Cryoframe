@@ -13,6 +13,11 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 
 ### Added
 - Every displayed library and destination path is now a link: click it to reveal the item in Finder.
+- The main window is resizable, with a sensible minimum size; the jobs list grows to fill the extra height.
+
+### Fixed
+- Editing a built-in library location from the New Job sheet no longer drops plain-folder or template libraries you added in the same session.
+- A folder or template library you add now shows a green check, the same as a built-in.
 
 ### Changed
 - Smaller, non-wrapping window title so it no longer hyphenates to "Cry-oframe" on a narrow window.

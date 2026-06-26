@@ -248,9 +248,13 @@ struct NewJobSheet: View {
         .onAppear(perform: seed)
         .sheet(isPresented: $showLocations) {
             LibraryLocationsSheet(isPresented: $showLocations) {
-                // a path changed — refresh the checklist (paths + names) and re-run
-                // the green/red validity marks so they reflect the new location.
-                libraries = model.registry.types
+                // a built-in path changed: refresh the built-in rows but keep any
+                // plain-folder / template libraries added this session (they aren't in
+                // the registry, so a plain reassign would silently drop them).
+                let builtins = model.registry.types
+                let builtinIDs = Set(builtins.map(\.id))
+                let extras = libraries.filter { !builtinIDs.contains($0.id) }
+                libraries = builtins + extras
                 model.revalidate()
             }
         }
@@ -377,14 +381,21 @@ struct NewJobSheet: View {
         guard let url = pickFolder() else { return }
         let ct = ContentType.genericFolder(id: url.path, displayName: url.lastPathComponent,
                                            path: ContentView.libraryPath(for: url, home: NSHomeDirectory()))
-        libraries.removeAll { $0.id == ct.id }; libraries.append(ct); selectedLibraryIDs.insert(ct.id)
+        addLibrary(ct, at: url)
     }
 
     private func addTemplatedLibrary(_ template: LibraryTemplate) {
         guard let url = pickFolder() else { return }
         let ct = template.contentType(id: url.path, displayName: url.lastPathComponent,
                                       path: ContentView.libraryPath(for: url, home: NSHomeDirectory()))
-        libraries.removeAll { $0.id == ct.id }; libraries.append(ct); selectedLibraryIDs.insert(ct.id)
+        addLibrary(ct, at: url)
+    }
+
+    private func addLibrary(_ ct: ContentType, at url: URL) {
+        libraries.removeAll { $0.id == ct.id }
+        libraries.append(ct)
+        selectedLibraryIDs.insert(ct.id)
+        model.libraryValid[ct.id] = FileManager.default.fileExists(atPath: url.path)   // user just picked it: show the check
     }
 
     private enum DestKind { case local, external, cloud }

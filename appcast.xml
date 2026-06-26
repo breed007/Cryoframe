@@ -7,12 +7,12 @@
     <language>en</language>
     <item>
       <title>1.0.1</title>
-      <description><![CDATA[Cryoframe 1.0.1 — full user guide, in-app Help that the macOS Help menu opens, inline library-location editing, click-to-reveal paths, and a smaller window title.]]></description>
-      <pubDate>Fri, 26 Jun 2026 00:33:47 +0000</pubDate>
-      <sparkle:version>20260625.2031</sparkle:version>
+      <description><![CDATA[Cryoframe 1.0.1 — resizable window, inline library-location editing, click-to-reveal paths, full user guide, and Help wired to the macOS Help menu.]]></description>
+      <pubDate>Fri, 26 Jun 2026 00:46:37 +0000</pubDate>
+      <sparkle:version>20260625.2045</sparkle:version>
       <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.0.1/Cryoframe-1.0.1.dmg" type="application/octet-stream" sparkle:edSignature="cJVo1dcAsHiVk0ZMCfkRSfoW7ApHFeJ2tmHfGf0RR+7IPxUYffi8SYgBMb58MPd9Ciu93idV+NQmPkT+vOqxCQ==" length="3044820" />
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.0.1/Cryoframe-1.0.1.dmg" type="application/octet-stream" sparkle:edSignature="MgiaqCj4NWny/V5aP78/pHimx2Kd8qzRtBf5Q2hUfN2FYarqtY0hzxFGkT1QKoQD0nCbTxk6X8K7pBRkdHP7BQ==" length="3046169" />
     </item>
     <item>
       <title>1.0.0</title>

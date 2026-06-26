@@ -14,7 +14,8 @@ struct CryoframeApp: App {
         WindowGroup(id: "main") {
             ContentView(model: model)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 640, height: 680)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.updater.checkForUpdates() }
