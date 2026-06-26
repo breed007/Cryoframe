@@ -17,6 +17,7 @@ struct NewJobSheet: View {
     var editing: BackupJob? = nil
 
     @State private var name = ""
+    @State private var showLocations = false
     @State private var libraries: [ContentType] = []
     @State private var selectedLibraryIDs: Set<String> = []
     @State private var targets: [Target] = []
@@ -90,9 +91,7 @@ struct NewJobSheet: View {
                                     }
                                 }
                                 if let p = lib.paths.first {
-                                    Text(p.liveURL(home: NSHomeDirectory()).path)
-                                        .font(.caption2).foregroundStyle(.secondary)
-                                        .lineLimit(1).truncationMode(.middle)
+                                    FinderPathLink(path: p.liveURL(home: NSHomeDirectory()).path)
                                 }
                             }
                         }
@@ -106,7 +105,7 @@ struct NewJobSheet: View {
                             Button("Plain folder…") { addFolderContentType() }
                         }
                         Spacer()
-                        Button("Edit locations…") { model.openLibrarySettings() }
+                        Button("Edit locations…") { showLocations = true }
                     }
                 } header: {
                     Text("Libraries")
@@ -247,6 +246,14 @@ struct NewJobSheet: View {
         }
         .frame(width: 560, height: 640)
         .onAppear(perform: seed)
+        .sheet(isPresented: $showLocations) {
+            LibraryLocationsSheet(isPresented: $showLocations) {
+                // a path changed — refresh the checklist (paths + names) and re-run
+                // the green/red validity marks so they reflect the new location.
+                libraries = model.registry.types
+                model.revalidate()
+            }
+        }
     }
 
     // MARK: helpers
@@ -262,8 +269,8 @@ struct NewJobSheet: View {
     }
 
     private func pathCaption(_ path: String) -> some View {
-        Text(path).font(.caption).foregroundStyle(.secondary)
-            .lineLimit(1).truncationMode(.middle).frame(maxWidth: .infinity, alignment: .leading).help(path)
+        FinderPathLink(path: path, font: .caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var defaultName: String {

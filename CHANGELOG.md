@@ -9,6 +9,10 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 
 ### Fixed
 - The macOS Help menu (Help ▸ Cryoframe Help, ⌘?) opened a Help Book that was never shipped and errored with "Help isn't available for Cryoframe." It now opens the in-app help, same as the window's Help button.
+- The New Job sheet's "Edit locations…" button did nothing, because it tried to open Settings behind the modal sheet. It now opens an inline editor for repointing a built-in library's location, and the checklist refreshes when you close it.
+
+### Added
+- Every displayed library and destination path is now a link: click it to reveal the item in Finder.
 
 ### Changed
 - Smaller, non-wrapping window title so it no longer hyphenates to "Cry-oframe" on a narrow window.

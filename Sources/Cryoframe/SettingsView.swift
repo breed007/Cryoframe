@@ -74,59 +74,9 @@ private struct TransferSettings: View {
 }
 
 private struct LibrariesSettings: View {
-    @State private var overrides = LibraryOverrides.loadRaw()
-
     var body: some View {
-        Form {
-            Section("Built-in library locations") {
-                ForEach(ContentTypeRegistry.builtIns) { type in row(type) }
-            }
-            Section {
-                Button("Restore all defaults") { LibraryOverrides.resetAll(); overrides = [:] }
-                    .disabled(overrides.isEmpty)
-            } footer: {
-                Text("Repoint a built-in library if it lives somewhere other than its default location, such as an external drive. The owning app and integrity check stay attached.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    @ViewBuilder private func row(_ type: ContentType) -> some View {
-        let defaultPath = type.paths.first?.liveURL(home: NSHomeDirectory()).path ?? ""
-        let current = overrides[type.id] ?? defaultPath
-        let isCustom = overrides[type.id] != nil
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(type.displayName)
-                    if isCustom {
-                        Text("custom").font(.caption2)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.2)))
-                            .foregroundStyle(Color.accentColor)
-                    }
-                }
-                Text(current).font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle).help(current)
-            }
-            Spacer()
-            Button("Change…") { change(type) }
-            if isCustom { Button("Reset") { LibraryOverrides.reset(id: type.id); overrides = LibraryOverrides.loadRaw() } }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func change(_ type: ContentType) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true            // a .photoslibrary is a package (a file to the panel)
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose the \(type.displayName) library"
-        if panel.runModal() == .OK, let url = panel.url {
-            LibraryOverrides.set(id: type.id, path: url.path)
-            overrides = LibraryOverrides.loadRaw()
-        }
+        Form { LibraryLocationsList() }
+            .formStyle(.grouped)
     }
 }
 
