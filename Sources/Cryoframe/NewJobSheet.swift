@@ -21,7 +21,7 @@ struct NewJobSheet: View {
     @State private var libraries: [ContentType] = []
     @State private var selectedLibraryIDs: Set<String> = []
     @State private var targets: [Target] = []
-    @State private var selectedTargetID = "local-default"
+    @State private var selectedTargetIDs: [String] = []     // ordered; first is primary
     @State private var format: FormatChoice = .liveMirror(sizeGB: 500)
     @State private var liveMirrorValue = 500
     @State private var liveMirrorUnit = "GB"
@@ -47,8 +47,35 @@ struct NewJobSheet: View {
     enum FreqKind: String, CaseIterable, Identifiable { case daily, everyHours, once, manual; var id: String { rawValue } }
 
     private var selectedLibraries: [ContentType] { libraries.filter { selectedLibraryIDs.contains($0.id) } }
-    private var target: Target? { targets.first { $0.id == selectedTargetID } }
+    private var selectedTargets: [Target] { selectedTargetIDs.compactMap { id in targets.first { $0.id == id } } }
+    private var primaryTarget: Target? { selectedTargets.first }
     private var isEditing: Bool { editing != nil }
+
+    /// selected destinations with duplicates-by-path collapsed. The built-in default and a
+    /// manually-added copy of the same folder have different ids but the same path — writing
+    /// to both would clobber one copy and report a phantom second. Keep the first (primary).
+    private var dedupedTargets: [Target] {
+        var seen = Set<String>(), out: [Target] = []
+        for t in selectedTargets where seen.insert(t.destinationDir.path).inserted { out.append(t) }
+        return out
+    }
+    private var hasDuplicateDestinations: Bool { dedupedTargets.count != selectedTargets.count }
+
+    /// another sealed job already archiving the same library to the same destination —
+    /// they'd share version folders and cross-prune each other's archives. Block it.
+    private var destinationConflicts: [String] {
+        guard isSealedFormat else { return [] }
+        let mine = editing?.id
+        var out = Set<String>()
+        for job in model.jobs where job.id != mine && job.format.isSealed {
+            for t in selectedTargets where job.targets.contains(where: { $0.destinationDir.path == t.destinationDir.path }) {
+                for lib in selectedLibraries where job.libraries.contains(where: { $0.displayName == lib.displayName }) {
+                    out.insert("“\(job.name)” already archives \(lib.displayName) to \(t.displayName)")
+                }
+            }
+        }
+        return out.sorted()
+    }
 
     private var isSealedFormat: Bool { if case .liveMirror = format { return false }; return true }
     private var retentionPolicy: RetentionPolicy {
@@ -114,16 +141,53 @@ struct NewJobSheet: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
-                Section("Destination") {
-                    Picker("Target", selection: $selectedTargetID) {
-                        ForEach(targets) { Text($0.displayName).tag($0.id) }
+                Section {
+                    ForEach(targets) { t in
+                        Toggle(isOn: destinationBinding(t.id)) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                HStack(spacing: 6) {
+                                    Text(t.displayName)
+                                    if primaryTarget?.id == t.id {
+                                        Text("primary").font(.caption2)
+                                            .padding(.horizontal, 5).padding(.vertical, 1)
+                                            .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                FinderPathLink(path: t.destinationDir.path)
+                            }
+                        }
+                        .contextMenu {
+                            if model.canRemoveTarget(t.id) {
+                                Button("Remove from list", role: .destructive) {
+                                    selectedTargetIDs.removeAll { $0 == t.id }
+                                    model.removeTarget(t.id)
+                                    targets = model.targets
+                                }
+                            }
+                        }
                     }
-                    if let t = target { pathCaption(t.destinationDir.path) }
                     Menu("Add destination…") {
                         Button("Local folder…") { addTarget(.local) }
                         Button("Network or external drive (resumable)…") { addTarget(.external) }
                         Button("Cloud-sync folder (splits over 250GB)…") { addTarget(.cloud) }
                     }
+                    if hasDuplicateDestinations {
+                        Label("Two destinations point at the same folder — only one copy will be kept.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange).font(.caption)
+                    }
+                    if !destinationConflicts.isEmpty {
+                        ForEach(destinationConflicts, id: \.self) { c in
+                            Label(c, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange).font(.caption)
+                        }
+                    }
+                } header: {
+                    Text("Destinations")
+                } footer: {
+                    Text("Each selected destination gets its own copy from the same snapshot. The first is the primary — a run must reach it; if a secondary is offline the run finishes as a partial backup. A second copy on another drive or off-site is the 3-2-1 rule. Right-click a destination to remove it from the list.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 Section("Format") {
@@ -240,7 +304,7 @@ struct NewJobSheet: View {
                 Spacer()
                 Button("Cancel") { isPresented = false }.keyboardShortcut(.cancelAction)
                 Button(isEditing ? "Save" : "Create") { create() }.keyboardShortcut(.defaultAction)
-                    .disabled(selectedLibraries.isEmpty || target == nil || !encryptionValid)
+                    .disabled(selectedLibraries.isEmpty || selectedTargets.isEmpty || !encryptionValid || !destinationConflicts.isEmpty)
             }
             .padding(20)
         }
@@ -267,6 +331,15 @@ struct NewJobSheet: View {
                 set: { if $0 { selectedLibraryIDs.insert(id) } else { selectedLibraryIDs.remove(id) } })
     }
 
+    /// multi-select for destinations, preserving order so the first stays primary.
+    private func destinationBinding(_ id: String) -> Binding<Bool> {
+        Binding(get: { selectedTargetIDs.contains(id) },
+                set: { on in
+                    if on { if !selectedTargetIDs.contains(id) { selectedTargetIDs.append(id) } }
+                    else { selectedTargetIDs.removeAll { $0 == id } }
+                })
+    }
+
     private func copyToClipboard(_ s: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(s, forType: .string)
@@ -280,7 +353,9 @@ struct NewJobSheet: View {
     private var defaultName: String {
         let names = selectedLibraries.map(\.displayName)
         let lib = names.isEmpty ? "Libraries" : (names.count <= 2 ? names.joined(separator: ", ") : "\(names.count) libraries")
-        return "\(lib) → \(target?.displayName ?? "Target")"
+        let dest = primaryTarget?.displayName ?? "Target"
+        let suffix = dedupedTargets.count > 1 ? " +\(dedupedTargets.count - 1)" : ""
+        return "\(lib) → \(dest)\(suffix)"
     }
 
     private var formatBinding: Binding<String> {
@@ -313,8 +388,8 @@ struct NewJobSheet: View {
             name = job.name
             for lib in job.libraries where !libraries.contains(where: { $0.id == lib.id }) { libraries.append(lib) }
             selectedLibraryIDs = Set(job.libraries.map(\.id))
-            if !targets.contains(where: { $0.id == job.target.id }) { targets.append(job.target) }
-            selectedTargetID = job.target.id
+            for t in job.targets where !targets.contains(where: { $0.id == t.id }) { targets.append(t) }
+            selectedTargetIDs = job.targets.map(\.id)
             switch job.format {
             case .sealedDMG: format = .sealedDMG
             case .sealedZip: format = .sealedZip
@@ -332,7 +407,7 @@ struct NewJobSheet: View {
             }
             seedFrequency(job.frequency)
         } else {
-            selectedTargetID = targets.first?.id ?? ""
+            selectedTargetIDs = targets.first.map { [$0.id] } ?? []
             let d = UserDefaults.standard
             if d.integer(forKey: Prefs.mirrorGB) > 0 { liveMirrorValue = d.integer(forKey: Prefs.mirrorGB) }
             if let u = d.string(forKey: Prefs.mirrorUnit) { liveMirrorUnit = u }
@@ -358,7 +433,7 @@ struct NewJobSheet: View {
     }
 
     private func create() {
-        guard !selectedLibraries.isEmpty, let tgt = target, encryptionValid else { return }
+        guard !selectedLibraries.isEmpty, !selectedTargets.isEmpty, encryptionValid else { return }
         var fmt = format
         if case .liveMirror = fmt { fmt = .liveMirror(sizeGB: liveMirrorGB) }
         let id = editing?.id ?? UUID().uuidString
@@ -369,7 +444,7 @@ struct NewJobSheet: View {
         }
         model.addJob(BackupJob(id: id,
                                name: name.isEmpty ? defaultName : name,
-                               libraries: selectedLibraries, target: tgt, format: fmt,
+                               libraries: selectedLibraries, targets: dedupedTargets, format: fmt,
                                frequency: frequency(), verification: verification, runPolicy: runPolicy,
                                enabled: editing?.enabled ?? true, encrypted: encrypt,
                                retention: isSealedFormat ? retentionPolicy : .keepAll,
@@ -409,7 +484,8 @@ struct NewJobSheet: View {
         case .external: t = .externalDrive(id: url.path, name: name + " (resumable)", dir: url)
         case .cloud:    t = .cloudSyncFolder(id: url.path, name: name + " (cloud)", dir: url)
         }
-        targets.removeAll { $0.id == t.id }; targets.append(t); model.addTarget(t); selectedTargetID = t.id
+        targets.removeAll { $0.id == t.id }; targets.append(t); model.addTarget(t)
+        if !selectedTargetIDs.contains(t.id) { selectedTargetIDs.append(t.id) }   // auto-select the new destination
     }
 
     private func pickFolder() -> URL? {

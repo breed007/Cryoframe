@@ -44,7 +44,7 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
     public let id: String
     public var name: String
     public var libraries: [ContentType]
-    public var target: Target
+    public var targets: [Target]        // one or more destinations; targets[0] is primary. Always non-empty.
     public var format: FormatChoice
     public var frequency: BackupFrequency
     public var verification: VerificationPolicy
@@ -54,19 +54,35 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
     public var retention: RetentionPolicy   // version pruning for sealed archives (mirrors are single-copy)
     public var createdAt: Date
 
+    /// the primary destination — the one a run must reach. Secondaries can fail to a
+    /// partial-success without failing the whole run.
+    public var target: Target { targets.first! }
+
     public init(id: String = UUID().uuidString, name: String,
-                libraries: [ContentType], target: Target, format: FormatChoice,
+                libraries: [ContentType], targets: [Target], format: FormatChoice,
                 frequency: BackupFrequency, verification: VerificationPolicy = .checksumOnly,
                 runPolicy: RunPolicy = .proceed, enabled: Bool = true, encrypted: Bool = false,
                 retention: RetentionPolicy = .keepAll, createdAt: Date) {
-        self.id = id; self.name = name; self.libraries = libraries; self.target = target
+        precondition(!targets.isEmpty, "a job needs at least one destination")
+        self.id = id; self.name = name; self.libraries = libraries; self.targets = targets
         self.format = format; self.frequency = frequency; self.verification = verification
         self.runPolicy = runPolicy; self.enabled = enabled; self.encrypted = encrypted
         self.retention = retention; self.createdAt = createdAt
     }
 
+    /// convenience for a single-destination job (most jobs, and the tests).
+    public init(id: String = UUID().uuidString, name: String,
+                libraries: [ContentType], target: Target, format: FormatChoice,
+                frequency: BackupFrequency, verification: VerificationPolicy = .checksumOnly,
+                runPolicy: RunPolicy = .proceed, enabled: Bool = true, encrypted: Bool = false,
+                retention: RetentionPolicy = .keepAll, createdAt: Date) {
+        self.init(id: id, name: name, libraries: libraries, targets: [target], format: format,
+                  frequency: frequency, verification: verification, runPolicy: runPolicy,
+                  enabled: enabled, encrypted: encrypted, retention: retention, createdAt: createdAt)
+    }
+
     enum CodingKeys: String, CodingKey {
-        case id, name, libraries, contentType, target, format, frequency, verification, runPolicy, enabled, encrypted, retention, createdAt
+        case id, name, libraries, contentType, target, targets, format, frequency, verification, runPolicy, enabled, encrypted, retention, createdAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,7 +95,12 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         } else {
             libraries = [try c.decode(ContentType.self, forKey: .contentType)]
         }
-        target = try c.decode(Target.self, forKey: .target)
+        // migrate single-target jobs (pre-1.1.0) to a one-element list.
+        if let ts = try c.decodeIfPresent([Target].self, forKey: .targets), !ts.isEmpty {
+            targets = ts
+        } else {
+            targets = [try c.decode(Target.self, forKey: .target)]
+        }
         format = try c.decode(FormatChoice.self, forKey: .format)
         frequency = try c.decode(BackupFrequency.self, forKey: .frequency)
         verification = try c.decodeIfPresent(VerificationPolicy.self, forKey: .verification) ?? .checksumOnly
@@ -95,7 +116,8 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         try c.encode(id, forKey: .id)
         try c.encode(name, forKey: .name)
         try c.encode(libraries, forKey: .libraries)
-        try c.encode(target, forKey: .target)
+        try c.encode(targets, forKey: .targets)
+        try c.encode(targets[0], forKey: .target)   // also write the legacy key so an older build can still read the job
         try c.encode(format, forKey: .format)
         try c.encode(frequency, forKey: .frequency)
         try c.encode(verification, forKey: .verification)

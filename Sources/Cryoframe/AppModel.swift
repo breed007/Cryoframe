@@ -58,8 +58,12 @@ final class AppModel: ObservableObject {
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Cryoframe Archives", isDirectory: true)
         targets = [.localVolume(id: "local-default", name: dir.lastPathComponent, dir: dir)]
-        jobs = store.load().jobs
+        let loaded = store.load()
+        jobs = loaded.jobs
         reloadHistory()                         // last-run badges, persisted across launches
+        if loaded.droppedJobs > 0 {             // a partial decode shouldn't be silent
+            log("⚠︎ \(loaded.droppedJobs) job\(loaded.droppedJobs == 1 ? "" : "s") couldn't be read and were skipped — they may have been written by a newer version.")
+        }
         for r in history.all().prefix(8).reversed() { log(Self.historyLine(r)) }   // seed the activity log
         reloadHealth()
         notifiedIDs = Set(history.all().map(\.id))   // don't notify for runs that predate this launch
@@ -70,6 +74,8 @@ final class AppModel: ObservableObject {
         revalidate()
         Task { await helper.reloadIfStale() }   // pick up a new helper binary after an app update
         Task.detached { ArchiveReader.sweepStaleOpens() }   // clean any browse mounts a crash left attached
+        Task.detached { JobExecutor.sweepOrphanedScratch(scratchBase: TransferConfig.scratchBase(),
+                                                         pendingStore: .standard()) }   // clean leftover build artifacts
         resumeTransfers()
         armWake()                               // align the optional pmset wake with the schedule
     }
@@ -124,6 +130,26 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// run a restore drill: reassemble, mount/extract, and reopen each archive — proves
+    /// the restore path works, not just that the bytes match. Needs the passphrase for
+    /// an encrypted job, so it runs in the GUI where the Keychain is reachable.
+    func drillArchives(_ job: BackupJob) {
+        guard !verifyingJobIDs.contains(job.id) else { return }
+        verifyingJobIDs.insert(job.id)
+        log("🧪 \(job.name): restore drill…")
+        let resolved = job.resolvingLibraries(in: registry)
+        let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
+        let passphrase = job.encrypted ? KeychainArchiveKey.load(jobID: job.id) : nil
+        Task.detached {
+            let report = RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase)
+            let record = HealthRecord.from(job: resolved, report: report, at: Date(), kind: "drill")
+            await MainActor.run {
+                self.verifyingJobIDs.remove(job.id)
+                self.applyHealth(record)
+            }
+        }
+    }
+
     /// re-verify every job's archives — serially, so we don't saturate the disk with
     /// one full re-hash per job at once.
     func verifyAllArchives() {
@@ -155,14 +181,19 @@ final class AppModel: ObservableObject {
     private func maybeNotifyHealth(_ record: HealthRecord) {
         guard !notifiedHealthIDs.contains(record.id) else { return }
         notifiedHealthIDs.insert(record.id)
+        // a 0-archive result on a job that has never produced a run isn't "target offline" —
+        // it's "nothing to check yet". Don't nag (locally or remotely) about a brand-new job.
+        if record.archivesChecked == 0, lastRecords[record.jobID] == nil { return }
         Notifier.notifyHealth(record)
     }
 
     static func healthLine(_ r: HealthRecord) -> String {
         let when = r.checkedAt.formatted(date: .abbreviated, time: .shortened)
+        let glyph = r.isDrill ? "🧪" : "🔍"
+        let verb = r.isDrill ? "drilled clean" : "verified"
         return r.passed
-            ? "🔍 \(r.jobName): \(r.archivesChecked) archive\(r.archivesChecked == 1 ? "" : "s") verified · \(when)"
-            : "⚠︎ \(r.jobName): \(r.failures.count) archive check(s) failed · \(when)"
+            ? "\(glyph) \(r.jobName): \(r.archivesChecked) archive\(r.archivesChecked == 1 ? "" : "s") \(verb) · \(when)"
+            : "⚠︎ \(r.jobName): \(r.failures.count) \(r.isDrill ? "restore drill" : "archive") check(s) failed · \(when)"
     }
 
     /// post a notification for a record once per session (policy is applied inside).
@@ -175,7 +206,7 @@ final class AppModel: ObservableObject {
     /// the menu-bar glyph reflecting overall backup health.
     var menuBarSymbol: String {
         if !runningJobIDs.isEmpty { return "arrow.triangle.2.circlepath" }
-        if jobs.contains(where: { lastRecords[$0.id]?.outcome == .failed }) { return "exclamationmark.triangle.fill" }
+        if jobs.contains(where: { [.failed, .partial].contains(lastRecords[$0.id]?.outcome) }) { return "exclamationmark.triangle.fill" }
         return "checkmark.circle"
     }
 
@@ -224,11 +255,21 @@ final class AppModel: ObservableObject {
     func deleteJob(_ id: String) { stopJob(id); KeychainArchiveKey.delete(jobID: id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
     func addTarget(_ target: Target) { targets.removeAll { $0.id == target.id }; targets.append(target) }
 
+    /// drop a destination from the picker list. Refuses the built-in default and any
+    /// destination a job still uses (removing it wouldn't change the job, just hide it).
+    func canRemoveTarget(_ id: String) -> Bool {
+        id != "local-default" && !jobs.contains { $0.targets.contains { $0.id == id } }
+    }
+    func removeTarget(_ id: String) {
+        guard canRemoveTarget(id) else { return }
+        targets.removeAll { $0.id == id }
+    }
+
     /// distinct destinations to offer in Restore — the session targets plus every
     /// destination a job actually backs up to (NAS, external, cloud), deduped by path.
     var restoreSources: [Target] {
         var seen = Set<String>(), out: [Target] = []
-        for t in targets + jobs.map(\.target) where seen.insert(t.destinationDir.path).inserted { out.append(t) }
+        for t in targets + jobs.flatMap(\.targets) where seen.insert(t.destinationDir.path).inserted { out.append(t) }
         return out
     }
 
@@ -352,6 +393,7 @@ final class AppModel: ObservableObject {
     static func symbol(_ kind: RunOutcomeKind) -> String {
         switch kind {
         case .verified, .completed: return "✓"
+        case .partial:              return "⚠︎"
         case .failed:               return "✗"
         case .deferred:             return "⏸"
         case .cancelled:            return "⏹"

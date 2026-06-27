@@ -14,6 +14,11 @@ public enum FormatChoice: Sendable, Equatable, Codable {
     case sealedDMG
     case sealedZip
     case liveMirror(sizeGB: Int)
+
+    /// sealed formats are versioned into timestamped folders; a live mirror is a single
+    /// in-place copy. Two sealed jobs to the same (target, library) share version folders
+    /// and would cross-prune each other.
+    public var isSealed: Bool { if case .liveMirror = self { return false }; return true }
 }
 
 public enum TargetError: Error, Equatable {

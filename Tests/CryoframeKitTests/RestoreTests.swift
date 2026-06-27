@@ -229,4 +229,56 @@ private func archive(_ kind: SealedArchiveEngine.Sealed, _ lib: URL, to dir: URL
     #expect((found[0].version ?? .distantPast) > (found[1].version ?? .distantPast))   // newest first
 }
 
+/// build-once-distribute: one sealed archive copied to several destinations, each
+/// with a valid manifest, and restorable — proves the multi-destination fast path.
+@Test func sealedBuiltOnceDistributesToManyAndEachRestores() throws {
+    let base = tmp(); defer { try? FileManager.default.removeItem(at: base) }
+    let lib = try makeLibrary(in: base)
+    let built = try SealedArchiveEngine(.zip).archive(ArchiveSource(name: lib.lastPathComponent, root: lib),
+                                                      to: base.appendingPathComponent("build"))
+    let file = try #require(built.artifacts.first)
+
+    let d1 = base.appendingPathComponent("dest1/Photos")
+    let d2 = base.appendingPathComponent("dest2/Photos")
+    let r1 = try SealedArchiveEngine(.zip).distribute(builtFile: file, into: d1, encrypted: false)
+    let r2 = try SealedArchiveEngine(.zip).distribute(builtFile: file, into: d2, encrypted: false)
+    #expect(r1.format == .sealedZip && r2.format == .sealedZip)
+
+    // every distributed copy carries a manifest and reverifies clean
+    #expect(try ChecksumVerifier().reverify(archiveDir: d1).passed)
+    #expect(try ChecksumVerifier().reverify(archiveDir: d2).passed)
+
+    // and a copy restores to the original content
+    let arch = try #require(RestoreDiscovery.scan(base.appendingPathComponent("dest2")).first)
+    let restored = try RestoreEngine().restore(arch, to: base.appendingPathComponent("restored"))
+    let text = try String(contentsOf: restored.appendingPathComponent("database/index.db"), encoding: .utf8)
+    #expect(text == "hello")
+}
+
+/// a restore drill opens a good archive and fails a corrupt one — proving it exercises
+/// the restore path, not just the checksum.
+@Test func restoreDrillOpensGoodArchiveAndFailsCorruptOne() throws {
+    let base = tmp(); defer { try? FileManager.default.removeItem(at: base) }
+    let lib = try makeLibrary(in: base, name: "Docs.bundle")
+    let target = base.appendingPathComponent("target")
+    _ = try archive(.zip, lib, to: target.appendingPathComponent("Docs"))
+
+    let type = ContentType.genericFolder(id: "docs", displayName: "Docs", path: .absolute(lib.path))
+    let job = BackupJob(name: "J", libraries: [type],
+                        target: .localVolume(id: "t", name: "Disk", dir: target),
+                        format: .sealedZip, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+
+    let good = RestoreDriller().drill(job: job)
+    #expect(good.passed)
+    #expect(good.checks.count == 1)
+    #expect(good.checks.first?.detail.contains("reopened clean") == true)   // it actually opened
+
+    // corrupt the artifact's bytes → the drill catches it at the checksum step
+    let dir = target.appendingPathComponent("Docs")
+    let zip = try #require(try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        .first { $0.pathExtension == "zip" })
+    try Data("garbage".utf8).write(to: zip)
+    #expect(!RestoreDriller().drill(job: job).passed)
+}
+
 }   // RestoreRoundTrips

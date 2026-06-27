@@ -12,9 +12,11 @@ import Foundation
 import CryoframeShared
 
 public enum LibraryRunResult: Sendable, Equatable {
-    case completed(library: String, parts: Int, bytes: UInt64, verified: Bool?)
+    // a "copy" is one library written to one destination. notFound is a source-side
+    // problem, so it has no destination (it fails for all of them at once).
+    case completed(library: String, destination: String, parts: Int, bytes: UInt64, verified: Bool?)
     case notFound(library: String)
-    case failed(library: String, error: String)
+    case failed(library: String, destination: String, error: String)
 }
 
 public enum JobOutcome: Sendable {
@@ -55,17 +57,25 @@ public struct JobExecutor: Sendable {
     /// e.g. from the Keychain. Returns nil for plaintext jobs.
     let passphraseProvider: @Sendable (String) -> String?
 
-    private struct Staged: Sendable {
+    // a sealed archive built once (in scratch), to be distributed to every destination
+    // without recompressing. Live mirrors don't use this — they rsync per destination.
+    private struct SealedBuild: Sendable {
         let library: ContentType
+        let jobID: String
         let index: Int
-        let pending: PendingTransfer
-        let scratchDir: URL
+        let builtFile: URL          // the unsplit artifact in scratch
+        let format: ArchiveFormat
+        let byteSize: UInt64
+        let contentDigest: String   // sha256 of the built artifact, to confirm copies match
         let verified: Bool?
+        let encrypted: Bool
+        let buildDir: URL           // scratch dir to clean once distribution is done
+        let dests: [Target]         // the available destinations to copy/ship it to
     }
 
     private struct SnapshotPass: Sendable {
         var results: [LibraryRunResult]
-        var staged: [Staged]
+        var builds: [SealedBuild]
         var cancelled: Bool
     }
 
@@ -77,14 +87,20 @@ public struct JobExecutor: Sendable {
         let decision = decide(job.runPolicy, libraries: job.libraries, detector: detector)
         if case .deferred(let reason) = decision { return .deferred(reason) }
 
-        let availability = probe.availability(of: job.target)
-        guard availability.ok else {
-            throw TargetError.unavailable(availability.reason ?? "\(job.target.displayName) is unavailable")
+        // the primary destination must be reachable — a run that can't write its first
+        // copy is a real failure. Secondaries that are down degrade to partial success.
+        let primaryAvail = probe.availability(of: job.target)
+        guard primaryAvail.ok else {
+            throw TargetError.unavailable(primaryAvail.reason ?? "\(job.target.displayName) is unavailable")
+        }
+        let dests: [(target: Target, available: Bool, reason: String?)] = job.targets.enumerated().map { i, t in
+            if i == 0 { return (t, true, nil) }
+            let a = probe.availability(of: t)
+            return (t, a.ok, a.reason)
         }
 
         let runner = ProcessCommandRunner(control: control)
         let sealed = Self.sealedKind(job.format)
-        let targetBase = job.target.destinationDir
         let count = job.libraries.count
         let passphrase = job.encrypted ? passphraseProvider(job.id) : nil
         if job.encrypted, passphrase?.isEmpty ?? true { throw ArchiveError.passphraseUnavailable }
@@ -93,108 +109,178 @@ public struct JobExecutor: Sendable {
         let coordinator = SnapshotCoordinator(helper: helper)
         let pass = try await coordinator.withFrozenSnapshot(of: dataVolume, ownerUID: ownerUID) { mount -> SnapshotPass in
             var results: [LibraryRunResult] = []
-            var staged: [Staged] = []
+            var builds: [SealedBuild] = []
             var cancelled = false
-            for (offset, library) in job.libraries.enumerated() {
+            libraryLoop: for (offset, library) in job.libraries.enumerated() {
                 let idx = offset + 1
                 if control.isCancelled { cancelled = true; break }
                 onLibrary(library.displayName)
-                // sealed formats are versioned into a timestamped subfolder; the live
-                // mirror updates one copy in place.
-                let libDir = targetBase.appendingPathComponent(library.displayName, isDirectory: true)
-                let dest = sealed != nil ? libDir.appendingPathComponent(VersionStamp.string(now), isDirectory: true) : libDir
                 guard let root = self.locator.frozenRoots(of: library, mountPoint: mount.mountPoint).first else {
-                    results.append(.notFound(library: library.displayName)); continue
+                    results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
                 }
                 let source = ArchiveSource(name: root.lastPathComponent, root: root)
-                onStage(.archiving)
-                let isStaged = job.target.constraints.resumableTransfer && sealed != nil
-                let outputDir = isStaged
-                    ? self.scratchBase.appendingPathComponent("\(job.id)/\(Self.safe(library.id))", isDirectory: true)
-                    : dest
-
-                // preflight free space: a sealed run writes a full archive each time; a
-                // mirror only for its first (full) copy. Fail fast with a clear message.
                 let sourceSize = Self.directorySize(root)
-                let mirrorExists = sealed == nil &&
-                    FileManager.default.fileExists(atPath: libDir.appendingPathComponent(source.name + ".sparsebundle").path)
-                if !mirrorExists {
+                onStage(.archiving)
+
+                if let sealed {
+                    // SEALED: compress once to scratch, then copy/ship to each destination
+                    // after the snapshot — no recompression per destination.
+                    for d in dests where !d.available {
+                        results.append(.failed(library: library.displayName, destination: d.target.displayName,
+                                               error: "\(d.target.displayName) is unavailable — \(d.reason ?? "not reachable")"))
+                    }
+                    let live = dests.filter(\.available).map(\.target)
+                    if live.isEmpty { continue }
                     let needed = sourceSize + sourceSize / 20
-                    // staged runs build in scratch first, then ship to the target — both need room.
-                    let checks: [(name: String, url: URL)] = isStaged
-                        ? [("the scratch volume", self.scratchBase), (job.target.displayName, job.target.destinationDir)]
-                        : [(job.target.displayName, job.target.destinationDir)]
-                    if let bad = checks.first(where: { (Self.freeSpace(for: $0.url) ?? .max) < needed }) {
-                        results.append(.failed(library: library.displayName,
-                            error: "not enough space on \(bad.name): needs ~\(Self.human(sourceSize)), only \(Self.human(Self.freeSpace(for: bad.url) ?? 0)) free"))
+                    if (Self.freeSpace(for: self.scratchBase) ?? .max) < needed {
+                        for t in live {
+                            results.append(.failed(library: library.displayName, destination: t.displayName,
+                                error: "not enough space on the scratch volume: needs ~\(Self.human(sourceSize)), only \(Self.human(Self.freeSpace(for: self.scratchBase) ?? 0)) free"))
+                        }
                         continue
                     }
-                }
-
-                let poller = self.archivePoller(total: sourceSize, outputDir: outputDir, idx: idx, count: count, onProgress: onProgress)
-                do {
-                    if isStaged, let sealed {
-                        staged.append(try self.stage(job: job, library: library, index: idx, source: source,
-                                                     sealed: sealed, dest: dest, runner: runner,
-                                                     passphrase: passphrase, onStage: onStage))
-                    } else {
-                        results.append(try self.direct(job: job, library: library, source: source,
-                                                       dest: dest, runner: runner,
-                                                       passphrase: passphrase, onStage: onStage))
+                    let buildDir = self.scratchBase.appendingPathComponent("\(job.id)/build/\(Self.safe(library.id))", isDirectory: true)
+                    let poller = self.archivePoller(total: sourceSize, outputDir: buildDir, idx: idx, count: count, onProgress: onProgress)
+                    do {
+                        builds.append(try self.buildSealed(job: job, library: library, index: idx, source: source,
+                                                           sealed: sealed, buildDir: buildDir, dests: live,
+                                                           runner: runner, passphrase: passphrase, onStage: onStage))
+                        poller.cancel()
+                    } catch is CancelledError { poller.cancel(); cancelled = true; break }
+                    catch {
+                        poller.cancel()
+                        for t in live { results.append(.failed(library: library.displayName, destination: t.displayName, error: String(describing: error))) }
                     }
-                    poller.cancel()
-                } catch is CancelledError {
-                    poller.cancel(); cancelled = true; break
-                } catch {
-                    poller.cancel()
-                    results.append(.failed(library: library.displayName, error: String(describing: error)))
+                } else {
+                    // LIVE MIRROR: an in-place incremental rsync per destination, from
+                    // the snapshot. Cheap to repeat, so each destination is its own mirror.
+                    for d in dests {
+                        if control.isCancelled { cancelled = true; break libraryLoop }
+                        let t = d.target
+                        guard d.available else {
+                            results.append(.failed(library: library.displayName, destination: t.displayName,
+                                                   error: "\(t.displayName) is unavailable — \(d.reason ?? "not reachable")"))
+                            continue
+                        }
+                        let libDir = t.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
+                        let mirrorExists = FileManager.default.fileExists(atPath: libDir.appendingPathComponent(source.name + ".sparsebundle").path)
+                        if !mirrorExists {
+                            let needed = sourceSize + sourceSize / 20
+                            if (Self.freeSpace(for: t.destinationDir) ?? .max) < needed {
+                                results.append(.failed(library: library.displayName, destination: t.displayName,
+                                    error: "not enough space on \(t.displayName): needs ~\(Self.human(sourceSize)), only \(Self.human(Self.freeSpace(for: t.destinationDir) ?? 0)) free"))
+                                continue
+                            }
+                        }
+                        let poller = self.archivePoller(total: sourceSize, outputDir: libDir, idx: idx, count: count, onProgress: onProgress)
+                        do {
+                            results.append(try self.direct(job: job, library: library, source: source,
+                                                           dest: libDir, target: t, runner: runner,
+                                                           passphrase: passphrase, onStage: onStage))
+                            poller.cancel()
+                        } catch is CancelledError {
+                            poller.cancel(); cancelled = true; break libraryLoop
+                        } catch {
+                            poller.cancel()
+                            results.append(.failed(library: library.displayName, destination: t.displayName, error: String(describing: error)))
+                        }
+                    }
                 }
             }
-            return SnapshotPass(results: results, staged: staged, cancelled: cancelled)
+            return SnapshotPass(results: results, builds: builds, cancelled: cancelled)
         }
 
         if pass.cancelled {
-            pass.staged.forEach(cleanup)
-            if sealed != nil { Self.pruneVersions(target: targetBase, libraries: job.libraries, policy: job.retention) }
+            pass.builds.forEach(cleanupBuild)
+            if sealed != nil { for t in job.targets { Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention) } }
             return .cancelled
         }
         var results = pass.results
 
-        // ship staged libraries (the snapshot is already released)
-        for item in pass.staged {
-            if control.isCancelled { pass.staged.forEach(cleanup); return .cancelled }
-            onStage(.transferring)
-            let tStart = Date()
-            let chunk = item.pending.chunkSize, totalBytes = item.pending.totalBytes
-            do {
-                let manifest = try ChunkedShipper().ship(
-                    item.pending,
-                    persist: { pendingStore?.save($0) },
-                    control: control,
-                    onPart: { done, total in
-                        let bytesDone = min(UInt64(done) * chunk, totalBytes)
-                        let elapsed = Date().timeIntervalSince(tStart)
-                        let rate: Double? = elapsed > 0 ? Double(bytesDone) / elapsed : nil       // cumulative avg
-                        let remaining = totalBytes > bytesDone ? totalBytes - bytesDone : 0
-                        let eta: TimeInterval? = (rate ?? 0) > 0 ? Double(remaining) / rate! : nil
-                        onProgress(RunProgress(stage: .transferring, libraryIndex: item.index, libraryCount: count,
-                                               fraction: total > 0 ? Double(done) / Double(total) : nil,
-                                               detail: "part \(done) of \(total)",
-                                               speed: rate, eta: eta, elapsed: elapsed))
-                    })
-                try? FileManager.default.removeItem(at: item.scratchDir)
-                pendingStore?.remove(jobID: item.pending.jobID)
-                results.append(.completed(library: item.library.displayName, parts: manifest.artifacts.count,
-                                          bytes: item.pending.totalBytes, verified: item.verified))
-            } catch is CancelledError {
-                pass.staged.forEach(cleanup); return .cancelled
-            } catch {
-                results.append(.failed(library: item.library.displayName, error: String(describing: error)))
+        // choose a version-folder name that doesn't collide with an existing one — two
+        // runs of the same job in the same second would otherwise overwrite. Bump by
+        // whole seconds so the name stays a parseable timestamp.
+        var versionDate = now
+        if !pass.builds.isEmpty {
+            let probeLib = job.libraries.first?.displayName ?? "Library"
+            let primaryLibDir = job.target.destinationDir.appendingPathComponent(probeLib, isDirectory: true)
+            while FileManager.default.fileExists(atPath: primaryLibDir.appendingPathComponent(VersionStamp.string(versionDate)).path) {
+                versionDate = versionDate.addingTimeInterval(1)
             }
         }
+        let versionStamp = VersionStamp.string(versionDate)
 
-        if sealed != nil {      // prune old sealed versions per the retention policy
-            Self.pruneVersions(target: targetBase, libraries: job.libraries, policy: job.retention)
+        // distribute each built sealed archive to its destinations (snapshot released).
+        // A resumable destination ships in parts; everything else is a copy + split +
+        // manifest. No recompression: the artifact was built once above.
+        for build in pass.builds {
+            if control.isCancelled { pass.builds.forEach(cleanupBuild); return .cancelled }
+            var keepBuild = false      // a dropped resumable ship leaves a pending → keep the artifact for resume
+            for dest in build.dests {
+                if control.isCancelled { pass.builds.forEach(cleanupBuild); return .cancelled }
+                let needed = build.byteSize + build.byteSize / 20
+                if (Self.freeSpace(for: dest.destinationDir) ?? .max) < needed {
+                    results.append(.failed(library: build.library.displayName, destination: dest.displayName,
+                        error: "not enough space on \(dest.displayName): needs ~\(Self.human(build.byteSize)), only \(Self.human(Self.freeSpace(for: dest.destinationDir) ?? 0)) free"))
+                    continue
+                }
+                let destDir = dest.destinationDir.appendingPathComponent(build.library.displayName, isDirectory: true)
+                    .appendingPathComponent(versionStamp, isDirectory: true)
+                do {
+                    if dest.constraints.resumableTransfer {
+                        onStage(.transferring)
+                        let key = "\(build.jobID):\(Self.safe(dest.id)):\(build.library.id)"
+                        let pending = PendingTransfer(jobID: key, sourceFile: build.builtFile.path,
+                                                      baseName: build.builtFile.lastPathComponent, totalBytes: build.byteSize,
+                                                      chunkSize: chunkSize, targetDir: destDir.path, format: build.format,
+                                                      encrypted: build.encrypted)
+                        pendingStore?.save(pending)
+                        let tStart = Date(); let chunk = pending.chunkSize, totalBytes = pending.totalBytes
+                        let manifest = try ChunkedShipper().ship(pending, persist: { pendingStore?.save($0) }, control: control,
+                            onPart: { done, total in
+                                let bytesDone = min(UInt64(done) * chunk, totalBytes)
+                                let elapsed = Date().timeIntervalSince(tStart)
+                                let rate: Double? = elapsed > 0 ? Double(bytesDone) / elapsed : nil
+                                let remaining = totalBytes > bytesDone ? totalBytes - bytesDone : 0
+                                let eta: TimeInterval? = (rate ?? 0) > 0 ? Double(remaining) / rate! : nil
+                                onProgress(RunProgress(stage: .transferring, libraryIndex: build.index, libraryCount: count,
+                                                       fraction: total > 0 ? Double(done) / Double(total) : nil,
+                                                       detail: "\(dest.displayName): part \(done) of \(total)",
+                                                       speed: rate, eta: eta, elapsed: elapsed))
+                            })
+                        pendingStore?.remove(jobID: key)
+                        results.append(.completed(library: build.library.displayName, destination: dest.displayName,
+                                                  parts: manifest.artifacts.count, bytes: build.byteSize, verified: build.verified))
+                    } else {
+                        onStage(.transferring)
+                        // poll the copy's growth so a large local copy shows progress.
+                        let poller = self.archivePoller(total: build.byteSize, outputDir: destDir, idx: build.index, count: count, onProgress: onProgress)
+                        let engine = SealedArchiveEngine(build.format == .sealedDMG ? .dmg : .zip,
+                                                         split: dest.constraints.splitPolicy, runner: runner)
+                        let result = try engine.distribute(builtFile: build.builtFile, into: destDir, encrypted: build.encrypted)
+                        poller.cancel()
+                        // confirm the copy matches the verified build, so a copy that was
+                        // corrupted in transit can't masquerade as a good backup.
+                        guard Self.copyMatches(result, expectedDigest: build.contentDigest, expectedBytes: build.byteSize) else {
+                            results.append(.failed(library: build.library.displayName, destination: dest.displayName,
+                                error: "the copy at \(dest.displayName) didn't match the source — it may have been corrupted in transit"))
+                            continue
+                        }
+                        results.append(.completed(library: build.library.displayName, destination: dest.displayName,
+                                                  parts: result.artifacts.count, bytes: build.byteSize, verified: build.verified))
+                    }
+                } catch is CancelledError {
+                    pass.builds.forEach(cleanupBuild); return .cancelled
+                } catch {
+                    if dest.constraints.resumableTransfer { keepBuild = true }     // pending saved → resume later
+                    results.append(.failed(library: build.library.displayName, destination: dest.displayName, error: String(describing: error)))
+                }
+            }
+            if !keepBuild { cleanupBuild(build) }
+        }
+
+        if sealed != nil {      // prune old sealed versions per the retention policy, per destination
+            for t in job.targets { Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention) }
         }
         onStage(.completed)
         jobStore?.recordRun(id: job.id, at: now)
@@ -223,6 +309,36 @@ public struct JobExecutor: Sendable {
             guard policy != .keepAll else { continue }
             let prune = retentionPrune(complete.map(\.date), policy: policy)
             for v in complete where prune.contains(v.date) { try? fm.removeItem(at: v.url) }
+        }
+    }
+
+    /// confirm a distributed copy matches the verified build. A single file is hashed
+    /// against the build's digest; split parts must sum to the build's byte size (their
+    /// per-part manifest covers content integrity at restore/health time).
+    private static func copyMatches(_ result: ArchiveResult, expectedDigest: String, expectedBytes: UInt64) -> Bool {
+        if result.artifacts.count == 1 {
+            guard let d = try? Checksum.sha256(of: result.artifacts[0]) else { return false }
+            return expectedDigest.isEmpty || d == expectedDigest   // empty = couldn't hash at build; don't block
+        }
+        let total = result.artifacts.reduce(UInt64(0)) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size]) as? UInt64 ?? 0) }
+        return total == expectedBytes
+    }
+
+    /// remove sealed build artifacts left in scratch by a crash or a one-time job —
+    /// any `scratchBase/<job>/build/<lib>` whose artifact no pending transfer still
+    /// references. Safe to call at launch, before any run starts.
+    public static func sweepOrphanedScratch(scratchBase: URL, pendingStore: PendingTransferStore) {
+        let fm = FileManager.default
+        let referenced = Set(pendingStore.all().map(\.sourceFile))
+        guard let jobDirs = try? fm.contentsOfDirectory(at: scratchBase, includingPropertiesForKeys: nil) else { return }
+        for jobDir in jobDirs {
+            let buildRoot = jobDir.appendingPathComponent("build", isDirectory: true)
+            guard let libDirs = try? fm.contentsOfDirectory(at: buildRoot, includingPropertiesForKeys: nil) else { continue }
+            for libDir in libDirs {
+                let artifacts = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: nil)) ?? []
+                if !artifacts.contains(where: { referenced.contains($0.path) }) { try? fm.removeItem(at: libDir) }
+            }
+            if (try? fm.contentsOfDirectory(atPath: buildRoot.path))?.isEmpty == true { try? fm.removeItem(at: buildRoot) }
         }
     }
 
@@ -308,35 +424,35 @@ public struct JobExecutor: Sendable {
 
     // MARK: per-library
 
-    private func stage(job: BackupJob, library: ContentType, index: Int, source: ArchiveSource,
-                       sealed: SealedArchiveEngine.Sealed, dest: URL, runner: CommandRunner,
-                       passphrase: String?, onStage: @escaping @Sendable (BackupStage) -> Void) throws -> Staged {
+    /// compress a library into one sealed artifact in scratch (unsplit), verifying it
+    /// once. The distribution step copies/ships it to each destination afterward.
+    private func buildSealed(job: BackupJob, library: ContentType, index: Int, source: ArchiveSource,
+                             sealed: SealedArchiveEngine.Sealed, buildDir: URL, dests: [Target], runner: CommandRunner,
+                             passphrase: String?, onStage: @escaping @Sendable (BackupStage) -> Void) throws -> SealedBuild {
         let fm = FileManager.default
-        let scratchDir = scratchBase.appendingPathComponent("\(job.id)/\(Self.safe(library.id))", isDirectory: true)
-        try fm.createDirectory(at: scratchDir, withIntermediateDirectories: true)
-        let archive = try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase).archive(source, to: scratchDir)
+        try? fm.removeItem(at: buildDir)
+        try fm.createDirectory(at: buildDir, withIntermediateDirectories: true)
+        let archive = try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase).archive(source, to: buildDir)
         guard let file = archive.artifacts.first,
               let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? UInt64 else {
-            throw ArchiveError.noArtifactProduced(scratchDir)
+            throw ArchiveError.noArtifactProduced(buildDir)
         }
         var verified: Bool?
         if job.verification == .mountAndOpen {
             onStage(.verifying)
             verified = try StrongVerifier(runner: runner).verify(archive, type: library, passphrase: passphrase).passed
         }
-        let pending = PendingTransfer(jobID: "\(job.id):\(library.id)", sourceFile: file.path,
-                                      baseName: file.lastPathComponent, totalBytes: size,
-                                      chunkSize: chunkSize, targetDir: dest.path, format: archive.format,
-                                      encrypted: passphrase != nil)
-        pendingStore?.save(pending)
-        return Staged(library: library, index: index, pending: pending, scratchDir: scratchDir, verified: verified)
+        let digest = (try? Checksum.sha256(of: file)) ?? ""
+        return SealedBuild(library: library, jobID: job.id, index: index, builtFile: file, format: archive.format,
+                           byteSize: size, contentDigest: digest, verified: verified, encrypted: passphrase != nil,
+                           buildDir: buildDir, dests: dests)
     }
 
-    private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL,
+    private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL, target: Target,
                         runner: CommandRunner, passphrase: String?,
                         onStage: @escaping @Sendable (BackupStage) -> Void) throws -> LibraryRunResult {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
-        let archive = try EngineFactory.engine(for: job.format, target: job.target, runner: runner,
+        let archive = try EngineFactory.engine(for: job.format, target: target, runner: runner,
                                                passphrase: passphrase).archive(source, to: dest)
         onStage(.checksumming)
         try ArchiveManifest.write(try ArchiveManifest.build(for: archive, encrypted: passphrase != nil), toDir: dest)
@@ -348,12 +464,13 @@ public struct JobExecutor: Sendable {
         let bytes = archive.artifacts.reduce(UInt64(0)) { sum, url in
             sum + ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? UInt64 ?? 0)
         }
-        return .completed(library: library.displayName, parts: archive.artifacts.count, bytes: bytes, verified: verified)
+        return .completed(library: library.displayName, destination: target.displayName,
+                          parts: archive.artifacts.count, bytes: bytes, verified: verified)
     }
 
-    private func cleanup(_ s: Staged) {
-        try? FileManager.default.removeItem(at: s.scratchDir)
-        pendingStore?.remove(jobID: s.pending.jobID)
+    private func cleanupBuild(_ b: SealedBuild) {
+        try? FileManager.default.removeItem(at: b.buildDir)
+        for d in b.dests { pendingStore?.remove(jobID: "\(b.jobID):\(Self.safe(d.id)):\(b.library.id)") }
     }
 
     private static func sealedKind(_ format: FormatChoice) -> SealedArchiveEngine.Sealed? {

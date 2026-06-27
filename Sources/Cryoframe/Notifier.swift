@@ -26,25 +26,29 @@ enum Notifier {
     static func shouldNotify(_ record: RunRecord, policy: NotifyPolicy) -> Bool {
         switch policy {
         case .never:   return false
-        case .failure: return record.outcome == .failed
-        case .all:     return [.verified, .completed, .failed].contains(record.outcome)
+        case .failure: return [.failed, .partial].contains(record.outcome)   // a degraded backup is worth a heads-up
+        case .all:     return [.verified, .completed, .partial, .failed].contains(record.outcome)
         }
     }
 
     /// post a notification for a run if the policy allows. The record id is the
     /// notification id, so the same run never alerts twice (even across processes).
     static func notify(_ record: RunRecord) {
-        guard shouldNotify(record, policy: current()) else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "Cryoframe — \(record.jobName)"
-        content.body = "\(record.outcome == .failed ? "⚠️" : "✓") \(record.summary)"
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: record.id, content: content, trigger: nil))
+        if shouldNotify(record, policy: current()) {
+            let content = UNMutableNotificationContent()
+            content.title = "Cryoframe — \(record.jobName)"
+            let ok = record.outcome == .verified || record.outcome == .completed
+            content.body = "\(ok ? "✓" : "⚠️") \(record.summary)"
+            UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: record.id, content: content, trigger: nil))
+        }
+        RemoteAlert.send(for: record)        // off-machine, on its own policy — fires even if local is off
     }
 
     /// post for an archive health check. Failures alert unless notifications are off;
     /// clean results alert only on the "every run" policy.
     static func notifyHealth(_ record: HealthRecord) {
+        RemoteAlert.sendHealth(for: record)   // off-machine, independent of the local policy
         let policy = current()
         let clean = record.passed && record.archivesChecked > 0
         if clean { guard policy == .all else { return } } else { guard policy != .never else { return } }

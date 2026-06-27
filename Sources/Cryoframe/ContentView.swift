@@ -182,6 +182,11 @@ private struct JobRow: View {
                                 : "\(names.prefix(2).joined(separator: ", ")) +\(names.count - 2)"
     }
 
+    private var destinationSummary: String {
+        let names = job.targets.map(\.displayName)
+        return names.count == 1 ? names[0] : "\(names[0]) +\(names.count - 1)"
+    }
+
     var body: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
@@ -190,7 +195,7 @@ private struct JobRow: View {
                     statusBadge
                 }
                 HStack(spacing: 5) {
-                    Text("\(librarySummary) → \(job.target.displayName)  ·  \(job.format.label)")
+                    Text("\(librarySummary) → \(destinationSummary)  ·  \(job.format.label)")
                         .font(.caption).foregroundStyle(.secondary)
                     if job.encrypted {
                         Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
@@ -230,6 +235,9 @@ private struct JobRow: View {
                     Button("Edit…") { onEdit(job) }
                     Button("Verify archives") { model.verifyArchives(job) }
                         .disabled(model.verifyingJobIDs.contains(job.id))
+                    Button("Run restore drill…") { model.drillArchives(job) }
+                        .disabled(model.verifyingJobIDs.contains(job.id))
+                        .help("Reassemble, open, and reopen each archive — proves it actually restores")
                     if model.hasStoredPassphrase(job) {
                         Button("Copy passphrase") { model.copyPassphrase(job) }
                     }
@@ -303,6 +311,7 @@ private struct JobRow: View {
         } else if let r = model.lastRecords[job.id] {
             switch r.outcome {
             case .verified, .completed: badge(r.summary, .green)
+            case .partial:              badge(r.summary, .orange)
             case .deferred:             badge("deferred", .orange)
             case .cancelled:            badge("stopped", .orange)
             case .failed:               badge(r.summary, .red)
@@ -326,14 +335,15 @@ private struct JobRow: View {
                 } else {
                     Image(systemName: h.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(h.passed ? .green : .red)
-                    Text(h.passed ? "Archives verified (\(h.archivesChecked))" : "\(h.failures.count) archive check(s) failed")
+                    Text(h.passed ? "\(h.isDrill ? "Restore-drilled" : "Archives verified") (\(h.archivesChecked))"
+                                  : "\(h.failures.count) \(h.isDrill ? "restore drill" : "archive") check(s) failed")
                         .foregroundStyle(h.passed ? Color.secondary : Color.red)
                 }
                 Text("· \(h.checkedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
             }
             .font(.caption2)
             .help(h.archivesChecked == 0 ? "Nothing was checked — the target may be offline, or the job hasn't run yet."
-                  : (h.passed ? "Re-verified against checksums" : h.failures.joined(separator: "\n")))
+                  : (h.passed ? (h.isDrill ? "Reassembled, opened, and reopened each archive" : "Re-verified against checksums") : h.failures.joined(separator: "\n")))
         }
     }
 
@@ -375,9 +385,9 @@ private struct JobRow: View {
 
 private func outcomeColor(_ kind: RunOutcomeKind) -> Color {
     switch kind {
-    case .verified, .completed: return .green
-    case .failed:               return .red
-    case .deferred, .cancelled: return .orange
+    case .verified, .completed:        return .green
+    case .partial, .deferred, .cancelled: return .orange
+    case .failed:                      return .red
     }
 }
 
@@ -449,7 +459,7 @@ private struct HistoryRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 6) {
                         Text("·").foregroundStyle(.tertiary)
-                        Text(lib.library)
+                        Text(lib.destination.isEmpty ? lib.library : "\(lib.library) → \(lib.destination)")
                         Text(lib.status).foregroundStyle(statusColor(lib.status))
                         if lib.bytes > 0 { Text(JobRow.size(lib.bytes)).foregroundStyle(.tertiary) }
                         if lib.parts > 1 { Text("\(lib.parts) parts").foregroundStyle(.tertiary) }

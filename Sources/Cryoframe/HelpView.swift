@@ -53,6 +53,7 @@ struct HelpView: View {
                     section("Notifications & the menu bar") {
                         bullet("Cryoframe shows a status item in the menu bar — a glance at each job's last run, with a red triangle if anything failed. It also keeps the app resident, so it can notify you of scheduled runs even with the window closed. Quit it from the menu bar's Quit item.")
                         bullet("Choose when to be notified in Settings ▸ General ▸ Notifications: never, on failure (default), or on every run.")
+                        bullet("Remote alerts (Settings ▸ General ▸ Remote alerts) push a failure or partial-backup to your phone or a chat channel via ntfy or a webhook (Slack/Discord/custom) — for when you're away from the Mac. Use Send test alert to confirm it reaches you.")
                     }
 
                     section("Sleep & scheduled wake") {
@@ -75,6 +76,7 @@ struct HelpView: View {
                         bullet("Cold archives can rot — a flipped bit, a file a drive quietly dropped. Cryoframe can re-check existing archives against the checksums recorded when they were made, so corruption is caught long before a restore needs them.")
                         bullet("Verify one job's archives any time from its ⋯ menu, or every job at once with Verify all archives in the menu-bar item. Set a schedule in Settings ▸ General ▸ Archive health (weekly or monthly), and a scope: latest version per library, or all versions. Each job shows its last check; a failure turns the menu-bar item red and notifies you.")
                         bullet("Sealed archives are verified byte-for-byte against their checksums. A live mirror is verified structurally — its files and sizes — which catches dropped or truncated pieces but not an in-place bit flip (full-hashing a mirror every check would defeat its incremental nature).")
+                        bullet("Restore drill (a Depth option in Settings ▸ General ▸ Archive health, and a Run restore drill item in a job's ⋯ menu) goes further than a checksum: it reassembles, mounts or extracts, and reopens each archive — proving the restore path itself works, not just that the bytes match.")
                     }
 
                     section("Versions & retention") {

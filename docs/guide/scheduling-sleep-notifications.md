@@ -33,3 +33,14 @@ The menu-bar item also holds Verify all archives, Check for Updates, and Open Cr
 ## Notifications
 
 Choose when to be notified in Settings ▸ General ▸ Notifications: never, on failure, or on every run. On failure is the default. A failed health check notifies you as well, so a corrupted archive does not go unnoticed.
+
+## Remote alerts
+
+A Notification Center banner is no help when you are away from the Mac. Remote alerts push a message to your phone or a chat channel when a backup fails, finishes as a partial backup, or an archive health check fails. Set them up in Settings ▸ General ▸ Remote alerts.
+
+Two kinds:
+
+- ntfy is the simplest. Install the ntfy app on your phone, pick a topic name, and enter `https://ntfy.sh/your-topic`. Anything sent to that topic arrives as a push.
+- Webhook posts a message to a URL. The payload includes both `text` and `content` fields, so a Slack or Discord incoming webhook works as-is, and a custom endpoint gets the structured fields too.
+
+Pick whether to alert on failures only or on every run, then use Send test alert to confirm it reaches you. Remote alerts fire independently of the notification setting above, so you can keep local banners off and still get the off-machine page. As with notifications, the menu-bar app has to be running to send them.

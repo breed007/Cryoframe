@@ -168,8 +168,15 @@ public enum TransferResumer {
             guard fm.fileExists(atPath: pending.sourceFile), reachable(pending.targetDir) else { continue }
             do {
                 _ = try ChunkedShipper().ship(pending, persist: { store.save($0) })
-                try? fm.removeItem(at: URL(fileURLWithPath: pending.sourceFile).deletingLastPathComponent())
                 store.remove(jobID: pending.jobID)
+                // a multi-destination job stages ONE build for several resumable copies,
+                // so several pendings can share a sourceFile. Only delete the scratch
+                // artifact once no other pending still needs it — otherwise we orphan
+                // the remaining destinations' transfers.
+                let stillNeeded = store.all().contains { $0.sourceFile == pending.sourceFile }
+                if !stillNeeded {
+                    try? fm.removeItem(at: URL(fileURLWithPath: pending.sourceFile).deletingLastPathComponent())
+                }
                 resumed.append(pending.jobID)
             } catch {
                 // target dropped again — leave the record, retry next launch/tick

@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.1.0</title>
+      <description><![CDATA[Cryoframe 1.1 — multiple destinations per job (3-2-1), remote alerts (ntfy/webhook), and restore drills.]]></description>
+      <pubDate>Sat, 27 Jun 2026 06:41:45 +0000</pubDate>
+      <sparkle:version>20260627.0239</sparkle:version>
+      <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.1.0/Cryoframe-1.1.0.dmg" type="application/octet-stream" sparkle:edSignature="lYez1ZMRw56ukLXbwJ+AauoaAl9e1x/aEfTcQR2AAjH4oOr7Ctp3jd/WcWZ41Uf6jCWyWpXd749ONfNHtDqNDA==" length="3127858" />
+    </item>
+    <item>
       <title>1.0.1</title>
       <description><![CDATA[Cryoframe 1.0.1 — resizable window, inline library-location editing, click-to-reveal paths, full user guide, and Help wired to the macOS Help menu.]]></description>
       <pubDate>Fri, 26 Jun 2026 00:46:37 +0000</pubDate>

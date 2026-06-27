@@ -24,6 +24,7 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 
 - Consistent snapshots of live libraries using APFS, created and torn down per run.
 - Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
+- Several destinations per job (the 3-2-1 rule): a local drive plus a NAS plus a cloud-sync folder, all from the same snapshot. Sealed archives are compressed once and copied to each. The primary must be reached; a downed secondary finishes the run as a partial backup instead of failing it.
 - Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG — immutable, checksummed, split into volumes when the target caps file size.
 - Resumable transfers to network shares and external drives: the archive ships in part files and picks up from the last whole part after a dropped connection or unplugged drive.
 - Restore built in: find an archive, verify it, and copy the library back out with its original folder name — beside the live one, or in place over it (staged and verified first, with the old copy moved to the Trash). Browse inside an archive and extract just the files you need.
@@ -31,6 +32,8 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Versioned sealed archives with a retention policy — keep all, the last N, or a daily/weekly/monthly scheme — so you can restore a point in time without the disk filling up.
 - Verification built in: a checksum manifest on every archive, plus an optional mount-and-open check that confirms the library's database opens clean.
 - Archive health monitoring: re-hash existing archives against their manifests on demand or on a weekly/monthly schedule, to catch bit rot before a restore needs them — works on encrypted archives with no passphrase.
+- Restore drills: a deeper check that reassembles, mounts or extracts, and reopens each archive (a database integrity check), proving the restore path itself works — not just that the bytes match.
+- Remote alerts over ntfy or a webhook (Slack/Discord/custom), so an unattended Mac whose backups are failing can push a message to your phone, independent of local notifications.
 - Recovery-key escrow: export every archive passphrase into one master-password-encrypted file (PBKDF2 + AES-GCM), so encrypted backups survive a lost Mac.
 - Storage overview: per-job, per-version sizes against the free space on each destination volume.
 - In-app updates over an Ed25519-signed appcast, and a first-run walkthrough for the helper and Full Disk Access.

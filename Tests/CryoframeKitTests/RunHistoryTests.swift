@@ -23,38 +23,51 @@ private func job(_ name: String = "Job") -> BackupJob {
 // MARK: - summarizeRun
 
 @Test func summaryIsVerifiedWhenEveryLibraryVerifies() {
-    let s = summarizeRun([.completed(library: "A", parts: 1, bytes: 10, verified: true),
-                          .completed(library: "B", parts: 1, bytes: 20, verified: true)])
+    let s = summarizeRun([.completed(library: "A", destination: "Disk", parts: 1, bytes: 10, verified: true),
+                          .completed(library: "B", destination: "Disk", parts: 1, bytes: 20, verified: true)])
     #expect(s.kind == .verified)
-    #expect(s.text == "2 libraries verified")
+    #expect(s.text == "2 libraries verified")        // single destination: wording unchanged
 }
 
 @Test func summaryIsCompletedWhenArchivedWithoutVerify() {
-    let s = summarizeRun([.completed(library: "A", parts: 1, bytes: 10, verified: nil)])
+    let s = summarizeRun([.completed(library: "A", destination: "Disk", parts: 1, bytes: 10, verified: nil)])
     #expect(s.kind == .completed)
     #expect(s.text == "1 library archived")
 }
 
-@Test func summaryIsFailedWhenAnyNotFoundOrFailed() {
-    let s = summarizeRun([.completed(library: "A", parts: 1, bytes: 10, verified: true),
-                          .notFound(library: "B"),
-                          .failed(library: "C", error: "boom")])
-    #expect(s.kind == .failed)
-    #expect(s.text.contains("1/3 archived"))
-    #expect(s.text.contains("1 not found"))
+@Test func summaryIsFailedWhenEverythingFails() {
+    let s = summarizeRun([.notFound(library: "B"),
+                          .failed(library: "C", destination: "Disk", error: "boom")])
+    #expect(s.kind == .failed)                        // nothing landed
+    #expect(s.text.contains("0/2"))
+}
+
+/// the new multi-destination state: some copies land, some don't.
+@Test func summaryIsPartialWhenSomeCopiesLandAndSomeFail() {
+    let s = summarizeRun([.completed(library: "Photos", destination: "Local", parts: 1, bytes: 10, verified: true),
+                          .failed(library: "Photos", destination: "NAS", error: "offline")])
+    #expect(s.kind == .partial)
+    #expect(s.text.contains("1/2 copies archived"))
     #expect(s.text.contains("1 failed"))
+}
+
+@Test func summaryNamesDestinationCountOnMultiDestSuccess() {
+    let s = summarizeRun([.completed(library: "Photos", destination: "Local", parts: 1, bytes: 10, verified: true),
+                          .completed(library: "Photos", destination: "NAS", parts: 1, bytes: 10, verified: true)])
+    #expect(s.kind == .verified)
+    #expect(s.text == "1 library verified → 2 destinations")
 }
 
 // MARK: - RunRecord.make
 
 @Test func recordFromFinishedSumsBytesAndMapsLibraries() {
     let outcome = JobOutcome.finished(results: [
-        .completed(library: "Photos", parts: 3, bytes: 1_000, verified: true),
+        .completed(library: "Photos", destination: "Disk", parts: 3, bytes: 1_000, verified: true),
         .notFound(library: "Music")], warning: "heads up")
     let r = RunRecord.make(job: job("Nightly"), outcome: outcome,
                            startedAt: Date(timeIntervalSince1970: 0), finishedAt: Date(timeIntervalSince1970: 90),
                            trigger: "scheduled")
-    #expect(r.outcome == .failed)               // Music not found
+    #expect(r.outcome == .partial)              // Photos archived, Music not found — degraded, not dead
     #expect(r.bytes == 1_000)
     #expect(r.duration == 90)
     #expect(r.trigger == "scheduled")
@@ -97,7 +110,7 @@ private func job(_ name: String = "Job") -> BackupJob {
 @Test func historyStoreRoundTripsAcrossInstances() {
     let url = tmpFile(); defer { try? FileManager.default.removeItem(at: url) }
     RunHistoryStore(url: url).append(RunRecord.make(job: job("Roundtrip"),
-        outcome: .finished(results: [.completed(library: "Photos", parts: 1, bytes: 42, verified: nil)], warning: nil),
+        outcome: .finished(results: [.completed(library: "Photos", destination: "Disk", parts: 1, bytes: 42, verified: nil)], warning: nil),
         startedAt: Date(timeIntervalSince1970: 0), finishedAt: Date(timeIntervalSince1970: 5), trigger: "manual"))
 
     let reloaded = RunHistoryStore(url: url).all()

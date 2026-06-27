@@ -38,6 +38,14 @@ For a job with a long retention history, Latest version only is usually the righ
 
 Each job shows its last health check. A failure turns the menu-bar item red and sends a notification, so a silent corruption does not stay silent. The check reports which library and which version failed and why.
 
+### Restore drills
+
+A checksum check proves the bytes haven't rotted. It does not prove the archive will actually restore — that the split parts reassemble, the image mounts, and the library reopens. A restore drill does exactly that: for each archive it reassembles the parts, mounts or extracts it, and reopens the library (a database integrity check on Photos, Music, and other database libraries). If anything in the restore path is broken, the drill fails even when the checksums pass.
+
+Set the depth in Settings ▸ General ▸ Archive health: Checksum (fast, the default) or Restore drill. The depth applies to the scheduled check and respects the same scope. You can also run a drill on demand from a job's ⋯ menu (Run restore drill), alongside the checksum-only Verify archives. An encrypted job's drill reads its passphrase from the Keychain, so it runs without prompting.
+
+A drill is heavier than a checksum check — it opens every archive in scope — so "Latest version only" is usually the right scope for a scheduled drill on a job with many versions.
+
 ### What gets verified, exactly
 
 A sealed archive is verified byte for byte against its checksums, so a single flipped bit is caught.

@@ -93,6 +93,12 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.notifyPolicy) private var notifyPolicy = "failure"
     @AppStorage(Prefs.healthInterval) private var healthInterval = "off"
     @AppStorage(Prefs.healthScope) private var healthScope = "latest"
+    @AppStorage(Prefs.healthDepth) private var healthDepth = "checksum"
+    @AppStorage(Prefs.remoteAlertType) private var remoteAlertType = "off"
+    @AppStorage(Prefs.remoteAlertURL) private var remoteAlertURL = ""
+    @AppStorage(Prefs.remoteAlertEvents) private var remoteAlertEvents = "failure"
+    @State private var alertTestResult: String?
+    @State private var alertTesting = false
 
     var body: some View {
         Form {
@@ -118,6 +124,31 @@ private struct GeneralSettings: View {
                 Text("Cryoframe stays in the menu bar so it can notify you of scheduled-run results even when the window is closed. Quit it from the menu bar to stop.")
             }
             Section {
+                Picker("Send to", selection: $remoteAlertType) {
+                    Text("Off").tag("off")
+                    Text("ntfy").tag("ntfy")
+                    Text("Webhook (Slack/Discord/custom)").tag("webhook")
+                }
+                if remoteAlertType != "off" {
+                    TextField(remoteAlertType == "ntfy" ? "https://ntfy.sh/your-topic" : "https://hooks.slack.com/…",
+                              text: $remoteAlertURL)
+                        .textFieldStyle(.roundedBorder).autocorrectionDisabled()
+                    Picker("Alert on", selection: $remoteAlertEvents) {
+                        Text("Failures only").tag("failure")
+                        Text("Every run").tag("all")
+                    }
+                    HStack {
+                        Button("Send test alert") { sendTestAlert() }.disabled(alertTesting || remoteAlertURL.isEmpty)
+                        if alertTesting { ProgressView().controlSize(.small) }
+                        if let r = alertTestResult { Text(r).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                    }
+                }
+            } header: {
+                Text("Remote alerts")
+            } footer: {
+                Text("Get a push on your phone when a backup fails, finishes partially, or an archive health check fails — even with the window closed. ntfy is the simplest (install the ntfy app, pick a topic). Fires independently of the notification setting above; the menu-bar app must be running to send.")
+            }
+            Section {
                 Picker("Re-verify archives", selection: $healthInterval) {
                     Text("Off").tag("off")
                     Text("Weekly").tag("weekly")
@@ -127,10 +158,14 @@ private struct GeneralSettings: View {
                     Text("Latest version only").tag("latest")
                     Text("All versions").tag("all")
                 }
+                Picker("Depth", selection: $healthDepth) {
+                    Text("Checksum (fast)").tag("checksum")
+                    Text("Restore drill (opens each archive)").tag("drill")
+                }
             } header: {
                 Text("Archive health")
             } footer: {
-                Text("Periodically re-checks existing archives against their checksums to catch corruption (bit rot) before a restore needs them. \"Latest version only\" keeps the I/O down on large versioned jobs. You can also verify a job's archives any time from its ⋯ menu.")
+                Text("Periodically re-checks existing archives to catch corruption before a restore needs them. Checksum re-hashes the bytes (fast). A restore drill goes further — it reassembles, mounts or extracts, and reopens each archive (a database integrity check), proving the restore path itself works, not just that the bytes match. \"Latest version only\" keeps the I/O down on large versioned jobs. You can also run either from a job's ⋯ menu.")
             }
             Section("Defaults for new jobs") {
                 Picker("Format", selection: $format) {
@@ -181,6 +216,14 @@ private struct GeneralSettings: View {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false
         if panel.runModal() == .OK, let url = panel.url { archiveDir = url.path }
+    }
+
+    private func sendTestAlert() {
+        alertTesting = true; alertTestResult = nil
+        Task {
+            let result = await RemoteAlert.sendTest()
+            alertTesting = false; alertTestResult = result
+        }
     }
 }
 

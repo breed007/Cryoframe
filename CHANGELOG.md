@@ -2,6 +2,26 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.1.0] — 2026-06-27
+
+The 3-2-1 release: more copies, proven restores, and a way to find out when a backup breaks while you're away.
+
+### Added
+- **Multiple destinations per job.** A job can now write to more than one destination from the same snapshot — a local drive plus a NAS, an external plus a cloud-sync folder. The first is the primary; if a secondary is offline the run finishes as a *partial* backup (a new distinct state) rather than failing outright. Sealed archives are compressed once and copied to each destination, with no recompression per copy, and each copy is checksum-matched against the original.
+- **Remote alerts.** Get a push on your phone or a chat channel when a backup fails, finishes partially, or an archive health check fails — even with the window closed. Settings ▸ General ▸ Remote alerts supports ntfy and a generic webhook (Slack/Discord/custom), with a Send test alert button. Fires independently of the local notification setting.
+- **Restore drills.** A deeper archive check than a checksum re-hash: it reassembles, mounts or extracts, and reopens each archive (a database integrity check on Photos, Music, and other database libraries), proving the restore path itself works. Choose the depth in Settings ▸ General ▸ Archive health, or run one on demand from a job's ⋯ menu.
+
+### Changed
+- Storage and archive-health now report per destination, and Restore offers every destination a job writes to.
+- The job list shows all of a job's destinations.
+
+### Fixed
+- Resuming an interrupted transfer no longer deletes a build artifact that another destination still needs (multi-destination jobs share one staged build).
+- A single un-readable job no longer wipes the whole job list — jobs decode independently, and the legacy single-destination key is still written for older builds.
+- Two destinations that resolve to the same folder are collapsed to one copy, with a warning, instead of silently reporting a phantom second copy.
+- Two sealed jobs can no longer be created to archive the same library to the same destination (they would have cross-pruned each other's versions).
+- Leftover staged build artifacts are swept at launch; version folders no longer collide when two runs land in the same second; a copy corrupted in transit is caught instead of reported as verified.
+
 ## [1.0.1] — 2026-06-25
 
 ### Added

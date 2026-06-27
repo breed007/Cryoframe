@@ -18,7 +18,7 @@ public struct ArchiveSize: Sendable, Identifiable {
 }
 
 public struct JobStorage: Sendable, Identifiable {
-    public var id: String { jobID }
+    public var id: String { jobID + "@" + targetPath }   // one row per (job, destination)
     public var jobID: String
     public var jobName: String
     public var targetName: String
@@ -39,20 +39,24 @@ public struct JobStorage: Sendable, Identifiable {
 
 public enum StorageReporter {
     public static func report(_ jobs: [BackupJob]) -> [JobStorage] {
-        jobs.map { job in
-            var archives: [ArchiveSize] = []
-            for library in job.libraries {
-                let libDir = job.target.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
-                for a in RestoreDiscovery.scan(libDir) {
-                    archives.append(ArchiveSize(library: a.libraryName, version: a.version,
-                                                bytes: JobExecutor.directorySize(a.dir)))
+        // one row per (job, destination) so each copy's footprint is visible.
+        jobs.flatMap { job in
+            job.targets.map { t in
+                var archives: [ArchiveSize] = []
+                for library in job.libraries {
+                    let libDir = t.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
+                    for a in RestoreDiscovery.scan(libDir) {
+                        archives.append(ArchiveSize(library: a.libraryName, version: a.version,
+                                                    bytes: JobExecutor.directorySize(a.dir)))
+                    }
                 }
+                let v = volume(of: t.destinationDir)
+                let name = job.targets.count > 1 ? "\(job.name) → \(t.displayName)" : job.name
+                return JobStorage(jobID: job.id, jobName: name, targetName: t.displayName,
+                                  targetPath: t.destinationDir.path,
+                                  archiveBytes: archives.reduce(0) { $0 + $1.bytes }, versionCount: archives.count,
+                                  archives: archives, volumeFree: v.free, volumeTotal: v.total)
             }
-            let v = volume(of: job.target.destinationDir)
-            return JobStorage(jobID: job.id, jobName: job.name, targetName: job.target.displayName,
-                              targetPath: job.target.destinationDir.path,
-                              archiveBytes: archives.reduce(0) { $0 + $1.bytes }, versionCount: archives.count,
-                              archives: archives, volumeFree: v.free, volumeTotal: v.total)
         }
     }
 

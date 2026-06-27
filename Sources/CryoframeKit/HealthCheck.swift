@@ -12,11 +12,12 @@
 import Foundation
 
 public struct ArchiveCheck: Codable, Sendable, Equatable, Identifiable {
-    public var id: String { library + (version.map { "@" + VersionStamp.string($0) } ?? "") }
+    public var id: String { library + (version.map { "@" + VersionStamp.string($0) } ?? "") + (destination.map { "→" + $0 } ?? "") }
     public var library: String
     public var version: Date?
     public var passed: Bool
     public var detail: String
+    public var destination: String?      // which copy; nil for a single-destination job
 }
 
 public struct HealthReport: Sendable {
@@ -33,18 +34,22 @@ public struct HealthChecker: Sendable {
     /// every version of a large library on a schedule.
     public func check(job: BackupJob, latestOnly: Bool = false) -> HealthReport {
         var checks: [ArchiveCheck] = []
-        for library in job.libraries {
-            let libDir = job.target.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
-            var archives = RestoreDiscovery.scan(libDir)        // sorted newest-first per library
-            if latestOnly {
-                var seen = Set<String>()
-                archives = archives.filter { seen.insert($0.libraryName).inserted }
-            }
-            for archive in archives {
-                let report = try? verifier.reverify(archiveDir: archive.dir)
-                checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
-                                           passed: report?.passed ?? false,
-                                           detail: report?.details ?? "could not read manifest"))
+        let multiDest = job.targets.count > 1
+        for t in job.targets {
+            for library in job.libraries {
+                let libDir = t.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
+                var archives = RestoreDiscovery.scan(libDir)        // sorted newest-first per library
+                if latestOnly {
+                    var seen = Set<String>()
+                    archives = archives.filter { seen.insert($0.libraryName).inserted }
+                }
+                for archive in archives {
+                    let report = try? verifier.reverify(archiveDir: archive.dir)
+                    checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
+                                               passed: report?.passed ?? false,
+                                               detail: report?.details ?? "could not read manifest",
+                                               destination: multiDest ? t.displayName : nil))
+                }
             }
         }
         return HealthReport(checks: checks)
@@ -58,22 +63,39 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
     public var checkedAt: Date
     public var archivesChecked: Int
     public var failures: [String]      // human lines: "Photos (2026-06-24): checksum mismatch …"
+    public var kind: String            // "checksum" (re-hash) | "drill" (restore + reopen)
 
     public var passed: Bool { failures.isEmpty }
+    public var isDrill: Bool { kind == "drill" }
 
     public init(id: String = UUID().uuidString, jobID: String, jobName: String, checkedAt: Date,
-                archivesChecked: Int, failures: [String]) {
+                archivesChecked: Int, failures: [String], kind: String = "checksum") {
         self.id = id; self.jobID = jobID; self.jobName = jobName; self.checkedAt = checkedAt
-        self.archivesChecked = archivesChecked; self.failures = failures
+        self.archivesChecked = archivesChecked; self.failures = failures; self.kind = kind
     }
 
-    public static func from(job: BackupJob, report: HealthReport, at date: Date, id: String = UUID().uuidString) -> HealthRecord {
+    enum CodingKeys: String, CodingKey { case id, jobID, jobName, checkedAt, archivesChecked, failures, kind }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        jobID = try c.decode(String.self, forKey: .jobID)
+        jobName = try c.decode(String.self, forKey: .jobName)
+        checkedAt = try c.decode(Date.self, forKey: .checkedAt)
+        archivesChecked = try c.decode(Int.self, forKey: .archivesChecked)
+        failures = try c.decode([String].self, forKey: .failures)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "checksum"   // pre-1.1 records
+    }
+
+    public static func from(job: BackupJob, report: HealthReport, at date: Date,
+                            kind: String = "checksum", id: String = UUID().uuidString) -> HealthRecord {
         HealthRecord(id: id, jobID: job.id, jobName: job.name, checkedAt: date,
                      archivesChecked: report.checks.count,
                      failures: report.checks.filter { !$0.passed }.map { c in
                         let v = c.version.map { " (" + VersionStamp.string($0) + ")" } ?? ""
-                        return "\(c.library)\(v): \(c.detail)"
-                     })
+                        let d = c.destination.map { " → " + $0 } ?? ""
+                        return "\(c.library)\(v)\(d): \(c.detail)"
+                     }, kind: kind)
     }
 }
 
