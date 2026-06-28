@@ -134,7 +134,7 @@ struct HelpView: View {
 
                     section("Good to know") {
                         bullet("You don't need to quit Photos or Music. \"If app is open\" only matters if you'd rather defer a run while it's in use.")
-                        bullet("Cloud-sync targets split sealed archives under 250GB to fit OneDrive's single-file limit.")
+                        bullet("Cloud-sync destinations (OneDrive, Dropbox, Google Drive, Box, iCloud) are detected by provider and split sealed archives under that provider's single-file limit — iCloud caps at 50 GB, Box at 5 GB on lower plans. If the client offloads a file to save space, a scheduled health check skips it rather than re-downloading (changeable in Settings ▸ Archive health).")
                         bullet("Snapshots are created and deleted per run. Cryoframe never touches Time Machine's snapshots.")
                     }
 

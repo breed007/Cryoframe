@@ -120,8 +120,9 @@ final class AppModel: ObservableObject {
         log("🔍 \(job.name): checking archives…")
         let resolved = job.resolvingLibraries(in: registry)
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
+        let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
         Task.detached {
-            let report = HealthChecker().check(job: resolved, latestOnly: latestOnly)
+            let report = HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud)
             let record = HealthRecord.from(job: resolved, report: report, at: Date())
             await MainActor.run {
                 self.verifyingJobIDs.remove(job.id)
@@ -139,9 +140,10 @@ final class AppModel: ObservableObject {
         log("🧪 \(job.name): restore drill…")
         let resolved = job.resolvingLibraries(in: registry)
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
+        let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
         let passphrase = job.encrypted ? KeychainArchiveKey.load(jobID: job.id) : nil
         Task.detached {
-            let report = RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase)
+            let report = RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase, materializeCloud: materializeCloud)
             let record = HealthRecord.from(job: resolved, report: report, at: Date(), kind: "drill")
             await MainActor.run {
                 self.verifyingJobIDs.remove(job.id)
@@ -158,10 +160,11 @@ final class AppModel: ObservableObject {
         for j in pending { verifyingJobIDs.insert(j.id) }
         let resolved = pending.map { $0.resolvingLibraries(in: registry) }
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
+        let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
         log("🔍 verifying \(resolved.count) job\(resolved.count == 1 ? "" : "s")…")
         Task.detached {
             for job in resolved {
-                let report = HealthChecker().check(job: job, latestOnly: latestOnly)
+                let report = HealthChecker().check(job: job, latestOnly: latestOnly, materializeCloud: materializeCloud)
                 let record = HealthRecord.from(job: job, report: report, at: Date())
                 await MainActor.run {
                     self.verifyingJobIDs.remove(job.id)
@@ -191,9 +194,10 @@ final class AppModel: ObservableObject {
         let when = r.checkedAt.formatted(date: .abbreviated, time: .shortened)
         let glyph = r.isDrill ? "🧪" : "🔍"
         let verb = r.isDrill ? "drilled clean" : "verified"
+        let skip = r.skipped > 0 ? " (\(r.skipped) not downloaded)" : ""
         return r.passed
-            ? "\(glyph) \(r.jobName): \(r.archivesChecked) archive\(r.archivesChecked == 1 ? "" : "s") \(verb) · \(when)"
-            : "⚠︎ \(r.jobName): \(r.failures.count) \(r.isDrill ? "restore drill" : "archive") check(s) failed · \(when)"
+            ? "\(glyph) \(r.jobName): \(r.archivesChecked) archive\(r.archivesChecked == 1 ? "" : "s") \(verb)\(skip) · \(when)"
+            : "⚠︎ \(r.jobName): \(r.failures.count) \(r.isDrill ? "restore drill" : "archive") check(s) failed\(skip) · \(when)"
     }
 
     /// post a notification for a record once per session (policy is applied inside).

@@ -281,4 +281,51 @@ private func archive(_ kind: SealedArchiveEngine.Sealed, _ lib: URL, to dir: URL
     #expect(!RestoreDriller().drill(job: job).passed)
 }
 
+/// a cloud archive evicted to a placeholder is skipped (not checked, not failed) by a
+/// health check, unless told to download — so a scheduled check never silently re-pulls
+/// gigabytes and never false-alarms on an offloaded copy.
+@Test func cloudPlaceholderArchiveIsSkippedNotChecked() throws {
+    let base = tmp(); defer { try? FileManager.default.removeItem(at: base) }
+    let lib = try makeLibrary(in: base, name: "Docs.bundle")
+    let target = base.appendingPathComponent("cloud")
+    let dir = target.appendingPathComponent("Docs")
+    _ = try archive(.zip, lib, to: dir)
+
+    // evict: replace the artifact with a hollow placeholder (2 MB logical, ~0 blocks)
+    let zip = try #require(try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        .first { $0.pathExtension == "zip" })
+    try FileManager.default.removeItem(at: zip)
+    FileManager.default.createFile(atPath: zip.path, contents: nil)
+    let fh = try FileHandle(forWritingTo: zip)
+    try fh.truncate(atOffset: 2_000_000)
+    try fh.close()
+    #expect(CloudFile.isDataless(zip))
+
+    let type = ContentType.genericFolder(id: "docs", displayName: "Docs", path: .absolute(lib.path))
+    let cloud = Target.cloudSyncFolder(id: "c", name: "Box", dir: target, provider: .box)
+    let job = BackupJob(name: "J", libraries: [type], target: cloud, format: .sealedZip,
+                        frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+
+    let report = HealthChecker().check(job: job, materializeCloud: false)
+    #expect(report.checks.count == 1)
+    #expect(report.checks.first?.skipped == true)
+    #expect(report.checks.first?.passed == true)        // skipped ≠ failed
+
+    let rec = HealthRecord.from(job: job, report: report, at: Date(timeIntervalSince1970: 0))
+    #expect(rec.archivesChecked == 0)                   // the placeholder wasn't checked
+    #expect(rec.skipped == 1)
+    #expect(rec.passed)                                 // and it's not a failure
+
+    // a pre-1.2 cloud target has no provider field — detection by kind still skips it,
+    // and the message degrades gracefully (no force-unwrap crash).
+    let legacy = Target(id: "c2", displayName: "OldCloud", kind: .cloudSync, destinationDir: target,
+                        constraints: TargetConstraints(maxSingleFileBytes: 240_000_000_000, supportsIncremental: true))
+    #expect(legacy.cloudProvider == nil)
+    let legacyJob = BackupJob(name: "L", libraries: [type], target: legacy, format: .sealedZip,
+                              frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+    let legacyReport = HealthChecker().check(job: legacyJob, materializeCloud: false)
+    #expect(legacyReport.checks.first?.skipped == true)
+    #expect(legacyReport.checks.first?.detail.contains("the cloud folder") == true)
+}
+
 }   // RestoreRoundTrips

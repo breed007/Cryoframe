@@ -50,11 +50,14 @@ public struct Target: Sendable, Identifiable, Equatable, Codable {
     public let destinationDir: URL
     public let constraints: TargetConstraints
     public let networkMount: NetworkMountSpec?
+    public let cloudProvider: CloudProvider?   // set for cloud-sync targets; nil otherwise (optional ⇒ old jobs decode)
 
     public init(id: String, displayName: String, kind: TargetKind, destinationDir: URL,
-                constraints: TargetConstraints, networkMount: NetworkMountSpec? = nil) {
+                constraints: TargetConstraints, networkMount: NetworkMountSpec? = nil,
+                cloudProvider: CloudProvider? = nil) {
         self.id = id; self.displayName = displayName; self.kind = kind
         self.destinationDir = destinationDir; self.constraints = constraints; self.networkMount = networkMount
+        self.cloudProvider = cloudProvider
     }
 }
 
@@ -65,12 +68,16 @@ public extension Target {
                constraints: TargetConstraints(maxSingleFileBytes: nil, supportsIncremental: true))
     }
 
-    /// cloud-sync folder (OneDrive/iCloud) — 240 GB single-file ceiling, so sealed
-    /// archives split into sub-250 GB volumes. sparsebundle bands are small, so
-    /// incremental mirroring is still fine.
-    static func cloudSyncFolder(id: String, name: String, dir: URL) -> Target {
+    /// cloud-sync folder — the single-file ceiling comes from the provider (iCloud 50 GB,
+    /// Box 5 GB, the rest 240 GB), so sealed archives split into volumes the provider
+    /// will accept. A caller can override the cap (e.g. a paid Box plan). sparsebundle
+    /// bands are small, so incremental mirroring is still fine.
+    static func cloudSyncFolder(id: String, name: String, dir: URL,
+                                provider: CloudProvider = .generic, maxFileBytes: UInt64? = nil) -> Target {
         Target(id: id, displayName: name, kind: .cloudSync, destinationDir: dir,
-               constraints: TargetConstraints(maxSingleFileBytes: 240 * 1_000_000_000, supportsIncremental: true))
+               constraints: TargetConstraints(maxSingleFileBytes: maxFileBytes ?? provider.maxSingleFileBytes,
+                                              supportsIncremental: true),
+               cloudProvider: provider)
     }
 
     /// network share — must be mounted before a run (preflight enforces this).

@@ -2,6 +2,18 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.2.0] — 2026-06-27
+
+Cloud-sync backups that actually verify and restore — with the right per-provider behavior.
+
+### Added
+- **Cloud provider awareness.** When you add a cloud-sync destination, Cryoframe detects the provider (OneDrive, Dropbox, Google Drive, Box, iCloud — it looks under `~/Library/CloudStorage`) and asks which plan you're on, so sealed archives split under that plan's single-file limit. Those limits differ a lot: iCloud caps at 50 GB, Box at 5 GB on Free/Starter (50 GB Business, 150 GB Enterprise), the rest around 250 GB — or set a custom size. Detected cloud folders appear as one-click choices in the Add destination menu.
+- **Offloaded-archive handling.** Cloud clients evict files to a placeholder to save space; reading one re-downloads it. A scheduled health check or restore drill now detects an offloaded cloud archive and skips it — reported as "not downloaded," neither pass nor failure — instead of silently pulling gigabytes back down. Turn on Settings ▸ General ▸ Archive health ▸ "Download cloud archives to check them" to verify them anyway. A restore always downloads what it needs.
+
+### Fixed
+- A job whose only copies are offloaded cloud placeholders no longer raises a false "no archives found — is the target connected?" alert; it correctly reports them as not downloaded.
+- Cloud jobs created before this release also get the offloaded-archive handling (detection is by destination kind, not the new provider field).
+
 ## [1.1.0] — 2026-06-27
 
 The 3-2-1 release: more copies, proven restores, and a way to find out when a backup breaks while you're away.

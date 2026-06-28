@@ -46,6 +46,10 @@ Set the depth in Settings ▸ General ▸ Archive health: Checksum (fast, the de
 
 A drill is heavier than a checksum check — it opens every archive in scope — so "Latest version only" is usually the right scope for a scheduled drill on a job with many versions.
 
+### Cloud archives that have been offloaded
+
+A cloud-sync client may replace a local archive with a placeholder to save space. Reading it re-downloads it. So a scheduled health check or drill **skips** an offloaded cloud archive rather than silently pulling gigabytes back down, and reports it as "not downloaded" — which is neither a pass nor a failure, just "couldn't check it without downloading." Turn on "Download cloud archives to check them" (Settings ▸ General ▸ Archive health) to download and verify them anyway. Either way, an on-demand check from the ⋯ menu honors the same setting.
+
 ### What gets verified, exactly
 
 A sealed archive is verified byte for byte against its checksums, so a single flipped bit is caught.

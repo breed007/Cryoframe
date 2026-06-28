@@ -38,6 +38,7 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Storage overview: per-job, per-version sizes against the free space on each destination volume.
 - In-app updates over an Ed25519-signed appcast, and a first-run walkthrough for the helper and Full Disk Access.
 - Targets for local disks, network shares, and cloud-sync folders, each with its own size cap and an availability preflight so a run never starts against an unmounted drive.
+- Cloud-sync aware: detects OneDrive/Dropbox/Google Drive/Box/iCloud folders, splits sealed archives under the plan's single-file limit, and skips offloaded (placeholder) archives during scheduled checks instead of silently re-downloading them.
 - Run jobs concurrently up to a configurable limit, with live progress — speed, time elapsed, and time remaining — and pause, resume, or stop a run in flight.
 - Durable run history: every run, manual or scheduled, is recorded with its outcome, per-library detail, duration, size, and any error, and survives quitting the app.
 - Scheduling through a launchd agent, with per-job control over what happens if the owning app is open.

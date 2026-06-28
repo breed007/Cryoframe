@@ -18,11 +18,13 @@ public struct RestoreDriller: Sendable {
 
     /// drill the job's archives: `latestOnly` checks just the newest version per library
     /// per destination; `passphrase` opens an encrypted job's archives.
-    public func drill(job: BackupJob, latestOnly: Bool = false, passphrase: String? = nil) -> HealthReport {
+    public func drill(job: BackupJob, latestOnly: Bool = false, passphrase: String? = nil,
+                      materializeCloud: Bool = false) -> HealthReport {
         var checks: [ArchiveCheck] = []
         let multiDest = job.targets.count > 1
         let typeByName = Dictionary(job.libraries.map { ($0.displayName, $0) }, uniquingKeysWith: { a, _ in a })
         for t in job.targets {
+            let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             for library in job.libraries {
                 let libDir = t.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
                 var archives = RestoreDiscovery.scan(libDir)        // newest-first per library
@@ -31,6 +33,17 @@ public struct RestoreDriller: Sendable {
                     archives = archives.filter { seen.insert($0.libraryName).inserted }
                 }
                 for archive in archives {
+                    // a drill restores the whole archive, so an evicted cloud placeholder
+                    // would pull it all down — skip unless the user opted to download.
+                    if isCloud, CloudFile.anyDataless(in: archive.dir) {
+                        if !materializeCloud {
+                            checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
+                                                       detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",
+                                                       destination: multiDest ? t.displayName : nil, skipped: true))
+                            continue
+                        }
+                        CloudFile.materialize(archive.dir)
+                    }
                     let type = typeByName[archive.libraryName] ?? library
                     let (passed, detail) = drillOne(archive, type: type, passphrase: job.encrypted ? passphrase : nil)
                     checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,

@@ -50,11 +50,17 @@ enum Notifier {
     static func notifyHealth(_ record: HealthRecord) {
         RemoteAlert.sendHealth(for: record)   // off-machine, independent of the local policy
         let policy = current()
+        // all copies were offloaded cloud placeholders we chose not to download — that's a
+        // benign "couldn't check without downloading", NOT "target offline". Only mention on "all".
+        let allSkipped = record.archivesChecked == 0 && record.skipped > 0
+        if allSkipped { guard policy == .all else { return } }
         let clean = record.passed && record.archivesChecked > 0
-        if clean { guard policy == .all else { return } } else { guard policy != .never else { return } }
+        if clean { guard policy == .all else { return } } else if !allSkipped { guard policy != .never else { return } }
         let content = UNMutableNotificationContent()
         content.title = "Cryoframe — \(record.jobName)"
-        if record.archivesChecked == 0 {
+        if allSkipped {
+            content.body = "☁︎ \(record.skipped) cloud archive\(record.skipped == 1 ? "" : "s") not downloaded — skipped"
+        } else if record.archivesChecked == 0 {
             content.body = "⚠️ no archives found to check — is the target connected?"
         } else if record.passed {
             content.body = "✓ \(record.archivesChecked) archive\(record.archivesChecked == 1 ? "" : "s") verified"

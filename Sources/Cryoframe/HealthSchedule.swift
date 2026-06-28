@@ -34,14 +34,15 @@ enum HealthSchedule {
         let healthStore = HealthStore.standard()
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
         let drill = UserDefaults.standard.string(forKey: Prefs.healthDepth) == "drill"
+        let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
         for job in store.load().jobs {
             let resolved = job.resolvingLibraries(in: registry)
             let report: HealthReport
             if drill {
                 let passphrase = job.encrypted ? KeychainArchiveKey.load(jobID: job.id) : nil
-                report = RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase)
+                report = RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase, materializeCloud: materializeCloud)
             } else {
-                report = HealthChecker().check(job: resolved, latestOnly: latestOnly)
+                report = HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud)
             }
             healthStore.append(HealthRecord.from(job: resolved, report: report, at: now, kind: drill ? "drill" : "checksum"))
         }

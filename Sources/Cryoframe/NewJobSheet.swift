@@ -18,6 +18,8 @@ struct NewJobSheet: View {
 
     @State private var name = ""
     @State private var showLocations = false
+    @State private var pendingCloudURL: URL?               // a cloud folder awaiting its plan/size confirmation
+    @State private var pendingCloudProvider: CloudProvider = .generic
     @State private var libraries: [ContentType] = []
     @State private var selectedLibraryIDs: Set<String> = []
     @State private var targets: [Target] = []
@@ -170,12 +172,26 @@ struct NewJobSheet: View {
                     Menu("Add destination…") {
                         Button("Local folder…") { addTarget(.local) }
                         Button("Network or external drive (resumable)…") { addTarget(.external) }
-                        Button("Cloud-sync folder (splits over 250GB)…") { addTarget(.cloud) }
+                        Button("Cloud-sync folder…") { addTarget(.cloud) }
+                        let detected = detectedCloudFolders
+                        if !detected.isEmpty {
+                            Divider()
+                            ForEach(detected, id: \.url) { folder in
+                                Button("\(folder.provider.displayName) — \(folder.url.lastPathComponent)") {
+                                    addTargetAt(folder.url, kind: .cloud)
+                                }
+                            }
+                        }
                     }
                     if hasDuplicateDestinations {
                         Label("Two destinations point at the same folder — only one copy will be kept.",
                               systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange).font(.caption)
+                    }
+                    if let cloud = selectedTargets.first(where: { $0.cloudProvider != nil })?.cloudProvider {
+                        Label("\(cloud.displayName) uploads through its app and may offload files to save space. A scheduled health check skips offloaded copies rather than re-downloading them (changeable in Settings ▸ Archive health).",
+                              systemImage: "cloud")
+                            .foregroundStyle(.secondary).font(.caption)
                     }
                     if !destinationConflicts.isEmpty {
                         ForEach(destinationConflicts, id: \.self) { c in
@@ -310,6 +326,13 @@ struct NewJobSheet: View {
         }
         .frame(width: 560, height: 640)
         .onAppear(perform: seed)
+        .sheet(isPresented: Binding(get: { pendingCloudURL != nil }, set: { if !$0 { pendingCloudURL = nil } })) {
+            if let url = pendingCloudURL {
+                CloudDestinationSheet(url: url, provider: pendingCloudProvider,
+                                      isPresented: Binding(get: { pendingCloudURL != nil }, set: { if !$0 { pendingCloudURL = nil } }),
+                                      onConfirm: { confirmCloudTarget($0) })
+            }
+        }
         .sheet(isPresented: $showLocations) {
             LibraryLocationsSheet(isPresented: $showLocations) {
                 // a built-in path changed: refresh the built-in rows but keep any
@@ -477,15 +500,36 @@ struct NewJobSheet: View {
 
     private func addTarget(_ kind: DestKind) {
         guard let url = pickFolder() else { return }
-        let name = url.lastPathComponent
-        let t: Target
+        addTargetAt(url, kind: kind)
+    }
+
+    private func addTargetAt(_ url: URL, kind: DestKind) {
         switch kind {
-        case .local:    t = .localVolume(id: url.path, name: name, dir: url)
-        case .external: t = .externalDrive(id: url.path, name: name + " (resumable)", dir: url)
-        case .cloud:    t = .cloudSyncFolder(id: url.path, name: name + " (cloud)", dir: url)
+        case .local:    finishAddTarget(.localVolume(id: url.path, name: url.lastPathComponent, dir: url))
+        case .external: finishAddTarget(.externalDrive(id: url.path, name: url.lastPathComponent + " (resumable)", dir: url))
+        case .cloud:
+            // identify the provider, then let the user confirm the single-file limit (plan)
+            // before creating the target.
+            pendingCloudProvider = CloudProvider.identify(url)
+            pendingCloudURL = url
         }
+    }
+
+    private func finishAddTarget(_ t: Target) {
         targets.removeAll { $0.id == t.id }; targets.append(t); model.addTarget(t)
         if !selectedTargetIDs.contains(t.id) { selectedTargetIDs.append(t.id) }   // auto-select the new destination
+    }
+
+    private func confirmCloudTarget(_ maxFileBytes: UInt64) {
+        guard let url = pendingCloudURL else { return }
+        finishAddTarget(.cloudSyncFolder(id: url.path, name: "\(url.lastPathComponent) (\(pendingCloudProvider.displayName))",
+                                         dir: url, provider: pendingCloudProvider, maxFileBytes: maxFileBytes))
+        pendingCloudURL = nil
+    }
+
+    /// cloud-sync folders detected on this Mac, for one-click adding.
+    private var detectedCloudFolders: [(url: URL, provider: CloudProvider)] {
+        CloudProvider.detectFolders(home: NSHomeDirectory())
     }
 
     private func pickFolder() -> URL? {

@@ -39,6 +39,15 @@ enum RemoteAlert {
 
     static func sendHealth(for record: HealthRecord) {
         guard isConfigured else { return }
+        // all copies offloaded to cloud placeholders, none downloaded — benign, not "offline".
+        if record.archivesChecked == 0 && record.skipped > 0 {
+            if allEvents {
+                post(title: "Cryoframe — archive health",
+                     body: "☁︎ \(record.jobName): \(record.skipped) cloud archive(s) not downloaded — skipped",
+                     high: false, tags: "cloud")
+            }
+            return
+        }
         let clean = record.passed && record.archivesChecked > 0
         guard !clean else { if allEvents { post(title: "Cryoframe — archive health",
                                                 body: "✓ \(record.jobName): \(record.archivesChecked) verified", high: false, tags: "white_check_mark") }; return }

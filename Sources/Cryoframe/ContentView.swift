@@ -329,14 +329,18 @@ private struct JobRow: View {
             }.font(.caption2)
         } else if let h = model.lastHealth[job.id] {
             HStack(spacing: 6) {
-                if h.archivesChecked == 0 {
+                if h.archivesChecked == 0 && h.skipped > 0 {
+                    Image(systemName: "cloud").foregroundStyle(.secondary)
+                    Text("\(h.skipped) cloud archive\(h.skipped == 1 ? "" : "s") not downloaded").foregroundStyle(.secondary)
+                } else if h.archivesChecked == 0 {
                     Image(systemName: "questionmark.circle.fill").foregroundStyle(.orange)
                     Text("No archives found to check").foregroundStyle(.secondary)
                 } else {
                     Image(systemName: h.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(h.passed ? .green : .red)
-                    Text(h.passed ? "\(h.isDrill ? "Restore-drilled" : "Archives verified") (\(h.archivesChecked))"
-                                  : "\(h.failures.count) \(h.isDrill ? "restore drill" : "archive") check(s) failed")
+                    Text((h.passed ? "\(h.isDrill ? "Restore-drilled" : "Archives verified") (\(h.archivesChecked))"
+                                   : "\(h.failures.count) \(h.isDrill ? "restore drill" : "archive") check(s) failed")
+                         + (h.skipped > 0 ? " · \(h.skipped) skipped" : ""))
                         .foregroundStyle(h.passed ? Color.secondary : Color.red)
                 }
                 Text("· \(h.checkedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)

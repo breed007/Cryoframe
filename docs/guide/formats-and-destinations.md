@@ -49,7 +49,16 @@ A live mirror to a share resumes differently: there are no parts, so an interrup
 
 ### Cloud-sync folder
 
-The archive is written into a folder managed by a sync client like iCloud Drive or OneDrive, and the client uploads it on its own schedule. Cryoframe does not manage the upload, so a dropped connection is the sync client's job to resume. Sealed archives in a cloud-sync target are split under 250 GB to fit OneDrive's single-file limit.
+The archive is written into a folder managed by a sync client — OneDrive, Dropbox, Google Drive, Box, or iCloud Drive — and the client uploads it on its own schedule. Cryoframe does not manage the upload, so a dropped connection is the sync client's job to resume.
+
+When you add a cloud-sync destination, Cryoframe detects which provider the folder belongs to (it looks under `~/Library/CloudStorage`) and asks which plan you're on, so it can split sealed archives under that plan's single-file limit. Those limits differ a lot: **iCloud Drive caps at 50 GB**, **Box at 5 GB** on Free/Starter (50 GB on Business, 150 GB on Enterprise), and the rest around 250 GB. Pick the plan that matches your account — too high and the provider rejects an oversized part — or enter a custom size. Detected cloud folders appear as one-click choices in the Add destination menu.
+
+A thing to know about cloud-sync as a backup target: these clients offload files to save local space (Dropbox Smart Sync, OneDrive Files On-Demand, Google Drive streaming). After your archive uploads, its local copy may be replaced with a placeholder. Reading it then re-downloads it. So:
+
+- A scheduled health check skips an offloaded cloud archive rather than silently pulling it back down, and notes it as "not downloaded." Turn on Settings ▸ General ▸ Archive health ▸ "Download cloud archives to check them" to verify them anyway.
+- A restore from a cloud folder downloads whatever it needs, which is expected — you are getting the data back.
+
+A cloud-sync folder is a fine *second* copy for off-site reach. For the primary, a local or network destination that keeps a full local copy is faster to verify and restore.
 
 ## A note on free space
 

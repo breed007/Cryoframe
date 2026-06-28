@@ -26,6 +26,7 @@ enum Prefs {
     static let lastHealthCheck = "health.lastCheck"        // Double epoch — when the agent last re-verified
     static let healthScope = "health.scope"                // "latest" | "all", default "latest"
     static let healthDepth = "health.depth"                // "checksum" | "drill", default "checksum"
+    static let verifyCloudArchives = "health.verifyCloud"  // Bool, default false — download evicted cloud archives to check them
     static let remoteAlertType = "remote.alertType"        // "off" | "webhook" | "ntfy", default "off"
     static let remoteAlertURL = "remote.alertURL"          // webhook endpoint or ntfy topic URL
     static let remoteAlertEvents = "remote.alertEvents"    // "failure" | "all", default "failure"

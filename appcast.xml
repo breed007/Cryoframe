@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.2.0</title>
+      <description><![CDATA[Cryoframe 1.2 — cloud-sync provider awareness (per-plan size limits) and offloaded-archive handling for health checks and restore drills.]]></description>
+      <pubDate>Sun, 28 Jun 2026 19:07:26 +0000</pubDate>
+      <sparkle:version>20260628.1503</sparkle:version>
+      <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.2.0/Cryoframe-1.2.0.dmg" type="application/octet-stream" sparkle:edSignature="YAhp/LAk8/VsgBcCqNI4i+m1V25yJ/4ogvTM3cOI8HbwIcVl+uh6TlOhx3DQ/7WH64c41Zav5ZTafTBIHmjDAQ==" length="3196149" />
+    </item>
+    <item>
       <title>1.1.0</title>
       <description><![CDATA[Cryoframe 1.1 — multiple destinations per job (3-2-1), remote alerts (ntfy/webhook), and restore drills.]]></description>
       <pubDate>Sat, 27 Jun 2026 06:41:45 +0000</pubDate>
