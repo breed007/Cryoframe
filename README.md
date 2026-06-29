@@ -198,8 +198,7 @@ Cryoframe runs a root LaunchDaemon and reads protected libraries, so it asks for
 
 - Intel or universal builds. Apple Silicon only.
 - The Mac App Store. The root helper, Full Disk Access, and snapshot mounts are incompatible with the App Sandbox.
-- A built-in cloud uploader. Write to a cloud-sync folder instead.
-- A guided restore UI. Archives are openable artifacts, and the mount-and-open check confirms they reopen.
+- A built-in cloud uploader (direct S3/OAuth). Write to a cloud-sync folder instead — Cryoframe detects the provider and splits to its single-file limit.
 
 ## License
 
