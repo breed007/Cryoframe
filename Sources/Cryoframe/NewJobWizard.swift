@@ -180,6 +180,8 @@ struct NewJobWizard: View {
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(active ? Color.cryoAccent : Color.cryoLine, lineWidth: active ? 1.5 : 1))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(t.title) template. \(t.subtitle)")
+        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
     }
     private func libraryRow(_ lib: ContentType) -> some View {
         let on = selectedLibraryIDs.contains(lib.id)
@@ -197,6 +199,8 @@ struct NewJobWizard: View {
         }
         .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 9).fill(on ? Color.cryoAccent.opacity(0.06) : .clear))
+        .accessibilityLabel("\(lib.displayName)\(model.libraryValid[lib.id] == true ? ", found" : "")")
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
     // MARK: step 2 — destinations
@@ -238,6 +242,8 @@ struct NewJobWizard: View {
         .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 11).fill(Color.cryoElevated))
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(on ? Color.cryoAccent.opacity(0.5) : Color.cryoLine, lineWidth: 1))
+        .accessibilityLabel("\(t.displayName)\(primary && on ? ", primary destination" : "")")
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
     private func destIcon(_ t: Target) -> String {
         switch t.kind { case .local: "internaldrive"; case .networkShare: "externaldrive.connected.to.line.below"; case .cloudSync: "cloud" }
@@ -258,6 +264,8 @@ struct NewJobWizard: View {
                         .background(RoundedRectangle(cornerRadius: 11).fill(freq == p ? Color.cryoAccent.opacity(0.12) : Color.cryoElevated))
                         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(freq == p ? Color.cryoAccent : Color.cryoLine, lineWidth: freq == p ? 1.5 : 1))
                     }.buttonStyle(.plain)
+                    .accessibilityLabel("\(p.title). \(p.detail)")
+                    .accessibilityAddTraits(freq == p ? [.isButton, .isSelected] : .isButton)
                 }
             }
         }
