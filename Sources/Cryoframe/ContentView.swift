@@ -47,10 +47,12 @@ struct ContentView: View {
                 emptyState
                 Spacer()
             } else {
+                ProtectionDashboard(model: model, onNewJob: { showNewJob = true })
                 HStack {
-                    Text("Jobs").font(.title3.bold())
+                    Text("Jobs").font(.headline).foregroundStyle(.secondary)
                     Spacer()
-                    Button { showNewJob = true } label: { Label("New Job", systemImage: "plus") }
+                    Text("\(model.jobs.count) backup \(model.jobs.count == 1 ? "job" : "jobs")")
+                        .font(.caption).foregroundStyle(.tertiary)
                 }
                 ScrollView {
                     VStack(spacing: 8) {
@@ -84,6 +86,7 @@ struct ContentView: View {
                 model.refreshDiskAccess(); model.revalidate(); model.resumeTransfers()
                 model.reloadHistory()      // pick up any scheduled runs since we last looked
                 model.reloadHealth()
+                model.refreshProtectedSize()
             }
         }
     }

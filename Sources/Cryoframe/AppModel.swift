@@ -40,6 +40,7 @@ final class AppModel: ObservableObject {
     @Published var libraryValid: [String: Bool] = [:]   // built-in id  -> resolved path exists
     @Published var jobValid: [String: Bool] = [:]       // job id       -> all libraries resolve
     @Published var showHelp = false                     // drives the Help sheet from the in-window button AND the Help menu
+    @Published var protectedBytes: UInt64?              // total on-disk footprint across all destinations (dashboard)
 
     private var queue: [String] = []                    // job ids waiting for a run slot
     private var controls: [String: RunControl] = [:]
@@ -78,6 +79,7 @@ final class AppModel: ObservableObject {
                                                          pendingStore: .standard()) }   // clean leftover build artifacts
         resumeTransfers()
         armWake()                               // align the optional pmset wake with the schedule
+        refreshProtectedSize()                  // dashboard "backed up" total
     }
 
     /// rebuild the per-job latest-run map from the durable history (also picks up
@@ -150,6 +152,21 @@ final class AppModel: ObservableObject {
                 self.applyHealth(record)
             }
         }
+    }
+
+    /// recompute the total protected footprint (off-main, du-style) for the dashboard.
+    func refreshProtectedSize() {
+        let jobs = self.jobs
+        guard !jobs.isEmpty else { protectedBytes = 0; return }
+        Task.detached {
+            let total = StorageReporter.report(jobs).reduce(UInt64(0)) { $0 + $1.archiveBytes }
+            await MainActor.run { self.protectedBytes = total }
+        }
+    }
+
+    /// the soonest upcoming scheduled run across all enabled jobs, for the dashboard.
+    func nextScheduledRun() -> Date? {
+        jobs.filter(\.enabled).compactMap { nextDue($0) }.filter { $0 > Date() }.min()
     }
 
     /// re-verify every job's archives — serially, so we don't saturate the disk with
