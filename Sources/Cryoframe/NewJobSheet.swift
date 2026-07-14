@@ -56,6 +56,7 @@ struct NewJobSheet: View {
             .padding(20)
         }
         .frame(width: 560, height: 640)
+        .onAppear { model.measureLibraries(draft.libraries) }
         .sheet(isPresented: Binding(get: { pendingCloudURL != nil }, set: { if !$0 { pendingCloudURL = nil } })) {
             if let url = pendingCloudURL {
                 CloudDestinationSheet(url: url, provider: pendingCloudProvider,
@@ -80,6 +81,11 @@ struct NewJobSheet: View {
                             if let valid = model.libraryValid[lib.id] {
                                 Image(systemName: valid ? "checkmark.circle.fill" : "xmark.circle.fill")
                                     .font(.caption2).foregroundStyle(valid ? .cryoGood : .cryoCrit)
+                            }
+                            if let sz = model.librarySizes[lib.id] {
+                                Text(human(sz)).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                            } else if model.measuringSizes.contains(lib.id) {
+                                ProgressView().controlSize(.mini)
                             }
                         }
                         if let p = lib.paths.first { FinderPathLink(path: p.liveURL(home: NSHomeDirectory()).path) }
@@ -112,6 +118,9 @@ struct NewJobSheet: View {
                             }
                         }
                         FinderPathLink(path: t.destinationDir.path)
+                        if let vi = model.volumeInfo(for: t.destinationDir) {
+                            Text("\(human(vi.free)) free of \(human(vi.total))").font(.caption2).foregroundStyle(.tertiary)
+                        }
                     }
                 }
                 .contextMenu {
@@ -246,6 +255,7 @@ struct NewJobSheet: View {
         Binding(get: { draft.selectedTargetIDs.contains(id) }, set: { _ in draft.toggleTarget(id) })
     }
     private func copyToClipboard(_ s: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string) }
+    private func human(_ b: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .file) }
 
     private func addFolderContentType() {
         guard let url = pickFolder() else { return }

@@ -158,7 +158,7 @@ struct NewJobWizard: View {
                     Text(lib.paths.first?.liveURL(home: NSHomeDirectory()).path ?? "").font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 }
                 Spacer()
-                if model.libraryValid[lib.id] == true { Text("found").font(.caption2).foregroundStyle(.cryoGood) }
+                librarySizeTrailing(lib)
             }
             .padding(.vertical, 8).padding(.horizontal, 10).contentShape(Rectangle())
         }
@@ -187,6 +187,7 @@ struct NewJobWizard: View {
             ForEach(draft.destinationConflicts, id: \.self) { c in
                 Label(c, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.cryoWarn)
             }
+            headroom
         }
     }
     private func destRow(_ t: Target) -> some View {
@@ -199,6 +200,9 @@ struct NewJobWizard: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(t.displayName).font(.callout.weight(.semibold))
                     Text(t.destinationDir.path).font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                    if let vi = model.volumeInfo(for: t.destinationDir) {
+                        Text("\(human(vi.free)) free of \(human(vi.total))").font(.caption2).foregroundStyle(.tertiary)
+                    }
                 }
                 Spacer()
                 if on && primary { Text("PRIMARY").font(.caption2.weight(.bold)).foregroundStyle(.tint).padding(.horizontal, 6).padding(.vertical, 2).background(Capsule().fill(Color.cryoAccent.opacity(0.15))) }
@@ -213,6 +217,37 @@ struct NewJobWizard: View {
     }
     private func destIcon(_ t: Target) -> String {
         switch t.kind { case .local: "internaldrive"; case .networkShare: "externaldrive.connected.to.line.below"; case .cloudSync: "cloud" }
+    }
+
+    @ViewBuilder private func librarySizeTrailing(_ lib: ContentType) -> some View {
+        if let sz = model.librarySizes[lib.id] {
+            Text(human(sz)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+        } else if model.measuringSizes.contains(lib.id) {
+            ProgressView().controlSize(.mini)
+        } else if model.libraryValid[lib.id] == true {
+            Text("found").font(.caption2).foregroundStyle(.cryoGood)
+        }
+    }
+    private func human(_ b: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .file) }
+
+    /// selected-size vs primary destination free space, so "not enough room" shows at setup.
+    @ViewBuilder private var headroom: some View {
+        let sel = draft.selectedLibraries
+        let known = sel.compactMap { model.librarySizes[$0.id] }
+        let total = known.reduce(UInt64(0), +)
+        let allKnown = known.count == sel.count && !sel.isEmpty
+        if total > 0, let primary = draft.primaryTarget, let vi = model.volumeInfo(for: primary.destinationDir) {
+            let tight = total > vi.free
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: tight ? "exclamationmark.triangle.fill" : "internaldrive")
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("About \(human(total))\(allKnown ? "" : "+") to back up · \(human(vi.free)) free on \(primary.displayName)")
+                    if tight { Text("This may not fit on the primary destination.").foregroundStyle(.cryoWarn) }
+                    else if draft.isSealed { Text("Sealed archives compress smaller than the source.").foregroundStyle(.tertiary) }
+                }
+            }
+            .font(.caption).foregroundStyle(tight ? .cryoWarn : .secondary).padding(.top, 6)
+        }
     }
 
     // MARK: step 3
@@ -327,10 +362,12 @@ struct NewJobWizard: View {
     private func seedInitialFolder() {
         guard !seeded else { return }; seeded = true
         applyFreq(.nightly)
-        guard let f = initialFolder else { return }
-        let ct = ContentType.genericFolder(id: f.path, displayName: f.lastPathComponent, path: ContentView.libraryPath(for: f, home: NSHomeDirectory()))
-        draft.addLibrary(ct, at: f)
-        draft.selectedLibraryIDs = [ct.id]
+        if let f = initialFolder {
+            let ct = ContentType.genericFolder(id: f.path, displayName: f.lastPathComponent, path: ContentView.libraryPath(for: f, home: NSHomeDirectory()))
+            draft.addLibrary(ct, at: f)
+            draft.selectedLibraryIDs = [ct.id]
+        }
+        model.measureLibraries(draft.libraries)     // fill in source sizes in the background
     }
     private func matchesTemplate(_ t: JobTemplate) -> Bool {
         guard !t.libraryNames.isEmpty else { return false }

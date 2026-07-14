@@ -154,6 +154,36 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @Published var librarySizes: [String: UInt64] = [:]     // library id → source bytes (cached this session)
+    @Published var measuringSizes: Set<String> = []          // libraries whose size is being computed
+
+    /// measure the source size of several libraries, one at a time off the main thread,
+    /// caching each. Skips ones already known/in-flight or that don't resolve (no path /
+    /// no Full Disk Access). Sizes fill in progressively so the UI never blocks.
+    func measureLibraries(_ cts: [ContentType]) {
+        let locator = ContentLocator()
+        let todo: [(String, URL)] = cts.compactMap { ct in
+            guard librarySizes[ct.id] == nil, !measuringSizes.contains(ct.id),
+                  let root = locator.liveRoots(of: ct).first else { return nil }
+            return (ct.id, root)
+        }
+        guard !todo.isEmpty else { return }
+        for (id, _) in todo { measuringSizes.insert(id) }
+        Task.detached(priority: .utility) {
+            for (id, root) in todo {
+                let size = JobExecutor.directorySize(root)
+                await MainActor.run { self.librarySizes[id] = size; self.measuringSizes.remove(id) }
+            }
+        }
+    }
+
+    /// free + total bytes on the volume a URL lives on. Cheap (no directory walk).
+    func volumeInfo(for url: URL) -> (free: UInt64, total: UInt64)? {
+        let v = StorageReporter.volume(of: url)
+        guard let f = v.free, let t = v.total else { return nil }
+        return (f, t)
+    }
+
     private var lastSizeRefresh = Date.distantPast
     /// recompute the total protected footprint (off-main, du-style) for the dashboard.
     /// Debounced — it walks every archive, so it's throttled to avoid re-scanning on

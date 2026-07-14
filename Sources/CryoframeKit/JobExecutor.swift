@@ -346,7 +346,7 @@ public struct JobExecutor: Sendable {
     /// Returns nil when the filesystem doesn't report it — network shares (SMB/AFP)
     /// and many non-APFS volumes return 0 for the "important usage" key, which must
     /// be read as "unknown," never as "full," or we'd false-fail valid backups.
-    static func freeSpace(for url: URL) -> UInt64? {
+    public static func freeSpace(for url: URL) -> UInt64? {
         var dir = url
         for _ in 0..<8 {
             // first existing ancestor IS the target volume — read it and stop, even if
@@ -406,7 +406,7 @@ public struct JobExecutor: Sendable {
         }
     }
 
-    static func directorySize(_ url: URL) -> UInt64 {
+    public static func directorySize(_ url: URL) -> UInt64 {
         let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey]
         guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) else { return 0 }
         var total: UInt64 = 0

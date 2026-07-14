@@ -60,7 +60,7 @@ public enum StorageReporter {
         }
     }
 
-    static func volume(of url: URL) -> (free: UInt64?, total: UInt64?) {
+    public static func volume(of url: URL) -> (free: UInt64?, total: UInt64?) {
         var dir = url
         for _ in 0..<8 {
             if let v = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]) {

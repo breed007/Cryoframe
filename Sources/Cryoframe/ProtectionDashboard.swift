@@ -152,12 +152,16 @@ struct ProtectionDashboard: View {
     private var destinationCount: Int {
         Set(model.jobs.flatMap { $0.targets.map(\.destinationDir.path) }).count
     }
-    private var destinationSub: String {
-        let kinds = Set(model.jobs.flatMap { $0.targets.map { kindLabel($0.kind) } })
-        return kinds.isEmpty ? "—" : kinds.sorted().joined(separator: " + ")
+    /// the destination with the least free space — the "are we running low?" signal.
+    private var tightestDestination: (name: String, free: UInt64)? {
+        let unique = Dictionary(grouping: model.jobs.flatMap(\.targets), by: { $0.destinationDir.path }).compactMap { $0.value.first }
+        return unique.compactMap { t -> (String, UInt64)? in
+            model.volumeInfo(for: t.destinationDir).map { (t.displayName, $0.free) }
+        }.min(by: { $0.1 < $1.1 })
     }
-    private func kindLabel(_ k: TargetKind) -> String {
-        switch k { case .local: "local"; case .networkShare: "network"; case .cloudSync: "cloud" }
+    private var destinationSub: String {
+        guard let t = tightestDestination else { return "—" }
+        return "\(ByteCountFormatter.string(fromByteCount: Int64(t.free), countStyle: .file)) free"
     }
     private var nextRun: Date? { model.nextScheduledRun() }
     private var nextRunValue: String {
