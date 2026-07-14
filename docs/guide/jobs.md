@@ -6,9 +6,9 @@ A job is one backup definition: which libraries to capture, where to put them, i
 
 ## Making a job
 
-Click New Job. Every library you check is frozen in a single snapshot and archived together, each into its own folder at the destination, so the set is consistent to the same instant. A job can hold one library or a dozen.
+Click New Job to open the guided wizard, which walks you through what to back up, where, how often, and the advanced options. [Getting started](getting-started.md) covers it step by step. Every library you pick is frozen in a single snapshot and archived together, each into its own folder at the destination, so the set is consistent to the same instant. A job can hold one library or a dozen.
 
-The sheet also sets the format, the schedule, the verification level, and (optionally) encryption and a retention policy. Defaults for new jobs live in Settings ▸ General, so if you always want the same format or verify level, set it once there.
+Editing an existing job (from its ⋯ menu) opens the full form with every option on one screen. Defaults for new jobs live in Settings ▸ General, so if you always want the same format or verify level, set it once there.
 
 ## Running a job
 

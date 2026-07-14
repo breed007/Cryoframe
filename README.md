@@ -10,6 +10,10 @@ macOS 15+ · Apple Silicon · MIT licensed
   <img src="docs/screenshots/main-window.png" alt="Cryoframe main window" width="520">
 </p>
 
+<p align="center">
+  <img src="docs/wizard-flow.svg" alt="The guided New Job wizard: what to back up, where, how often, review" width="760">
+</p>
+
 ---
 
 ## The problem it solves
@@ -22,6 +26,8 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 
 ## Features
 
+- A protection dashboard at the top of the window: whether everything is backed up, the last successful run, total size protected, and free space on the destination — the job list comes below it.
+- Guided setup — templates for common backups (Photos nightly, Music mirror) or a step-by-step wizard, and you can drag a folder onto the window to start a job. Each library shows its size and each destination its free space, so you can tell a backup will fit before you create it.
 - Consistent snapshots of live libraries using APFS, created and torn down per run.
 - Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
 - Several destinations per job (the 3-2-1 rule): a local drive plus a NAS plus a cloud-sync folder, all from the same snapshot. Sealed archives are compressed once and copied to each. The primary must be reached; a downed secondary finishes the run as a partial backup instead of failing it.

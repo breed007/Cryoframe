@@ -2,6 +2,22 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.3.0] — 2026-07-14
+
+A UX overhaul — the app now tells you whether you're protected, and setting up a backup takes a few clicks.
+
+### Added
+- **Protection dashboard.** The top of the window answers "am I backed up?" at a glance: a green shield when every job is healthy, or an amber warning that names the job needing attention. Below it, the last successful backup, the total size protected, the number of destinations, and free space on the tightest one.
+- **Guided New Job wizard.** Four steps — what to back up, where, how often, review — with templates (Photos nightly, Music mirror) that set everything at once. The advanced options (format, encryption, verification, retention) stay editable on the review step, with sensible defaults. Editing an existing job still opens the full form.
+- **Sizes and free space.** Each library shows its source size (measured in the background), and each destination shows its free space. At setup the total to back up is checked against the primary destination, so "won't fit" shows up before the first run, not during it.
+- **Drag and drop.** Drop a folder or a `.photoslibrary` on the window to start a job pre-filled with it.
+- **Light mode and a cohesive palette.** The app follows the system appearance and now has an intentional design system — an electric-cyan accent and consistent status colors — in both light and dark. Status reads through shape and text, not color alone.
+- Onboarding ends by opening the wizard, so a new setup lands its first backup rather than an empty window.
+
+### Changed
+- The main window is built around the dashboard; the job list sits beneath it.
+- Job creation logic is unified behind a single source of truth shared by the wizard and the edit form.
+
 ## [1.2.0] — 2026-06-27
 
 Cloud-sync backups that actually verify and restore — with the right per-provider behavior.

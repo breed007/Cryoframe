@@ -1,0 +1,51 @@
+<svg viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-label="The guided New Job wizard: four steps — what to back up, where, how often, review.">
+  <rect x="1" y="1" width="898" height="248" rx="14" fill="#14171f" stroke="#ffffff" stroke-opacity="0.09"/>
+  <text x="28" y="38" fill="#eef2f8" font-size="17" font-weight="700">New backup job</text>
+  <text x="28" y="58" fill="#98a1b1" font-size="12.5">Start from a template, or build it your way — four steps, defaults chosen for you.</text>
+
+  <!-- progress bar -->
+  <g>
+    <rect x="28" y="78" width="196" height="4" rx="2" fill="#37c8ff"/>
+    <rect x="238" y="78" width="196" height="4" rx="2" fill="#37c8ff" opacity="0.5"/>
+    <rect x="448" y="78" width="196" height="4" rx="2" fill="#ffffff" opacity="0.12"/>
+    <rect x="658" y="78" width="196" height="4" rx="2" fill="#ffffff" opacity="0.12"/>
+  </g>
+
+  <!-- step cards -->
+  <g font-size="13">
+    <!-- 1 -->
+    <rect x="28" y="98" width="196" height="128" rx="11" fill="#1b1f29" stroke="#37c8ff" stroke-opacity="0.55"/>
+    <circle cx="52" cy="124" r="12" fill="#37c8ff"/>
+    <text x="52" y="129" fill="#04121b" font-size="13" font-weight="700" text-anchor="middle">1</text>
+    <text x="74" y="129" fill="#eef2f8" font-size="14" font-weight="700">What to back up</text>
+    <text x="44" y="158" fill="#98a1b1" font-size="12">Pick a template, or</text>
+    <text x="44" y="176" fill="#98a1b1" font-size="12">choose libraries.</text>
+    <text x="44" y="200" fill="#37c8ff" font-size="11.5">Each shows its size.</text>
+
+    <!-- 2 -->
+    <rect x="238" y="98" width="196" height="128" rx="11" fill="#1b1f29" stroke="#ffffff" stroke-opacity="0.09"/>
+    <circle cx="262" cy="124" r="12" fill="#ffffff" fill-opacity="0.12"/>
+    <text x="262" y="129" fill="#98a1b1" font-size="13" font-weight="700" text-anchor="middle">2</text>
+    <text x="284" y="129" fill="#eef2f8" font-size="14" font-weight="700">Where</text>
+    <text x="254" y="158" fill="#98a1b1" font-size="12">One or more copies.</text>
+    <text x="254" y="176" fill="#98a1b1" font-size="12">The first is primary.</text>
+    <text x="254" y="200" fill="#34d399" font-size="11.5">Free space is shown.</text>
+
+    <!-- 3 -->
+    <rect x="448" y="98" width="196" height="128" rx="11" fill="#1b1f29" stroke="#ffffff" stroke-opacity="0.09"/>
+    <circle cx="472" cy="124" r="12" fill="#ffffff" fill-opacity="0.12"/>
+    <text x="472" y="129" fill="#98a1b1" font-size="13" font-weight="700" text-anchor="middle">3</text>
+    <text x="494" y="129" fill="#eef2f8" font-size="14" font-weight="700">How often</text>
+    <text x="464" y="158" fill="#98a1b1" font-size="12">Every night, every</text>
+    <text x="464" y="176" fill="#98a1b1" font-size="12">few hours, or manual.</text>
+
+    <!-- 4 -->
+    <rect x="658" y="98" width="196" height="128" rx="11" fill="#1b1f29" stroke="#ffffff" stroke-opacity="0.09"/>
+    <circle cx="682" cy="124" r="12" fill="#ffffff" fill-opacity="0.12"/>
+    <text x="682" y="129" fill="#98a1b1" font-size="13" font-weight="700" text-anchor="middle">4</text>
+    <text x="704" y="129" fill="#eef2f8" font-size="14" font-weight="700">Review</text>
+    <text x="674" y="158" fill="#98a1b1" font-size="12">Confirm, then create.</text>
+    <text x="674" y="176" fill="#98a1b1" font-size="12">Format, encryption,</text>
+    <text x="674" y="194" fill="#98a1b1" font-size="12">retention stay editable.</text>
+  </g>
+</svg>

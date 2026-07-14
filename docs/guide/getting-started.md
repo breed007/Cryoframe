@@ -28,14 +28,22 @@ You can skip this and run every job by hand with Run now. Scheduling is only nee
 
 ## Make your first job
 
-Click New Job. In the sheet:
+Click New Job to open the guided wizard. You can also drag a folder onto the window to start one pre-filled.
 
-- Check one or more libraries. Built-in libraries like Photos and Apple Music are listed first, followed by templates for apps like Final Cut and Lightroom, and an option to add any folder.
-- Pick a destination. A local folder is the simplest. You can also choose a network share, an external drive, or a cloud-sync folder. See [Formats and destinations](formats-and-destinations.md).
-- Pick a format. Live mirror is the default and is a good first choice. See [Formats and destinations](formats-and-destinations.md) for when to pick a sealed format instead.
-- Choose how often it runs, or leave it on Manual.
+![The guided wizard](../wizard-flow.svg)
 
-Save the job, then click Run now once to confirm it works end to end. The job row turns green when the archive is written and verified. You do not need to quit Photos or Music first.
+The wizard walks four steps:
+
+1. **What to back up.** Pick a template (Photos nightly, Music mirror) to set everything at once, or choose libraries yourself. Each library shows its size once measured.
+2. **Where.** Choose one or more destinations. Each shows its free space, and the total to back up is checked against it — so you know it fits before you create the job. The first destination is the primary; the rest are extra copies.
+3. **How often.** Every night, every few hours, or manual.
+4. **Review.** Confirm what you're about to create. Advanced options — format, encryption, verification, and how many versions to keep — sit in an expandable section and are all editable; the defaults are set for a trustworthy backup.
+
+Create the job, then click Run now once to confirm it works end to end. The job row turns green when the archive is written and verified. You do not need to quit Photos or Music first.
+
+## The dashboard
+
+Once you have a job, the top of the window is a status panel that answers "am I backed up?" at a glance: a green shield when everything is healthy, or an amber warning naming the job that needs attention. Below it are four figures — the last successful backup, the total size protected, the number of destinations, and free space on the tightest one — so you can see your headroom without opening anything.
 
 ## What to read next
 
