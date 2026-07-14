@@ -67,7 +67,7 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(minWidth: 600, minHeight: 560)
-        .sheet(isPresented: $showNewJob) { NewJobSheet(model: model, isPresented: $showNewJob) }
+        .sheet(isPresented: $showNewJob) { NewJobWizard(model: model, isPresented: $showNewJob) }
         .sheet(item: $editingJob) { job in
             NewJobSheet(model: model,
                         isPresented: Binding(get: { editingJob != nil }, set: { if !$0 { editingJob = nil } }),
