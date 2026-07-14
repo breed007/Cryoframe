@@ -13,8 +13,9 @@ struct CryoframeApp: App {
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(model: model)
+                .tint(.cryoAccent)          // Cryoframe's electric-cyan brand accent, app-wide
         }
-        .defaultSize(width: 640, height: 680)
+        .defaultSize(width: 680, height: 720)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {

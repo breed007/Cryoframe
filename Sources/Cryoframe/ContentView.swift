@@ -104,7 +104,7 @@ struct ContentView: View {
     private var diskAccessIndicator: some View {
         HStack(spacing: 6) {
             Image(systemName: model.fullDiskAccess ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(model.fullDiskAccess ? .green : .red)
+                .foregroundStyle(model.fullDiskAccess ? .cryoGood : .cryoCrit)
             Text("Full Disk Access").font(.caption)
             if !model.fullDiskAccess {
                 Button("Grant…") { DiskAccess.openSettings() }.controlSize(.small)
@@ -117,7 +117,7 @@ struct ContentView: View {
 
     private func servicePill(_ title: String, status: String, enabled: Bool, register: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
-            Circle().fill(enabled ? .green : .orange).frame(width: 8, height: 8)
+            Circle().fill(enabled ? .cryoGood : .cryoWarn).frame(width: 8, height: 8)
             Text(title).font(.callout.bold())
             Text(status).font(.caption).foregroundStyle(.secondary)
             if !enabled { Button("Enable", action: register).controlSize(.small) }
@@ -213,7 +213,7 @@ private struct JobRow: View {
                     }
                     let owners = model.openOwners(job)
                     if !owners.isEmpty {
-                        Text("⚠︎ \(owners.joined(separator: ", ")) open").font(.caption2).foregroundStyle(.orange)
+                        Text("⚠︎ \(owners.joined(separator: ", ")) open").font(.caption2).foregroundStyle(.cryoWarn)
                     }
                 }.foregroundStyle(.tertiary)
             }
@@ -256,11 +256,11 @@ private struct JobRow: View {
         switch model.jobValid[job.id] {
         case .some(true):
             Image(systemName: "checkmark.circle.fill")
-                .font(.caption2).foregroundStyle(.green).help("Library found at its path")
+                .font(.caption2).foregroundStyle(.cryoGood).help("Library found at its path")
         case .some(false):
             HStack(spacing: 6) {
                 Label("library not found", systemImage: "xmark.circle.fill")
-                    .font(.caption2).foregroundStyle(.red)
+                    .font(.caption2).foregroundStyle(.cryoCrit)
                 if model.isBuiltInLibrary(job) {
                     Button("Fix in Settings") { model.openLibrarySettings() }
                         .font(.caption2).buttonStyle(.link)
@@ -300,7 +300,7 @@ private struct JobRow: View {
 
     @ViewBuilder private var statusBadge: some View {
         if isRunning && model.isPaused(job.id) {
-            badge("paused", .orange)
+            badge("paused", .cryoWarn)
         } else if isRunning {
             let pct = model.jobProgress[job.id]?.fraction.map { " \(Int($0 * 100))%" } ?? ""
             badge((model.jobStage[job.id]?.rawValue ?? "running") + pct, .blue)
@@ -310,11 +310,11 @@ private struct JobRow: View {
             badge("disabled", .gray)
         } else if let r = model.lastRecords[job.id] {
             switch r.outcome {
-            case .verified, .completed: badge(r.summary, .green)
-            case .partial:              badge(r.summary, .orange)
-            case .deferred:             badge("deferred", .orange)
-            case .cancelled:            badge("stopped", .orange)
-            case .failed:               badge(r.summary, .red)
+            case .verified, .completed: badge(r.summary, .cryoGood)
+            case .partial:              badge(r.summary, .cryoWarn)
+            case .deferred:             badge("deferred", .cryoWarn)
+            case .cancelled:            badge("stopped", .cryoWarn)
+            case .failed:               badge(r.summary, .cryoCrit)
             }
         } else {
             EmptyView()
@@ -333,15 +333,15 @@ private struct JobRow: View {
                     Image(systemName: "cloud").foregroundStyle(.secondary)
                     Text("\(h.skipped) cloud archive\(h.skipped == 1 ? "" : "s") not downloaded").foregroundStyle(.secondary)
                 } else if h.archivesChecked == 0 {
-                    Image(systemName: "questionmark.circle.fill").foregroundStyle(.orange)
+                    Image(systemName: "questionmark.circle.fill").foregroundStyle(.cryoWarn)
                     Text("No archives found to check").foregroundStyle(.secondary)
                 } else {
                     Image(systemName: h.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(h.passed ? .green : .red)
+                        .foregroundStyle(h.passed ? .cryoGood : .cryoCrit)
                     Text((h.passed ? "\(h.isDrill ? "Restore-drilled" : "Archives verified") (\(h.archivesChecked))"
                                    : "\(h.failures.count) \(h.isDrill ? "restore drill" : "archive") check(s) failed")
                          + (h.skipped > 0 ? " · \(h.skipped) skipped" : ""))
-                        .foregroundStyle(h.passed ? Color.secondary : Color.red)
+                        .foregroundStyle(h.passed ? Color.secondary : Color.cryoCrit)
                 }
                 Text("· \(h.checkedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
             }
@@ -389,9 +389,9 @@ private struct JobRow: View {
 
 private func outcomeColor(_ kind: RunOutcomeKind) -> Color {
     switch kind {
-    case .verified, .completed:        return .green
-    case .partial, .deferred, .cancelled: return .orange
-    case .failed:                      return .red
+    case .verified, .completed:        return .cryoGood
+    case .partial, .deferred, .cancelled: return .cryoWarn
+    case .failed:                      return .cryoCrit
     }
 }
 
@@ -457,7 +457,7 @@ private struct HistoryRow: View {
             }
             .font(.caption)
             if let w = record.warning {
-                Text("⚠︎ \(w)").font(.caption2).foregroundStyle(.orange)
+                Text("⚠︎ \(w)").font(.caption2).foregroundStyle(.cryoWarn)
             }
             ForEach(record.libraries) { lib in
                 VStack(alignment: .leading, spacing: 1) {
@@ -469,7 +469,7 @@ private struct HistoryRow: View {
                         if lib.parts > 1 { Text("\(lib.parts) parts").foregroundStyle(.tertiary) }
                     }
                     if let e = lib.error {
-                        Text(e).foregroundStyle(.red).lineLimit(3).padding(.leading, 12)
+                        Text(e).foregroundStyle(.cryoCrit).lineLimit(3).padding(.leading, 12)
                     }
                 }
                 .font(.caption2)
@@ -481,9 +481,9 @@ private struct HistoryRow: View {
 
     private func statusColor(_ status: String) -> Color {
         switch status {
-        case "verified", "archived": return .green
-        case "failed", "verify failed": return .red
-        case "not found": return .orange
+        case "verified", "archived": return .cryoGood
+        case "failed", "verify failed": return .cryoCrit
+        case "not found": return .cryoWarn
         default: return .secondary
         }
     }
