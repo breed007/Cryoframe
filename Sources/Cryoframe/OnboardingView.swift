@@ -14,6 +14,7 @@ import AppKit
 struct OnboardingView: View {
     @ObservedObject var model: AppModel
     @Binding var isPresented: Bool
+    var onGetStarted: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -47,9 +48,10 @@ struct OnboardingView: View {
             Divider()
 
             HStack {
-                if !ready { Text("You can finish any step later from the status row up top.").font(.caption).foregroundStyle(.tertiary) }
+                Text(ready ? "You're set — let's back something up." : "You can finish any step later from the status row up top.")
+                    .font(.caption).foregroundStyle(.tertiary)
                 Spacer()
-                Button(ready ? "Get Started" : "Done") { finish() }
+                Button(ready ? "Create my first backup" : "Done") { finish(startJob: ready) }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
             }
@@ -61,9 +63,10 @@ struct OnboardingView: View {
 
     private var ready: Bool { model.fullDiskAccess && model.helper.isEnabled }
 
-    private func finish() {
+    private func finish(startJob: Bool = false) {
         UserDefaults.standard.set(true, forKey: "onboarding.completed")
         isPresented = false
+        if startJob { onGetStarted() }   // drop straight into the New Job wizard
     }
 
     @ViewBuilder
@@ -71,7 +74,7 @@ struct OnboardingView: View {
                       done: Bool, action: (title: String, run: () -> Void)?) -> some View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
-                Circle().fill(done ? Color.green : Color.secondary.opacity(0.2)).frame(width: 26, height: 26)
+                Circle().fill(done ? Color.cryoGood : Color.secondary.opacity(0.2)).frame(width: 26, height: 26)
                 if done { Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.white) }
                 else { Text("\(number)").font(.caption.bold()).foregroundStyle(.secondary) }
             }
@@ -81,7 +84,7 @@ struct OnboardingView: View {
             }
             Spacer(minLength: 12)
             if done {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.title3)
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.cryoGood).font(.title3)
             } else if let action {
                 Button(action.title, action: action.run)
             }

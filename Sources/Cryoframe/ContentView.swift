@@ -88,7 +88,10 @@ struct ContentView: View {
         .sheet(isPresented: $showHistory) { HistoryView(model: model, isPresented: $showHistory) }
         .sheet(isPresented: $showRestore) { RestoreView(model: model, isPresented: $showRestore) }
         .sheet(isPresented: $showStorage) { StorageView(model: model, isPresented: $showStorage) }
-        .sheet(isPresented: $showOnboarding) { OnboardingView(model: model, isPresented: $showOnboarding) }
+        .sheet(isPresented: $showOnboarding) {
+            OnboardingView(model: model, isPresented: $showOnboarding,
+                           onGetStarted: { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showNewJob = true } })
+        }
         .onAppear {
             if !onboardingCompleted { showOnboarding = true }   // shown once; "Get Started" marks it done
         }
