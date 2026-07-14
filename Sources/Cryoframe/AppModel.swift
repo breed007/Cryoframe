@@ -154,10 +154,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var lastSizeRefresh = Date.distantPast
     /// recompute the total protected footprint (off-main, du-style) for the dashboard.
-    func refreshProtectedSize() {
-        let jobs = self.jobs
+    /// Debounced — it walks every archive, so it's throttled to avoid re-scanning on
+    /// every window focus; pass force after a job or run changes the archives.
+    func refreshProtectedSize(force: Bool = false) {
         guard !jobs.isEmpty else { protectedBytes = 0; return }
+        guard force || Date().timeIntervalSince(lastSizeRefresh) > 30 else { return }
+        lastSizeRefresh = Date()
+        let jobs = self.jobs
         Task.detached {
             let total = StorageReporter.report(jobs).reduce(UInt64(0)) { $0 + $1.archiveBytes }
             await MainActor.run { self.protectedBytes = total }
@@ -272,7 +277,7 @@ final class AppModel: ObservableObject {
 
     // MARK: jobs / targets
 
-    func addJob(_ job: BackupJob) { store.upsert(job); jobs = store.load().jobs; revalidate(); armWake() }
+    func addJob(_ job: BackupJob) { store.upsert(job); jobs = store.load().jobs; revalidate(); armWake(); refreshProtectedSize(force: true) }
     func deleteJob(_ id: String) { stopJob(id); KeychainArchiveKey.delete(jobID: id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
     func addTarget(_ target: Target) { targets.removeAll { $0.id == target.id }; targets.append(target) }
 

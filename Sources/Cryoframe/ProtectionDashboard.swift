@@ -96,7 +96,10 @@ struct ProtectionDashboard: View {
         let partial = jobs.filter { model.lastRecords[$0.id]?.outcome == .partial }
         let healthBad = jobs.filter { if let h = model.lastHealth[$0.id] { return !h.passed } else { return false } }
         let neverRan = jobs.filter { model.lastRecords[$0.id] == nil }
-        let healthy = jobs.count - failed.count - partial.count - healthBad.count - neverRan.count
+        // dedup by id — a job can be BOTH partial and health-failed, so counting the
+        // filters separately would subtract it twice and skew "X of N healthy".
+        let problemIDs = Set(failed.map(\.id)).union(partial.map(\.id)).union(healthBad.map(\.id)).union(neverRan.map(\.id))
+        let healthy = jobs.count - problemIDs.count
 
         if let f = failed.first {
             return Status(level: .critical,
