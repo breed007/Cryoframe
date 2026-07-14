@@ -4,8 +4,8 @@
 //
 //  The guided way to make a backup job: templates for the fast path, then one decision
 //  per step (what → where → how often → review), with the expert knobs collapsed into an
-//  editable Advanced section on the review. Defaults do the thinking; nothing is locked.
-//  Editing an existing job still uses NewJobSheet.
+//  editable Advanced section on the review. All state and logic live in JobDraft — this
+//  view is only the guided presentation of it. Editing an existing job uses NewJobSheet.
 //
 
 import SwiftUI
@@ -18,76 +18,51 @@ struct JobTemplate: Identifiable {
     let subtitle: String
     let systemImage: String
     let libraryNames: [String]       // matched against the registry by display name; empty = custom
-    let format: FormatChoice
+    let formatKind: String
     let verify: VerificationPolicy
     let retention: RetentionPolicy
-    let daily: (h: Int, m: Int)?     // nil = manual
+    let nightly: Bool
 
     static let all: [JobTemplate] = [
         .init(title: "Photos, nightly", subtitle: "Sealed DMG · keeps the last 14 nights",
               systemImage: "photo.on.rectangle.angled", libraryNames: ["Photos"],
-              format: .sealedDMG, verify: .mountAndOpen, retention: .keepLast(14), daily: (2, 0)),
+              formatKind: "dmg", verify: .mountAndOpen, retention: .keepLast(14), nightly: true),
         .init(title: "Music mirror", subtitle: "Live mirror · updates in place, fast",
               systemImage: "music.note.list", libraryNames: ["Apple Music"],
-              format: .liveMirror(sizeGB: 500), verify: .checksumOnly, retention: .keepAll, daily: (3, 0)),
+              formatKind: "mirror", verify: .checksumOnly, retention: .keepAll, nightly: true),
         .init(title: "Photos + Music", subtitle: "Both, sealed, nightly · keeps last 7",
               systemImage: "square.stack.3d.up", libraryNames: ["Photos", "Apple Music"],
-              format: .sealedDMG, verify: .checksumOnly, retention: .keepLast(7), daily: (2, 0)),
+              formatKind: "dmg", verify: .checksumOnly, retention: .keepLast(7), nightly: true),
         .init(title: "Start from scratch", subtitle: "Choose everything yourself",
-              systemImage: "plus", libraryNames: [], format: .liveMirror(sizeGB: 500),
-              verify: .checksumOnly, retention: .keepAll, daily: (2, 0)),
+              systemImage: "plus", libraryNames: [], formatKind: "mirror", verify: .checksumOnly, retention: .keepAll, nightly: true),
     ]
 }
 
 struct NewJobWizard: View {
     @ObservedObject var model: AppModel
     @Binding var isPresented: Bool
-    var initialFolder: URL? = nil          // pre-filled when a folder is dropped on the window
+    var initialFolder: URL? = nil
 
+    @StateObject private var draft: JobDraft
     @State private var step = 0
-    private let stepTitles = ["What to back up", "Where", "How often", "Review"]
-
-    // draft state
-    @State private var name = ""
-    @State private var libraries: [ContentType] = []
-    @State private var selectedLibraryIDs: Set<String> = []
-    @State private var targets: [Target] = []
-    @State private var selectedTargetIDs: [String] = []
-    @State private var format: FormatChoice = .sealedDMG
-    @State private var verification: VerificationPolicy = .checksumOnly
-    @State private var retention: RetentionPolicy = .keepAll
-    @State private var encrypt = false
-    @State private var passphrase = ""
-    @State private var freq: FreqPreset = .nightly
-
+    @State private var freqPreset = FreqPreset.nightly
     @State private var pendingCloudURL: URL?
     @State private var pendingCloudProvider: CloudProvider = .generic
+    @State private var seeded = false
+
+    private let stepTitles = ["What to back up", "Where", "How often", "Review"]
+
+    init(model: AppModel, isPresented: Binding<Bool>, initialFolder: URL? = nil) {
+        self.model = model
+        self._isPresented = isPresented
+        self.initialFolder = initialFolder
+        self._draft = StateObject(wrappedValue: JobDraft(model: model))
+    }
 
     enum FreqPreset: String, CaseIterable { case nightly, sixHours, twelveHours, manual
         var title: String { switch self { case .nightly: "Every night"; case .sixHours: "Every 6 hours"; case .twelveHours: "Twice a day"; case .manual: "Manual only" } }
         var detail: String { switch self { case .nightly: "Runs at 2:00 AM · recommended"; case .sixHours: "For libraries that change a lot"; case .twelveHours: "Morning and night"; case .manual: "Run it yourself with Run now" } }
-        func frequency(dailyHour: Int) -> BackupFrequency {
-            switch self { case .nightly: .daily(hour: dailyHour, minute: 0); case .sixHours: .everyHours(6); case .twelveHours: .everyHours(12); case .manual: .manual }
-        }
     }
-
-    private var selectedLibraries: [ContentType] { libraries.filter { selectedLibraryIDs.contains($0.id) } }
-    private var selectedTargets: [Target] { selectedTargetIDs.compactMap { id in targets.first { $0.id == id } } }
-    private var dedupedTargets: [Target] {
-        var seen = Set<String>(), out: [Target] = []
-        for t in selectedTargets where seen.insert(t.destinationDir.path).inserted { out.append(t) }
-        return out
-    }
-    private var canContinue: Bool {
-        switch step {
-        case 0: return !selectedLibraries.isEmpty
-        case 1: return !dedupedTargets.isEmpty
-        case 3: return !encrypt || !passphrase.isEmpty
-        default: return true
-        }
-    }
-    private var isSealed: Bool { format.isSealed }
-    private var dailyHour: Int { 2 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,7 +74,7 @@ struct NewJobWizard: View {
             footer
         }
         .frame(width: 640, height: 640)
-        .onAppear(perform: seed)
+        .onAppear { seedInitialFolder() }
         .sheet(isPresented: Binding(get: { pendingCloudURL != nil }, set: { if !$0 { pendingCloudURL = nil } })) {
             if let url = pendingCloudURL {
                 CloudDestinationSheet(url: url, provider: pendingCloudProvider,
@@ -116,16 +91,13 @@ struct NewJobWizard: View {
                 Text(subhead).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
-            Button { isPresented = false } label: { Image(systemName: "xmark") }
-                .buttonStyle(.bordered).help("Cancel")
+            Button { isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(.bordered).help("Cancel")
         }
         .padding([.horizontal, .top], 22).padding(.bottom, 14)
     }
     private var subhead: String {
-        ["Start from a template, or build it your way.",
-         "Add as many copies as you like — the first is your primary.",
-         "Pick a rhythm; you can change it later.",
-         "Looks good? These defaults are chosen for a trustworthy backup."][step]
+        ["Start from a template, or build it your way.", "Add as many copies as you like — the first is your primary.",
+         "Pick a rhythm; you can change it later.", "Looks good? These defaults are chosen for a trustworthy backup."][step]
     }
 
     private var stepBar: some View {
@@ -133,8 +105,7 @@ struct NewJobWizard: View {
             ForEach(Array(stepTitles.enumerated()), id: \.offset) { i, title in
                 VStack(alignment: .leading, spacing: 6) {
                     RoundedRectangle(cornerRadius: 3).fill(i <= step ? Color.cryoAccent : Color.cryoLine).frame(height: 4)
-                    Text("\(i + 1). \(title)").font(.caption2.weight(.semibold))
-                        .foregroundStyle(i == step ? .primary : .secondary)
+                    Text("\(i + 1). \(title)").font(.caption2.weight(.semibold)).foregroundStyle(i == step ? .primary : .secondary)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -143,15 +114,10 @@ struct NewJobWizard: View {
     }
 
     @ViewBuilder private var stepBody: some View {
-        switch step {
-        case 0: stepLibraries
-        case 1: stepDestinations
-        case 2: stepFrequency
-        default: stepReview
-        }
+        switch step { case 0: stepLibraries; case 1: stepDestinations; case 2: stepFrequency; default: stepReview }
     }
 
-    // MARK: step 1 — libraries + templates
+    // MARK: step 1
     private var stepLibraries: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("QUICK START").font(.caption2.weight(.bold)).tracking(0.5).foregroundStyle(.tertiary)
@@ -159,9 +125,7 @@ struct NewJobWizard: View {
                 ForEach(JobTemplate.all) { t in templateCard(t) }
             }
             HStack { Rectangle().fill(Color.cryoLine).frame(height: 1); Text("or pick libraries").font(.caption).foregroundStyle(.tertiary).fixedSize(); Rectangle().fill(Color.cryoLine).frame(height: 1) }
-            VStack(spacing: 2) {
-                ForEach(libraries) { lib in libraryRow(lib) }
-            }
+            VStack(spacing: 2) { ForEach(draft.libraries) { lib in libraryRow(lib) } }
         }
     }
     private func templateCard(_ t: JobTemplate) -> some View {
@@ -185,8 +149,8 @@ struct NewJobWizard: View {
         .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
     }
     private func libraryRow(_ lib: ContentType) -> some View {
-        let on = selectedLibraryIDs.contains(lib.id)
-        return Button { toggleLibrary(lib.id) } label: {
+        let on = draft.selectedLibraryIDs.contains(lib.id)
+        return Button { draft.toggleLibrary(lib.id) } label: {
             HStack(spacing: 11) {
                 Image(systemName: on ? "checkmark.circle.fill" : "circle").foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)).font(.title3)
                 VStack(alignment: .leading, spacing: 1) {
@@ -204,30 +168,31 @@ struct NewJobWizard: View {
         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
     }
 
-    // MARK: step 2 — destinations
+    // MARK: step 2
     private var stepDestinations: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("WHERE THE COPIES GO").font(.caption2.weight(.bold)).tracking(0.5).foregroundStyle(.tertiary)
-            ForEach(targets) { t in destRow(t) }
+            ForEach(draft.targets) { t in destRow(t) }
             Menu {
                 Button("Local folder…") { addTarget(.local) }
                 Button("Network or external drive…") { addTarget(.external) }
                 Button("Cloud-sync folder…") { addTarget(.cloud) }
             } label: { Label("Add another destination", systemImage: "plus.circle") }
                 .menuStyle(.borderlessButton).padding(.top, 2)
-            if dedupedTargets.count >= 2 {
-                Label("A second copy on another drive or off-site is the 3-2-1 rule — you're covered.", systemImage: "checkmark.shield.fill")
-                    .font(.caption).foregroundStyle(.cryoGood).padding(.top, 4)
-            } else if !dedupedTargets.isEmpty {
-                Label("Tip: add a second destination (a NAS or cloud folder) for an off-site copy.", systemImage: "lightbulb")
-                    .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+            if draft.dedupedTargets.count >= 2 {
+                Label("A second copy on another drive or off-site is the 3-2-1 rule — you're covered.", systemImage: "checkmark.shield.fill").font(.caption).foregroundStyle(.cryoGood).padding(.top, 4)
+            } else if !draft.dedupedTargets.isEmpty {
+                Label("Tip: add a second destination (a NAS or cloud folder) for an off-site copy.", systemImage: "lightbulb").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+            }
+            ForEach(draft.destinationConflicts, id: \.self) { c in
+                Label(c, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.cryoWarn)
             }
         }
     }
     private func destRow(_ t: Target) -> some View {
-        let on = selectedTargetIDs.contains(t.id)
-        let primary = dedupedTargets.first?.id == t.id
-        return Button { toggleTarget(t.id) } label: {
+        let on = draft.selectedTargetIDs.contains(t.id)
+        let primary = draft.primaryTarget?.id == t.id
+        return Button { draft.toggleTarget(t.id) } label: {
             HStack(spacing: 12) {
                 Image(systemName: on ? "checkmark.circle.fill" : "circle").foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)).font(.title3)
                 Image(systemName: destIcon(t)).foregroundStyle(.secondary).frame(width: 20)
@@ -250,87 +215,82 @@ struct NewJobWizard: View {
         switch t.kind { case .local: "internaldrive"; case .networkShare: "externaldrive.connected.to.line.below"; case .cloudSync: "cloud" }
     }
 
-    // MARK: step 3 — frequency
+    // MARK: step 3
     private var stepFrequency: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("HOW OFTEN").font(.caption2.weight(.bold)).tracking(0.5).foregroundStyle(.tertiary)
             LazyVGrid(columns: [.init(.flexible()), .init(.flexible())], spacing: 10) {
                 ForEach(FreqPreset.allCases, id: \.self) { p in
-                    Button { freq = p } label: {
+                    Button { freqPreset = p; applyFreq(p) } label: {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(p.title).font(.callout.bold())
-                            Text(p.detail).font(.caption2).foregroundStyle(.secondary)
+                            Text(p.title).font(.callout.bold()); Text(p.detail).font(.caption2).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                        .background(RoundedRectangle(cornerRadius: 11).fill(freq == p ? Color.cryoAccent.opacity(0.12) : Color.cryoElevated))
-                        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(freq == p ? Color.cryoAccent : Color.cryoLine, lineWidth: freq == p ? 1.5 : 1))
+                        .background(RoundedRectangle(cornerRadius: 11).fill(freqPreset == p ? Color.cryoAccent.opacity(0.12) : Color.cryoElevated))
+                        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(freqPreset == p ? Color.cryoAccent : Color.cryoLine, lineWidth: freqPreset == p ? 1.5 : 1))
                     }.buttonStyle(.plain)
                     .accessibilityLabel("\(p.title). \(p.detail)")
-                    .accessibilityAddTraits(freq == p ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityAddTraits(freqPreset == p ? [.isButton, .isSelected] : .isButton)
                 }
             }
         }
     }
 
-    // MARK: step 4 — review + advanced
+    // MARK: step 4
     private var stepReview: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("REVIEW").font(.caption2.weight(.bold)).tracking(0.5).foregroundStyle(.tertiary)
             VStack(spacing: 0) {
-                reviewRow("Back up", selectedLibraries.map(\.displayName).joined(separator: ", "))
-                reviewRow("To", dedupedTargets.map(\.displayName).joined(separator: " + ") + (dedupedTargets.count > 1 ? "  (\(dedupedTargets.count) copies)" : ""))
-                reviewRow("When", freq == .nightly ? "Every night at 2:00 AM" : freq.title)
+                reviewRow("Back up", draft.selectedLibraries.map(\.displayName).joined(separator: ", "), first: true)
+                reviewRow("To", draft.dedupedTargets.map(\.displayName).joined(separator: " + ") + (draft.dedupedTargets.count > 1 ? "  (\(draft.dedupedTargets.count) copies)" : ""))
+                reviewRow("When", freqPreset == .nightly ? "Every night at 2:00 AM" : freqPreset.title)
                 reviewRow("Format", formatSummary)
             }
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.cryoElevated)).overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.cryoLine))
 
             DisclosureGroup {
                 VStack(spacing: 0) {
-                    advRow("Format") {
-                        Picker("", selection: formatBinding) {
-                            Text("Live mirror").tag("mirror"); if !encrypt { Text("Sealed zip").tag("zip") }; Text("Sealed DMG").tag("dmg")
-                        }.pickerStyle(.segmented).labelsHidden().fixedSize()
-                    }
-                    advRow("Encryption") { Toggle("", isOn: $encrypt).labelsHidden().toggleStyle(.switch) }
-                    if encrypt {
-                        advRow("Passphrase") { SecureField("Required", text: $passphrase).textFieldStyle(.roundedBorder).frame(width: 190) }
-                    }
-                    advRow("Verify") {
-                        Picker("", selection: verifyBinding) { Text("Checksum").tag("c"); Text("Mount & open").tag("m") }
+                    advRow("Format", first: true) {
+                        Picker("", selection: $draft.formatKind) { Text("Live mirror").tag("mirror"); if !draft.encrypt { Text("Sealed zip").tag("zip") }; Text("Sealed DMG").tag("dmg") }
                             .pickerStyle(.segmented).labelsHidden().fixedSize()
                     }
-                    if isSealed {
+                    advRow("Encryption") { Toggle("", isOn: $draft.encrypt).labelsHidden().toggleStyle(.switch).onChange(of: draft.encrypt) { _, on in if on, draft.formatKind == "zip" { draft.formatKind = "dmg" } } }
+                    if draft.encrypt { advRow("Passphrase") { SecureField("Required", text: $draft.passphrase).textFieldStyle(.roundedBorder).frame(width: 190) } }
+                    advRow("Verify") {
+                        Picker("", selection: verifyBinding) { Text("Checksum").tag("c"); Text("Mount & open").tag("m") }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                    }
+                    if draft.isSealed {
                         advRow("Keep versions") {
-                            Picker("", selection: retentionBinding) {
-                                Text("Last 14").tag("14"); Text("Last 7").tag("7"); Text("All versions").tag("all"); Text("Daily/weekly/monthly").tag("gfs")
-                            }.labelsHidden().fixedSize()
+                            Picker("", selection: retentionBinding) { Text("Last 14").tag("14"); Text("Last 7").tag("7"); Text("All versions").tag("all"); Text("Daily/weekly/monthly").tag("gfs") }.labelsHidden().fixedSize()
                         }
                     }
                 }
-            } label: {
-                Label("Advanced options — change any of these", systemImage: "slider.horizontal.3").font(.callout.weight(.semibold))
-            }
+            } label: { Label("Advanced options — change any of these", systemImage: "slider.horizontal.3").font(.callout.weight(.semibold)) }
             .padding(14).background(RoundedRectangle(cornerRadius: 12).fill(Color.cryoElevated)).overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.cryoLine))
+
+            if !draft.encryptionValid {
+                Label("Enter a passphrase to finish — encryption is on.", systemImage: "lock.trianglebadge.exclamationmark").font(.caption).foregroundStyle(.cryoWarn)
+            }
         }
     }
-    private func reviewRow(_ k: String, _ v: String) -> some View {
+    private func reviewRow(_ k: String, _ v: String, first: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Text(k).font(.callout.weight(.semibold)).foregroundStyle(.tertiary).frame(width: 92, alignment: .leading)
             Text(v).font(.callout.weight(.medium)); Spacer(minLength: 0)
         }
         .padding(.horizontal, 15).padding(.vertical, 12)
-        .overlay(alignment: .top) { Rectangle().fill(Color.cryoLine).frame(height: 1).opacity(k == "Back up" ? 0 : 1) }
+        .overlay(alignment: .top) { if !first { Rectangle().fill(Color.cryoLine).frame(height: 1) } }
     }
-    private func advRow<C: View>(_ label: String, @ViewBuilder _ control: () -> C) -> some View {
+    private func advRow<C: View>(_ label: String, first: Bool = false, @ViewBuilder _ control: () -> C) -> some View {
         HStack { Text(label).font(.callout.weight(.medium)); Spacer(); control() }
             .padding(.vertical, 9)
-            .overlay(alignment: .top) { Rectangle().fill(Color.cryoLine).frame(height: 1).opacity(label == "Format" ? 0 : 1) }
+            .overlay(alignment: .top) { if !first { Rectangle().fill(Color.cryoLine).frame(height: 1) } }
     }
     private var formatSummary: String {
-        let f: String = { switch format { case .liveMirror: "Live mirror"; case .sealedZip: "Sealed zip"; case .sealedDMG: "Sealed DMG" } }()
-        if case .liveMirror = format { return f + (encrypt ? ", encrypted" : "") + " · single live copy" }
-        let keep: String = { switch retention { case .keepAll: "all versions"; case .keepLast(let n): "last \(n)"; case .gfs: "daily/weekly/monthly" } }()
-        return f + (encrypt ? ", encrypted" : "") + " · keep \(keep)"
+        let f = ["mirror": "Live mirror", "zip": "Sealed zip", "dmg": "Sealed DMG"][draft.formatKind] ?? "Sealed DMG"
+        if draft.formatKind == "mirror" { return f + (draft.encrypt ? ", encrypted" : "") + " · single live copy" }
+        let keep: String = { switch draft.retentionPolicy { case .keepAll: "all versions"; case .keepLast(let n): "last \(n)"; case .gfs: "daily/weekly/monthly" } }()
+        return f + (draft.encrypt ? ", encrypted" : "") + " · keep \(keep)"
     }
 
     // MARK: footer
@@ -339,85 +299,75 @@ struct NewJobWizard: View {
             Button("Back") { step -= 1 }.disabled(step == 0)
             Spacer()
             Button(step == stepTitles.count - 1 ? "Create job" : "Continue") {
-                if step == stepTitles.count - 1 { create() } else { step += 1 }
+                if step == stepTitles.count - 1 { if draft.commit() { isPresented = false } } else { step += 1 }
             }
             .buttonStyle(.borderedProminent).disabled(!canContinue).keyboardShortcut(.defaultAction)
         }
         .padding(18)
     }
+    private var canContinue: Bool {
+        switch step {
+        case 0: return !draft.selectedLibraries.isEmpty
+        case 1: return !draft.dedupedTargets.isEmpty && draft.destinationConflicts.isEmpty
+        case 3: return draft.isValid
+        default: return true
+        }
+    }
 
     // MARK: bindings
-    private var formatBinding: Binding<String> {
-        Binding(get: { switch format { case .sealedDMG: "dmg"; case .sealedZip: "zip"; case .liveMirror: "mirror" } },
-                set: { switch $0 { case "dmg": format = .sealedDMG; case "zip": format = .sealedZip; default: format = .liveMirror(sizeGB: 500) } })
-    }
     private var verifyBinding: Binding<String> {
-        Binding(get: { verification == .mountAndOpen ? "m" : "c" }, set: { verification = $0 == "m" ? .mountAndOpen : .checksumOnly })
+        Binding(get: { draft.verification == .mountAndOpen ? "m" : "c" }, set: { draft.verification = $0 == "m" ? .mountAndOpen : .checksumOnly })
     }
     private var retentionBinding: Binding<String> {
-        Binding(get: { switch retention { case .keepAll: "all"; case .keepLast(let n): "\(n)"; case .gfs: "gfs" } },
-                set: { switch $0 { case "all": retention = .keepAll; case "gfs": retention = .gfs(daily: 7, weekly: 4, monthly: 6); case "7": retention = .keepLast(7); default: retention = .keepLast(14) } })
+        Binding(get: { switch draft.retentionKind { case "lastN": draft.keepN == 7 ? "7" : "14"; case "gfs": "gfs"; default: "all" } },
+                set: { switch $0 { case "all": draft.retentionKind = "all"; case "gfs": draft.retentionKind = "gfs"; case "7": draft.retentionKind = "lastN"; draft.keepN = 7; default: draft.retentionKind = "lastN"; draft.keepN = 14 } })
     }
 
     // MARK: actions
-    private func seed() {
-        libraries = model.registry.types
-        targets = model.targets
-        selectedTargetIDs = targets.first.map { [$0.id] } ?? []
-        if let f = initialFolder {          // a dropped folder becomes a pre-selected library
-            let ct = ContentType.genericFolder(id: f.path, displayName: f.lastPathComponent,
-                                               path: ContentView.libraryPath(for: f, home: NSHomeDirectory()))
-            libraries.removeAll { $0.id == ct.id }; libraries.append(ct)
-            selectedLibraryIDs = [ct.id]
-            model.libraryValid[ct.id] = FileManager.default.fileExists(atPath: f.path)
-        }
+    private func seedInitialFolder() {
+        guard !seeded else { return }; seeded = true
+        applyFreq(.nightly)
+        guard let f = initialFolder else { return }
+        let ct = ContentType.genericFolder(id: f.path, displayName: f.lastPathComponent, path: ContentView.libraryPath(for: f, home: NSHomeDirectory()))
+        draft.addLibrary(ct, at: f)
+        draft.selectedLibraryIDs = [ct.id]
     }
-    private func toggleLibrary(_ id: String) { if selectedLibraryIDs.contains(id) { selectedLibraryIDs.remove(id) } else { selectedLibraryIDs.insert(id) } }
-    private func toggleTarget(_ id: String) { if selectedTargetIDs.contains(id) { selectedTargetIDs.removeAll { $0 == id } } else { selectedTargetIDs.append(id) } }
     private func matchesTemplate(_ t: JobTemplate) -> Bool {
         guard !t.libraryNames.isEmpty else { return false }
-        return Set(selectedLibraries.map(\.displayName)) == Set(t.libraryNames) && sameFormat(format, t.format)
-    }
-    private func sameFormat(_ a: FormatChoice, _ b: FormatChoice) -> Bool {
-        switch (a, b) { case (.sealedDMG, .sealedDMG), (.sealedZip, .sealedZip), (.liveMirror, .liveMirror): true; default: false }
+        return Set(draft.selectedLibraries.map(\.displayName)) == Set(t.libraryNames) && draft.formatKind == t.formatKind
     }
     private func applyTemplate(_ t: JobTemplate) {
-        if t.libraryNames.isEmpty { return }   // "from scratch" just leaves current choices
-        selectedLibraryIDs = Set(libraries.filter { t.libraryNames.contains($0.displayName) }.map(\.id))
-        format = t.format; verification = t.verify; retention = t.retention
-        freq = t.daily == nil ? .manual : .nightly
+        guard !t.libraryNames.isEmpty else { return }
+        draft.selectedLibraryIDs = Set(draft.libraries.filter { t.libraryNames.contains($0.displayName) }.map(\.id))
+        draft.formatKind = t.formatKind; draft.verification = t.verify
+        switch t.retention {
+        case .keepAll: draft.retentionKind = "all"
+        case .keepLast(let n): draft.retentionKind = "lastN"; draft.keepN = n
+        case .gfs(let d, let w, let m): draft.retentionKind = "gfs"; draft.gfsDaily = d; draft.gfsWeekly = w; draft.gfsMonthly = m
+        }
+        freqPreset = t.nightly ? .nightly : .manual; applyFreq(freqPreset)
     }
+    private func applyFreq(_ p: FreqPreset) {
+        switch p {
+        case .nightly:     draft.freqKind = .daily; draft.dailyTime = Calendar.current.date(bySettingHour: 2, minute: 0, second: 0, of: Date()) ?? Date()
+        case .sixHours:    draft.freqKind = .everyHours; draft.everyHours = 6
+        case .twelveHours: draft.freqKind = .everyHours; draft.everyHours = 12
+        case .manual:      draft.freqKind = .manual
+        }
+    }
+    private enum DestKind { case local, external, cloud }
     private func addTarget(_ kind: DestKind) {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         switch kind {
-        case .local:    finish(.localVolume(id: url.path, name: url.lastPathComponent, dir: url))
-        case .external: finish(.externalDrive(id: url.path, name: url.lastPathComponent + " (resumable)", dir: url))
+        case .local:    draft.addTarget(.localVolume(id: url.path, name: url.lastPathComponent, dir: url))
+        case .external: draft.addTarget(.externalDrive(id: url.path, name: url.lastPathComponent + " (resumable)", dir: url))
         case .cloud:    pendingCloudProvider = CloudProvider.identify(url); pendingCloudURL = url
         }
     }
-    private func finish(_ t: Target) {
-        targets.removeAll { $0.id == t.id }; targets.append(t); model.addTarget(t)
-        if !selectedTargetIDs.contains(t.id) { selectedTargetIDs.append(t.id) }
-    }
     private func confirmCloud(_ bytes: UInt64) {
         guard let url = pendingCloudURL else { return }
-        finish(.cloudSyncFolder(id: url.path, name: "\(url.lastPathComponent) (\(pendingCloudProvider.displayName))", dir: url, provider: pendingCloudProvider, maxFileBytes: bytes))
+        draft.addTarget(.cloudSyncFolder(id: url.path, name: "\(url.lastPathComponent) (\(pendingCloudProvider.displayName))", dir: url, provider: pendingCloudProvider, maxFileBytes: bytes))
         pendingCloudURL = nil
-    }
-    enum DestKind { case local, external, cloud }
-
-    private func create() {
-        guard !selectedLibraries.isEmpty, !dedupedTargets.isEmpty else { return }
-        let id = UUID().uuidString
-        if encrypt, !passphrase.isEmpty { KeychainArchiveKey.save(passphrase, jobID: id) }
-        let names = selectedLibraries.map(\.displayName)
-        let defaultName = "\(names.count <= 2 ? names.joined(separator: ", ") : "\(names.count) libraries") → \(dedupedTargets.first?.displayName ?? "")"
-        model.addJob(BackupJob(id: id, name: name.isEmpty ? defaultName : name,
-                               libraries: selectedLibraries, targets: dedupedTargets, format: format,
-                               frequency: freq.frequency(dailyHour: dailyHour), verification: verification,
-                               runPolicy: .proceed, enabled: true, encrypted: encrypt,
-                               retention: isSealed ? retention : .keepAll, createdAt: Date()))
-        isPresented = false
     }
 }
