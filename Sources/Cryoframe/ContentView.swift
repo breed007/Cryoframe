@@ -9,11 +9,13 @@
 
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import CryoframeKit
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var showNewJob = false
+    @State private var droppedFolder: URL?
     @State private var showHistory = false
     @State private var showRestore = false
     @State private var showStorage = false
@@ -67,7 +69,16 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(minWidth: 600, minHeight: 560)
-        .sheet(isPresented: $showNewJob) { NewJobWizard(model: model, isPresented: $showNewJob) }
+        .sheet(isPresented: $showNewJob) { NewJobWizard(model: model, isPresented: $showNewJob, initialFolder: droppedFolder) }
+        .onChange(of: showNewJob) { _, open in if !open { droppedFolder = nil } }
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            guard let p = providers.first else { return false }
+            _ = p.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.hasDirectoryPath || url.pathExtension.hasSuffix("library") else { return }
+                DispatchQueue.main.async { droppedFolder = url; showNewJob = true }   // drop a folder → guided setup
+            }
+            return true
+        }
         .sheet(item: $editingJob) { job in
             NewJobSheet(model: model,
                         isPresented: Binding(get: { editingJob != nil }, set: { if !$0 { editingJob = nil } }),
@@ -132,7 +143,7 @@ struct ContentView: View {
             Image(nsImage: NSApplication.shared.applicationIconImage)
                 .resizable().frame(width: 104, height: 104).opacity(0.95)
             Text("No backup jobs yet").font(.title3.weight(.medium))
-            Text("Create a job to freeze a library with an APFS snapshot and archive it on a schedule.")
+            Text("Create a job to freeze a library with an APFS snapshot and archive it on a schedule — or drop a folder here to start.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
             Button { showNewJob = true } label: { Label("New Job", systemImage: "plus") }
                 .controlSize(.large)

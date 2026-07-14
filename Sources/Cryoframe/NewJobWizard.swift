@@ -42,6 +42,7 @@ struct JobTemplate: Identifiable {
 struct NewJobWizard: View {
     @ObservedObject var model: AppModel
     @Binding var isPresented: Bool
+    var initialFolder: URL? = nil          // pre-filled when a folder is dropped on the window
 
     @State private var step = 0
     private let stepTitles = ["What to back up", "Where", "How often", "Review"]
@@ -363,6 +364,13 @@ struct NewJobWizard: View {
         libraries = model.registry.types
         targets = model.targets
         selectedTargetIDs = targets.first.map { [$0.id] } ?? []
+        if let f = initialFolder {          // a dropped folder becomes a pre-selected library
+            let ct = ContentType.genericFolder(id: f.path, displayName: f.lastPathComponent,
+                                               path: ContentView.libraryPath(for: f, home: NSHomeDirectory()))
+            libraries.removeAll { $0.id == ct.id }; libraries.append(ct)
+            selectedLibraryIDs = [ct.id]
+            model.libraryValid[ct.id] = FileManager.default.fileExists(atPath: f.path)
+        }
     }
     private func toggleLibrary(_ id: String) { if selectedLibraryIDs.contains(id) { selectedLibraryIDs.remove(id) } else { selectedLibraryIDs.insert(id) } }
     private func toggleTarget(_ id: String) { if selectedTargetIDs.contains(id) { selectedTargetIDs.removeAll { $0 == id } } else { selectedTargetIDs.append(id) } }
