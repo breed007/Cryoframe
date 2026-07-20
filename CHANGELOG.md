@@ -14,9 +14,18 @@ A UX overhaul — the app now tells you whether you're protected, and setting up
 - **Light mode and a cohesive palette.** The app follows the system appearance and now has an intentional design system — an electric-cyan accent and consistent status colors — in both light and dark. Status reads through shape and text, not color alone.
 - Onboarding ends by opening the wizard, so a new setup lands its first backup rather than an empty window.
 
+- **Keyboard shortcuts and a real File menu.** New Job (⌘N), Restore (⌘R), Storage (⌘D), History (⌘Y), and Verify All Archives (⇧⌘V), all reachable without the mouse.
+
 ### Changed
 - The main window is built around the dashboard; the job list sits beneath it.
 - Job creation logic is unified behind a single source of truth shared by the wizard and the edit form.
+- The Restore, Storage, History, and archive-browse windows now use the same design system as the rest of the app: shared headers, card rows, and consistent empty states. Job rows carry a status stripe matching the dashboard.
+- The menu-bar icon and its status line are computed from the same verdict as the dashboard, so the two can no longer disagree.
+
+### Fixed
+- **An archive check could fail a perfectly good archive.** When `hdiutil` reported disk-image contention as "Resource temporarily unavailable" — which happens when a check runs alongside Time Machine or Spotlight — Cryoframe treated it as a hard failure instead of retrying, reporting a healthy archive as broken. Transient contention is now retried with backoff; genuine errors still fail immediately.
+- The menu-bar icon no longer shows a checkmark while a job has a failed archive check or has never run.
+- Icon-only controls (row action menus, the file browser's select and drill-in buttons, unit pickers) now carry VoiceOver labels.
 
 ## [1.2.0] — 2026-06-27
 

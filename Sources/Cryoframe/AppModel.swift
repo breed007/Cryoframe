@@ -40,6 +40,12 @@ final class AppModel: ObservableObject {
     @Published var libraryValid: [String: Bool] = [:]   // built-in id  -> resolved path exists
     @Published var jobValid: [String: Bool] = [:]       // job id       -> all libraries resolve
     @Published var showHelp = false                     // drives the Help sheet from the in-window button AND the Help menu
+    // window sheets live here too, so File-menu commands and keyboard shortcuts
+    // can drive the same state the toolbar buttons do.
+    @Published var showNewJob = false
+    @Published var showRestore = false
+    @Published var showStorage = false
+    @Published var showHistory = false
     @Published var protectedBytes: UInt64?              // total on-disk footprint across all destinations (dashboard)
 
     private var queue: [String] = []                    // job ids waiting for a run slot
@@ -260,11 +266,8 @@ final class AppModel: ObservableObject {
     }
 
     /// the menu-bar glyph reflecting overall backup health.
-    var menuBarSymbol: String {
-        if !runningJobIDs.isEmpty { return "arrow.triangle.2.circlepath" }
-        if jobs.contains(where: { [.failed, .partial].contains(lastRecords[$0.id]?.outcome) }) { return "exclamationmark.triangle.fill" }
-        return "checkmark.circle"
-    }
+    /// the menu-bar glyph is the dashboard's verdict, so the two can never disagree.
+    var menuBarSymbol: String { ProtectionStatus.compute(self).glyph }
 
     func refreshDiskAccess() { fullDiskAccess = DiskAccess.hasFullDiskAccess() }
 

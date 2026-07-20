@@ -92,6 +92,7 @@ struct NewJobWizard: View {
             }
             Spacer()
             Button { isPresented = false } label: { Image(systemName: "xmark") }.buttonStyle(.bordered).help("Cancel")
+                .accessibilityLabel("Cancel setup")
         }
         .padding([.horizontal, .top], 22).padding(.bottom, 14)
     }
@@ -317,7 +318,11 @@ struct NewJobWizard: View {
         .overlay(alignment: .top) { if !first { Rectangle().fill(Color.cryoLine).frame(height: 1) } }
     }
     private func advRow<C: View>(_ label: String, first: Bool = false, @ViewBuilder _ control: () -> C) -> some View {
-        HStack { Text(label).font(.callout.weight(.medium)); Spacer(); control() }
+        HStack {
+            Text(label).font(.callout.weight(.medium)).accessibilityHidden(true)
+            Spacer()
+            control().accessibilityLabel(label)      // the row's visible label, spoken with the control
+        }
             .padding(.vertical, 9)
             .overlay(alignment: .top) { if !first { Rectangle().fill(Color.cryoLine).frame(height: 1) } }
     }

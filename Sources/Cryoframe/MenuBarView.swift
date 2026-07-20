@@ -18,9 +18,10 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        if model.jobs.isEmpty {
-            Text("No backup jobs yet")
-        } else {
+        // the same verdict the dashboard shows, so a glance at either agrees.
+        Text(ProtectionStatus.compute(model).menuLine)
+        if !model.jobs.isEmpty {
+            Divider()
             ForEach(model.jobs) { job in
                 Text(statusLine(job))
             }

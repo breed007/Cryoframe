@@ -113,3 +113,47 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
     let rep = try StrongVerifier().verify(result, type: staticType)
     #expect(rep.passed)
 }
+
+// MARK: - transient tool-error retry
+//
+// hdiutil reports a saturated diskimages-helper as "Resource temporarily
+// unavailable", which the retry predicate used to miss — so a verification run
+// under disk contention failed outright and reported a good archive as bad.
+
+@Test func retriesTransientResourceUnavailable() throws {
+    let attempts = Counter()
+    let runner = ScriptedCommandRunner { _, _ in
+        let n = attempts.bump()
+        return n < 3
+            ? CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - Resource temporarily unavailable")
+            : CommandResult(status: 0, stdout: "ok", stderr: "")
+    }
+    let r = try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach"])
+    #expect(r.ok)
+    #expect(attempts.value == 3)          // failed twice, succeeded on the third
+}
+
+@Test func doesNotRetryRealFailures() throws {
+    let attempts = Counter()
+    let runner = ScriptedCommandRunner { _, _ in
+        _ = attempts.bump()
+        return CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - no such file or directory")
+    }
+    let r = try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach"])
+    #expect(!r.ok)
+    #expect(attempts.value == 1)          // a genuine error fails fast, no backoff
+}
+
+@Test func transientPredicateIsCaseInsensitive() {
+    #expect(ScriptedCommandRunner.isTransient("Resource Temporarily Unavailable"))
+    #expect(ScriptedCommandRunner.isTransient("hdiutil: attach failed - resource busy"))
+    #expect(!ScriptedCommandRunner.isTransient("image not recognized"))
+}
+
+/// tiny thread-safe counter — the runner closure is @Sendable.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func bump() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+}

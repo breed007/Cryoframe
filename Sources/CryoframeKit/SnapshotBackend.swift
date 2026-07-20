@@ -55,15 +55,37 @@ public extension CommandRunner {
 
     /// run, retrying briefly on the transient "Resource busy" the disk-image
     /// subsystem returns when concurrent jobs hit hdiutil at once.
-    func runRetryingBusy(_ launchPath: String, _ args: [String], stdin: Data? = nil, attempts: Int = 4) throws -> CommandResult {
+    /// Transient contention, not real failure. `hdiutil attach` reports saturation of
+    /// `diskimages-helper` as EAGAIN — "Resource temporarily unavailable" — which is a
+    /// different string from "resource busy" and so used to fall straight through with
+    /// zero retries. That surfaced as a *verification failure* on a perfectly good
+    /// archive, which is the worst possible false alarm for a backup tool.
+    static var transientToolErrors: [String] {
+        [
+            "resource busy",
+            "resource temporarily unavailable",
+            "device busy",
+            "operation not permitted",      // brief TCC/mount races during attach
+        ]
+    }
+
+    /// Retries transient contention with capped linear backoff (~18s worst case).
+    /// That's deliberately patient: an archive check competing with Time Machine or
+    /// Spotlight for `diskimages-helper` should wait it out, not declare the archive
+    /// bad. Genuine errors still fail on the first attempt.
+    func runRetryingBusy(_ launchPath: String, _ args: [String], stdin: Data? = nil, attempts: Int = 8) throws -> CommandResult {
         var result = try run(launchPath, args, stdin: stdin)
         var tries = 1
-        while !result.ok, tries < attempts, result.stderr.localizedCaseInsensitiveContains("resource busy") {
-            Thread.sleep(forTimeInterval: 0.5 * Double(tries))
+        while !result.ok, tries < attempts, Self.isTransient(result.stderr) {
+            Thread.sleep(forTimeInterval: min(0.5 * Double(tries), 3.0))
             result = try run(launchPath, args, stdin: stdin)
             tries += 1
         }
         return result
+    }
+
+    static func isTransient(_ stderr: String) -> Bool {
+        transientToolErrors.contains { stderr.localizedCaseInsensitiveContains($0) }
     }
 }
 

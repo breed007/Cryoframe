@@ -16,12 +16,10 @@ struct StorageView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Storage").font(.title2.bold())
-                Spacer()
-                Button("Done") { isPresented = false }.keyboardShortcut(.defaultAction)
+            CryoSheetHeader(title: "Storage", symbol: "internaldrive",
+                            subtitle: "What the archives use, and what's left on each volume") {
+                isPresented = false
             }
-            .padding()
             Divider()
 
             if loading {
@@ -29,19 +27,19 @@ struct StorageView: View {
                 ProgressView("Measuring archives…")
                 Spacer()
             } else if rows.allSatisfy({ $0.archiveBytes == 0 }) {
-                Spacer()
-                Text("No archives on disk yet — run a job to see its storage here.")
-                    .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
-                Spacer()
+                CryoEmptyState(symbol: "internaldrive",
+                               title: "No archives on disk yet",
+                               message: "Run a job and its archives — and the space they take — show up here.")
             } else {
                 ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(rows) { row($0); Divider() }
+                    VStack(spacing: 10) {
+                        ForEach(rows) { row($0) }
                     }
+                    .padding(14)
                 }
             }
         }
-        .frame(width: 560, height: 480)
+        .frame(width: 580, height: 500)
         .task { await load() }
     }
 
@@ -80,8 +78,10 @@ struct StorageView: View {
                 .font(.caption)
             }
         }
-        .padding(.horizontal).padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .cryoCard(padding: 13)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(s.jobName), \(size(s.archiveBytes)) of archives on \(s.targetName)")
     }
 
     private func size(_ bytes: UInt64) -> String {
@@ -89,6 +89,6 @@ struct StorageView: View {
     }
     private func usageColor(free: UInt64, total: UInt64) -> Color {
         let frac = 1 - Double(free) / Double(total)
-        return frac > 0.9 ? .red : (frac > 0.75 ? .orange : .accentColor)
+        return frac > 0.9 ? .cryoCrit : (frac > 0.75 ? .cryoWarn : .cryoAccent)
     }
 }

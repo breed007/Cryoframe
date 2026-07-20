@@ -47,6 +47,7 @@ private struct TransferSettings: View {
                     }
                     .labelsHidden()
                     .frame(width: 72)
+                    .accessibilityLabel("Chunk size unit")
                 }
                 HStack {
                     Text("Scratch location")
@@ -190,6 +191,7 @@ private struct GeneralSettings: View {
                         }
                         .labelsHidden()
                         .frame(width: 72)
+                        .accessibilityLabel("Size unit")
                     }
                 }
                 Picker("Verify", selection: $verify) {

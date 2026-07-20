@@ -170,6 +170,7 @@ struct NewJobSheet: View {
                         .multilineTextAlignment(.trailing).frame(width: 64)
                         .onChange(of: draft.mirrorValue) { _, v in if v < 1 { draft.mirrorValue = 1 } }
                     Picker("", selection: $draft.mirrorUnit) { Text("GB").tag("GB"); Text("TB").tag("TB") }.labelsHidden().frame(width: 72)
+                        .accessibilityLabel("Mirror size unit")
                 }
             }
         }

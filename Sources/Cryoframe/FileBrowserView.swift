@@ -38,12 +38,12 @@ struct FileBrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Browse “\(archiveName)”").font(.title3.bold())
-                Spacer()
-                Button("Done") { onClose() }.keyboardShortcut(.cancelAction).disabled(extracting)
+            CryoSheetHeader(title: "Browse “\(archiveName)”", symbol: "shippingbox",
+                            subtitle: "Pull individual files out of the archive",
+                            doneIsDefault: false) {
+                onClose()
             }
-            .padding()
+            .disabled(extracting)
             Divider()
             breadcrumb
             Divider()
@@ -82,7 +82,8 @@ struct FileBrowserView: View {
             if loading {
                 VStack { Spacer(); ProgressView("Reading…"); Spacer() }
             } else if entries.isEmpty {
-                VStack { Spacer(); Text("This folder is empty.").foregroundStyle(.secondary); Spacer() }
+                CryoEmptyState(symbol: "folder", title: "This folder is empty",
+                               message: "Nothing was archived at this path.")
             } else {
                 List {
                     ForEach(entries) { e in row(e) }
@@ -96,13 +97,15 @@ struct FileBrowserView: View {
     private func row(_ e: Entry) -> some View {
         HStack(spacing: 8) {
             Toggle("", isOn: selBinding(e.id)).labelsHidden().disabled(extracting)
+                .accessibilityLabel("Select \(e.name)")
             Image(systemName: icon(e))
-                .foregroundStyle(e.drillable ? Color.accentColor : Color.secondary)
+                .foregroundStyle(e.drillable ? Color.cryoAccent : Color.secondary)
             Text(e.name)
             Spacer()
             if e.drillable {
                 Button { drill(into: e) } label: { Image(systemName: "chevron.right").font(.caption) }
                     .buttonStyle(.borderless).disabled(extracting)
+                    .accessibilityLabel("Open folder \(e.name)")
             } else if !e.isDir {
                 Text(ByteCountFormatter.string(fromByteCount: Int64(e.size), countStyle: .file))
                     .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()

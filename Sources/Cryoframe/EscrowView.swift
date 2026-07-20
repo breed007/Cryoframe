@@ -30,7 +30,7 @@ struct EscrowView: View {
                 if missingKeys > 0 {
                     Label("\(missingKeys) encrypted job\(missingKeys == 1 ? "" : "s") \(missingKeys == 1 ? "has" : "have") no saved passphrase and can't be exported.",
                           systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange).font(.callout)
+                        .foregroundStyle(.cryoWarn).font(.callout)
                 }
                 Button("Export passphrases…") { exportFlow() }
                     .disabled(jobCount == 0)
@@ -47,7 +47,7 @@ struct EscrowView: View {
             if let status {
                 Section {
                     Label(status.text, systemImage: status.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(status.ok ? .green : .orange)
+                        .foregroundStyle(status.ok ? .cryoGood : .cryoWarn)
                         .font(.callout)
                 }
             }

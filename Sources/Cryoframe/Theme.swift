@@ -76,3 +76,66 @@ extension View {
         shadow(color: color.opacity(0.55), radius: radius)
     }
 }
+
+// MARK: - Shared sheet chrome
+//
+// Every sheet (Restore, Storage, History, Browse) grew its own header and empty
+// state, so they drifted apart. These two are the house style — use them instead
+// of hand-rolling an HStack with a title and a Done button.
+
+/// Title bar for a sheet: symbol, title, optional subtitle, and the Done button.
+struct CryoSheetHeader: View {
+    let title: String
+    var symbol: String
+    var subtitle: String?
+    var doneTitle: String = "Done"
+    var doneIsDefault: Bool = true
+    var onDone: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.cryoAccent)
+                .accessibilityHidden(true)          // the title already says it
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.title3.bold()).accessibilityAddTraits(.isHeader)
+                if let subtitle {
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button(doneTitle, action: onDone)
+                .keyboardShortcut(doneIsDefault ? .defaultAction : .cancelAction)
+        }
+        .padding(.horizontal, 18).padding(.vertical, 14)
+    }
+}
+
+/// Centered "nothing here yet" state — a glyph, a line, and an optional action.
+struct CryoEmptyState: View {
+    let symbol: String
+    let title: String
+    var message: String
+    var actionTitle: String?
+    var action: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            Text(title).font(.headline)
+            Text(message)
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).frame(maxWidth: 340)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action).controlSize(.regular).padding(.top, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title). \(message)")
+    }
+}

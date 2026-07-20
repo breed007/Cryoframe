@@ -14,11 +14,7 @@ import CryoframeKit
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
-    @State private var showNewJob = false
     @State private var droppedFolder: URL?
-    @State private var showHistory = false
-    @State private var showRestore = false
-    @State private var showStorage = false
     @State private var showOnboarding = false
     @AppStorage("onboarding.completed") private var onboardingCompleted = false
     @State private var editingJob: BackupJob?
@@ -31,11 +27,11 @@ struct ContentView: View {
                     .resizable().frame(width: 38, height: 38)
                 Text("Cryoframe").font(.title2.bold()).lineLimit(1).fixedSize()
                 Spacer()
-                Button { showRestore = true } label: { Label("Restore", systemImage: "arrow.uturn.backward.circle") }
+                Button { model.showRestore = true } label: { Label("Restore", systemImage: "arrow.uturn.backward.circle") }
                     .help("Restore a library from an archive")
-                Button { showStorage = true } label: { Label("Storage", systemImage: "internaldrive") }
+                Button { model.showStorage = true } label: { Label("Storage", systemImage: "internaldrive") }
                     .help("Space used by archives, and free space on each target")
-                Button { showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
+                Button { model.showHistory = true } label: { Label("History", systemImage: "clock.arrow.circlepath") }
                     .help("Past runs, including scheduled ones")
                 Button { model.showHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
                     .help("How to use Cryoframe, with examples")
@@ -49,7 +45,7 @@ struct ContentView: View {
                 emptyState
                 Spacer()
             } else {
-                ProtectionDashboard(model: model, onNewJob: { showNewJob = true })
+                ProtectionDashboard(model: model, onNewJob: { model.showNewJob = true })
                 HStack {
                     Text("Jobs").font(.headline).foregroundStyle(.secondary)
                     Spacer()
@@ -69,13 +65,13 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(minWidth: 600, minHeight: 560)
-        .sheet(isPresented: $showNewJob) { NewJobWizard(model: model, isPresented: $showNewJob, initialFolder: droppedFolder) }
-        .onChange(of: showNewJob) { _, open in if !open { droppedFolder = nil } }
+        .sheet(isPresented: $model.showNewJob) { NewJobWizard(model: model, isPresented: $model.showNewJob, initialFolder: droppedFolder) }
+        .onChange(of: model.showNewJob) { _, open in if !open { droppedFolder = nil } }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let p = providers.first else { return false }
             _ = p.loadObject(ofClass: URL.self) { url, _ in
                 guard let url, url.hasDirectoryPath || url.pathExtension.hasSuffix("library") else { return }
-                DispatchQueue.main.async { droppedFolder = url; showNewJob = true }   // drop a folder → guided setup
+                DispatchQueue.main.async { droppedFolder = url; model.showNewJob = true }   // drop a folder → guided setup
             }
             return true
         }
@@ -85,12 +81,12 @@ struct ContentView: View {
                         editing: job)
         }
         .sheet(isPresented: $model.showHelp) { HelpView(isPresented: $model.showHelp) }
-        .sheet(isPresented: $showHistory) { HistoryView(model: model, isPresented: $showHistory) }
-        .sheet(isPresented: $showRestore) { RestoreView(model: model, isPresented: $showRestore) }
-        .sheet(isPresented: $showStorage) { StorageView(model: model, isPresented: $showStorage) }
+        .sheet(isPresented: $model.showHistory) { HistoryView(model: model, isPresented: $model.showHistory) }
+        .sheet(isPresented: $model.showRestore) { RestoreView(model: model, isPresented: $model.showRestore) }
+        .sheet(isPresented: $model.showStorage) { StorageView(model: model, isPresented: $model.showStorage) }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(model: model, isPresented: $showOnboarding,
-                           onGetStarted: { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showNewJob = true } })
+                           onGetStarted: { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { model.showNewJob = true } })
         }
         .onAppear {
             if !onboardingCompleted { showOnboarding = true }   // shown once; "Get Started" marks it done
@@ -148,7 +144,7 @@ struct ContentView: View {
             Text("No backup jobs yet").font(.title3.weight(.medium))
             Text("Create a job to freeze a library with an APFS snapshot and archive it on a schedule — or drop a folder here to start.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
-            Button { showNewJob = true } label: { Label("New Job", systemImage: "plus") }
+            Button { model.showNewJob = true } label: { Label("New Job", systemImage: "plus") }
                 .controlSize(.large)
             if !(model.helper.isEnabled && model.fullDiskAccess) {
                 Button("Setup guide…") { showOnboarding = true }.controlSize(.small)
@@ -163,7 +159,7 @@ struct ContentView: View {
                 Text("Activity").font(.headline)
                 if !model.runningJobIDs.isEmpty {
                     ProgressView().controlSize(.small)
-                    Text("\(model.runningJobIDs.count) running").font(.caption).foregroundStyle(.blue)
+                    Text("\(model.runningJobIDs.count) running").font(.caption).foregroundStyle(.cryoAccent)
                 }
             }
             ScrollView {
@@ -263,10 +259,28 @@ private struct JobRow: View {
                     Button("Delete", role: .destructive) { model.deleteJob(job.id) }
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
+                .accessibilityLabel("More actions for \(job.name)")
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+        .cryoCard(padding: 12)
+        // a status stripe on the leading edge, so a row's state reads from the same
+        // vocabulary as the dashboard ring above it — shape and position, not color alone.
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(rowTint)
+                .frame(width: 3)
+                .padding(.vertical, 10).padding(.leading, 1)
+                .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(job.name), \(librarySummary) to \(destinationSummary)")
+    }
+
+    /// the row's state in one color: running, else the last run's outcome.
+    private var rowTint: Color {
+        if isRunning || isQueued { return .cryoAccent }
+        if let r = model.lastRecords[job.id] { return outcomeColor(r.outcome) }
+        return .secondary.opacity(0.35)
     }
 
     @ViewBuilder private var libraryStatusRow: some View {
@@ -320,9 +334,9 @@ private struct JobRow: View {
             badge("paused", .cryoWarn)
         } else if isRunning {
             let pct = model.jobProgress[job.id]?.fraction.map { " \(Int($0 * 100))%" } ?? ""
-            badge((model.jobStage[job.id]?.rawValue ?? "running") + pct, .blue)
+            badge((model.jobStage[job.id]?.rawValue ?? "running") + pct, .cryoAccent)
         } else if isQueued {
-            badge("queued", .blue)
+            badge("queued", .cryoAccent)
         } else if !job.enabled {
             badge("disabled", .gray)
         } else if let r = model.lastRecords[job.id] {
@@ -420,32 +434,27 @@ private struct HistoryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Run History").font(.title2.bold())
-                Spacer()
-                Button("Done") { isPresented = false }.keyboardShortcut(.defaultAction)
+            CryoSheetHeader(title: "Run History", symbol: "clock.arrow.circlepath",
+                            subtitle: "Every run, manual and scheduled") {
+                isPresented = false
             }
-            .padding()
             Divider()
 
             let records = model.runHistory()
             if records.isEmpty {
-                Spacer()
-                Text("No runs yet — they'll show here once a job runs, including scheduled ones.")
-                    .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
-                Spacer()
+                CryoEmptyState(symbol: "clock.arrow.circlepath",
+                               title: "No runs yet",
+                               message: "Once a job runs — by hand or on its schedule — every result lands here.")
             } else {
                 ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(records) { r in
-                            HistoryRow(record: r)
-                            Divider()
-                        }
+                    VStack(spacing: 10) {
+                        ForEach(records) { HistoryRow(record: $0) }
                     }
+                    .padding(14)
                 }
             }
         }
-        .frame(width: 560, height: 540)
+        .frame(width: 580, height: 560)
     }
 }
 
@@ -492,8 +501,10 @@ private struct HistoryRow: View {
                 .font(.caption2)
             }
         }
-        .padding(.horizontal).padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .cryoCard(padding: 12)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(record.jobName), \(record.summary), \(record.finishedAt.formatted(date: .abbreviated, time: .shortened))")
     }
 
     private func statusColor(_ status: String) -> Color {

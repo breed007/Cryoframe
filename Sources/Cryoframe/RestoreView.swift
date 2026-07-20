@@ -202,12 +202,10 @@ struct RestoreView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Restore").font(.title2.bold())
-                Spacer()
-                Button("Done") { isPresented = false }.keyboardShortcut(.defaultAction)
+            CryoSheetHeader(title: "Restore", symbol: "arrow.uturn.backward.circle",
+                            subtitle: "Bring a library back from an archive") {
+                isPresented = false
             }
-            .padding()
             Divider()
             ScrollView { content.padding() }
         }
@@ -281,7 +279,7 @@ struct RestoreView: View {
                                 if a.encrypted { Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary) }
                                 if let v = a.version {
                                     Text(v.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.caption2).foregroundStyle(.blue)
+                                        .font(.caption2).foregroundStyle(.cryoAccent)
                                 }
                                 Text(formatLabel(a.format)).font(.caption2).foregroundStyle(.tertiary)
                                 Text(ByteCountFormatter.string(fromByteCount: Int64(a.bytes), countStyle: .file))
@@ -296,6 +294,7 @@ struct RestoreView: View {
                             Button("Delete this version…", role: .destructive) { r.pendingDelete = a }
                         } label: { Image(systemName: "ellipsis.circle") }
                         .menuStyle(.borderlessButton).fixedSize()
+                        .accessibilityLabel("More actions for \(a.bundleName)")
                     }
                 }
             }
@@ -331,7 +330,7 @@ struct RestoreView: View {
             ForEach(r.results) { o in
                 HStack(spacing: 8) {
                     Image(systemName: o.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(o.ok ? .green : .red)
+                        .foregroundStyle(o.ok ? .cryoGood : .cryoCrit)
                     Text(o.name)
                     Text(o.detail).font(.caption2).foregroundStyle(.secondary)
                     Spacer()
