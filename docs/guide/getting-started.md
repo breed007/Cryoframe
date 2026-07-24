@@ -30,20 +30,31 @@ You can skip this and run every job by hand with Run now. Scheduling is only nee
 
 Click New Job to open the guided wizard. You can also drag a folder onto the window to start one pre-filled.
 
-![The guided wizard](../wizard-flow.svg)
-
 The wizard walks four steps:
 
-1. **What to back up.** Pick a template (Photos nightly, Music mirror) to set everything at once, or choose libraries yourself. Each library shows its size once measured.
-2. **Where.** Choose one or more destinations. Each shows its free space, and the total to back up is checked against it — so you know it fits before you create the job. The first destination is the primary; the rest are extra copies.
-3. **How often.** Every night, every few hours, or manual.
-4. **Review.** Confirm what you're about to create. Advanced options — format, encryption, verification, and how many versions to keep — sit in an expandable section and are all editable; the defaults are set for a trustworthy backup.
+**1. What to back up.** Pick a template (Photos nightly, Music mirror) to set everything at once, or choose libraries yourself. Each library shows its size once measured.
+
+![Wizard step one: templates and detected libraries with sizes](../screenshots/wizard-1-what.png)
+
+**2. Where.** Choose one or more destinations. Each shows its free space, and the total to back up is checked against it — so you know it fits before you create the job. The first destination is the primary; the rest are extra copies.
+
+![Wizard step two: choosing destinations with free space shown](../screenshots/wizard-2-where.png)
+
+**3. How often.** Every night, every few hours, or manual.
+
+![Wizard step three: choosing how often the job runs](../screenshots/wizard-3-schedule.png)
+
+**4. Review.** Confirm what you're about to create. Advanced options — format, encryption, verification, and how many versions to keep — sit in an expandable section and are all editable; the defaults are set for a trustworthy backup.
+
+![Wizard step four: the review, with advanced options expanded](../screenshots/wizard-4-review.png)
 
 Create the job, then click Run now once to confirm it works end to end. The job row turns green when the archive is written and verified. You do not need to quit Photos or Music first.
 
 ## The dashboard
 
 Once you have a job, the top of the window is a status panel that answers "am I backed up?" at a glance: a green shield when everything is healthy, or an amber warning naming the job that needs attention. Below it are four figures — the last successful backup, the total size protected, the number of destinations, and free space on the tightest one — so you can see your headroom without opening anything.
+
+![The main window with the protection dashboard, job list, and activity log](../screenshots/main-window.png)
 
 ## What to read next
 

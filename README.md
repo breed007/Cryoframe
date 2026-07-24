@@ -67,7 +67,7 @@ Built in (fixed locations, detected automatically):
 | Microsoft Outlook | default Outlook profile | Outlook |
 
 <p align="center">
-  <img src="docs/screenshots/library-picker.png" alt="Built-in library picker" width="430">
+  <img src="docs/screenshots/wizard-1-what.png" alt="Step one of the New Job wizard: quick-start templates and a list of detected libraries with their sizes" width="620">
 </p>
 
 Templates (you point at the library, since these live anywhere — often on external drives):
@@ -76,10 +76,6 @@ Templates (you point at the library, since these live anywhere — often on exte
 - Lightroom Classic catalogs
 - Capture One catalogs
 - Logic Pro projects
-
-<p align="center">
-  <img src="docs/screenshots/library-templates.png" alt="Library templates for Final Cut, Lightroom, Capture One, and Logic Pro" width="430">
-</p>
 
 Anything else: point at any folder with "Add library", and it is treated as static content.
 
@@ -117,10 +113,18 @@ Three one-time steps, shown at the top of the window:
 
 ## Using it
 
-Press New Job and pick a library, a destination, a format, and how often to run. Every field has a tooltip.
+Press New Job and the wizard walks you through four steps — what to back up, where the copies go, how often, and a review — with sensible defaults at each one. Each destination shows its free space and the total to back up, so you can tell a backup will fit before you create it.
 
 <p align="center">
-  <img src="docs/screenshots/destination-targets.png" alt="Choosing a destination: local or cloud-sync folder" width="430">
+  <img src="docs/screenshots/wizard-2-where.png" alt="Step two of the wizard: choosing destinations, with free space shown and room to add an off-site copy" width="620">
+</p>
+
+Schedules:
+
+- Every night, every 6 hours, twice a day, or manual only. Pick a rhythm; you can change it later.
+
+<p align="center">
+  <img src="docs/screenshots/wizard-3-schedule.png" alt="Step three of the wizard: choosing how often the job runs" width="620">
 </p>
 
 Formats:
@@ -128,8 +132,10 @@ Formats:
 - Live mirror (default). A sparsebundle with about 8 MB bands. The first run copies everything; later runs only write the bands that changed.
 - Sealed zip or DMG. One immutable, checksummed file for cold storage. Larger than the target's cap splits into volumes, so it fits cloud single-file limits.
 
+The review step summarizes the job, and its Advanced section keeps every choice — format, encryption, verification, retention — editable before you create it.
+
 <p align="center">
-  <img src="docs/screenshots/format-options.png" alt="Archive format options: sealed DMG, sealed zip, or live mirror" width="430">
+  <img src="docs/screenshots/wizard-4-review.png" alt="Step four of the wizard: reviewing the job with the advanced options expanded — format, encryption, verification, and retention" width="620">
 </p>
 
 Verification:
