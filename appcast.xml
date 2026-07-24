@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.3.0</title>
+      <description><![CDATA[A UX overhaul: a protection dashboard that answers "am I backed up?" at a glance, a guided New Job wizard with templates, library sizes and destination free space, drag-and-drop, light mode, keyboard shortcuts, and a consistent design system across every window. Fixes an archive check that could wrongly fail a good archive under disk contention.]]></description>
+      <pubDate>Fri, 24 Jul 2026 19:58:58 +0000</pubDate>
+      <sparkle:version>20260724.1557</sparkle:version>
+      <sparkle:shortVersionString>1.3.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.3.0/Cryoframe-1.3.0.dmg" type="application/octet-stream" sparkle:edSignature="WsCNGpH6v/AZviikIKLnXm3OR1QIIu79NlXfaXZ3eaH9RJgrFderBpmjL0r/ESam4JI15Nz6/SVehAmbAHvXDA==" length="3455092" />
+    </item>
+    <item>
       <title>1.2.0</title>
       <description><![CDATA[Cryoframe 1.2 — cloud-sync provider awareness (per-plan size limits) and offloaded-archive handling for health checks and restore drills.]]></description>
       <pubDate>Sun, 28 Jun 2026 19:07:26 +0000</pubDate>
