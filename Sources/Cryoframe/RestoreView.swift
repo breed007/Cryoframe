@@ -474,6 +474,7 @@ struct RestoreView: View {
                         Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
                             .accessibilityLabel("encrypted")
                     }
+                    assuranceChip(v)
                 }
             }
             Spacer(minLength: 8)
@@ -602,6 +603,30 @@ struct RestoreView: View {
         selectedLibrary = nil
         selectedVersionID = nil
         mode = .beside
+    }
+
+    /// "has this exact version been checked, and how thoroughly?" A drill proves the
+    /// restore path works; a checksum only proves the bytes still match. Versions that
+    /// were never checked show nothing rather than an implied all-clear.
+    @ViewBuilder private func assuranceChip(_ v: RestorableArchive) -> some View {
+        if let a = ArchiveAssurance.lastVerified(library: v.libraryName, version: v.version,
+                                                 in: model.healthRecords) {
+            let drill = a.level == .drill
+            let text = drill ? "Restore-tested" : "Checksum verified"
+            let when = relative(a.checkedAt).lowercased()
+            HStack(spacing: 4) {
+                Image(systemName: drill ? "checkmark.seal.fill" : "checkmark.circle")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(text).font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(drill ? AnyShapeStyle(Color.cryoGood) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background(Capsule().fill(drill ? Color.cryoGood.opacity(0.13) : Color.cryoLine))
+            .overlay(Capsule().strokeBorder(drill ? Color.cryoGood.opacity(0.35) : Color.cryoLine, lineWidth: 1))
+            .help(drill ? "Reassembled, opened, and reopened \(when) — the restore path is proven."
+                        : "Checksums re-verified \(when). This confirms the bytes, not that it opens.")
+            .accessibilityLabel(drill ? "Restore-tested \(when)" : "Checksum verified \(when)")
+        }
     }
 
     private func pill(_ text: String, accent: Bool) -> some View {

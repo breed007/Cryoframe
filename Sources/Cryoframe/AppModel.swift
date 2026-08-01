@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
     @Published var activity: [String] = []
     @Published var lastRecords: [String: RunRecord] = [:]   // latest run per job (persisted)
     @Published var lastHealth: [String: HealthRecord] = [:] // latest archive health check per job
+    @Published var healthRecords: [HealthRecord] = []       // full history, newest first — drives per-version "verified" badges
     @Published var verifyingJobIDs: Set<String> = []        // jobs whose archives are being re-verified
     @Published var runningJobIDs: Set<String> = []      // jobs currently executing
     @Published var pausedJobIDs: Set<String> = []       // running jobs whose tool is suspended
@@ -116,9 +117,11 @@ final class AppModel: ObservableObject {
 
     /// rebuild the per-job latest archive-health map from disk.
     func reloadHealth() {
+        let all = healthStore.all()                 // newest first
         var latest: [String: HealthRecord] = [:]
-        for r in healthStore.all() where latest[r.jobID] == nil { latest[r.jobID] = r }
+        for r in all where latest[r.jobID] == nil { latest[r.jobID] = r }
         lastHealth = latest
+        healthRecords = all
     }
 
     /// re-verify a job's existing archives against their checksums, off the main thread.
@@ -235,6 +238,7 @@ final class AppModel: ObservableObject {
     private func applyHealth(_ record: HealthRecord) {
         healthStore.append(record)
         lastHealth[record.jobID] = record
+        healthRecords.insert(record, at: 0)      // keep the badge source in step with the store
         log(Self.healthLine(record))
         maybeNotifyHealth(record)
     }
