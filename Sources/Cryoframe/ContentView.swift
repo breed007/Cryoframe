@@ -46,6 +46,7 @@ struct ContentView: View {
                 Spacer()
             } else {
                 ProtectionDashboard(model: model, onNewJob: { model.showNewJob = true })
+                CoverageCard(model: model)
                 HStack {
                     Text("Jobs").font(.headline).foregroundStyle(.secondary)
                     Spacer()
@@ -65,8 +66,11 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(minWidth: 600, minHeight: 560)
-        .sheet(isPresented: $model.showNewJob) { NewJobWizard(model: model, isPresented: $model.showNewJob, initialFolder: droppedFolder) }
-        .onChange(of: model.showNewJob) { _, open in if !open { droppedFolder = nil } }
+        .sheet(isPresented: $model.showNewJob) {
+            NewJobWizard(model: model, isPresented: $model.showNewJob,
+                         initialFolder: droppedFolder, initialLibraryID: model.newJobLibraryID)
+        }
+        .onChange(of: model.showNewJob) { _, open in if !open { droppedFolder = nil; model.newJobLibraryID = nil } }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let p = providers.first else { return false }
             _ = p.loadObject(ofClass: URL.self) { url, _ in
@@ -98,6 +102,9 @@ struct ContentView: View {
                 model.reloadHistory()      // pick up any scheduled runs since we last looked
                 model.reloadHealth()
                 model.refreshProtectedSize()
+                model.measureLibraries(model.coverageGaps.compactMap { g in
+                    model.registry.types.first { $0.id == g.typeID }
+                })
             }
         }
     }

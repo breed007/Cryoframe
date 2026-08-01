@@ -108,7 +108,8 @@ private func record(_ kind: String, at: Date, _ entries: [VerifiedArchive],
         ArchiveCheck(library: "Photos", version: v21, passed: false, detail: "mismatch"),
         ArchiveCheck(library: "Music", version: nil, passed: true, detail: "skipped", skipped: true),
     ])
-    let job = BackupJob(id: "j1", name: "Nightly", libraries: [], targets: [], format: .sealedDMG,
+    let target = Target.localVolume(id: "t", name: "Backup", dir: URL(fileURLWithPath: "/Volumes/Backup"))
+    let job = BackupJob(id: "j1", name: "Nightly", libraries: [], targets: [target], format: .sealedDMG,
                         frequency: .manual, verification: .checksumOnly, runPolicy: .proceed,
                         createdAt: v20)
     let rec = HealthRecord.from(job: job, report: report, at: v22, kind: "drill")

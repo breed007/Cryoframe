@@ -46,6 +46,7 @@ final class AppModel: ObservableObject {
     @Published var showNewJob = false
     @Published var showRestore = false
     @Published var showRecovery = false
+    @Published var newJobLibraryID: String?   // preselect this library when the wizard opens
     @Published var showStorage = false
     @Published var showHistory = false
     @Published var protectedBytes: UInt64?              // total on-disk footprint across all destinations (dashboard)
@@ -114,6 +115,32 @@ final class AppModel: ObservableObject {
         reloadHealth()
         for r in history.all() { maybeNotify(r) }
         for h in healthStore.all() { maybeNotifyHealth(h) }
+    }
+
+    // MARK: - coverage advisor
+
+    /// libraries on this Mac that no job covers, minus the ones waved off.
+    var coverageGaps: [CoverageAdvisor.Gap] {
+        let locator = ContentLocator()
+        return CoverageAdvisor.gaps(types: registry.types, jobs: jobs,
+                                    dismissed: Set(UserDefaults.standard.stringArray(forKey: Prefs.coverageDismissed) ?? []),
+                                    resolve: { locator.liveRoots(of: $0).first })
+    }
+
+    /// stop mentioning this library. Deliberately permanent — being told twice about
+    /// something you've already decided against is what makes an advisor a nag.
+    func dismissCoverage(_ typeID: String) {
+        var list = UserDefaults.standard.stringArray(forKey: Prefs.coverageDismissed) ?? []
+        guard !list.contains(typeID) else { return }
+        list.append(typeID)
+        UserDefaults.standard.set(list, forKey: Prefs.coverageDismissed)
+        objectWillChange.send()
+    }
+
+    /// open the New Job wizard already pointed at this library.
+    func startJob(forLibrary typeID: String) {
+        newJobLibraryID = typeID
+        showNewJob = true
     }
 
     /// rebuild the per-job latest archive-health map from disk.

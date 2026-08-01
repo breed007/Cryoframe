@@ -42,6 +42,7 @@ struct NewJobWizard: View {
     @ObservedObject var model: AppModel
     @Binding var isPresented: Bool
     var initialFolder: URL? = nil
+    var initialLibraryID: String? = nil    // preselect a built-in (from the coverage advisor)
 
     @StateObject private var draft: JobDraft
     @State private var step = 0
@@ -52,10 +53,11 @@ struct NewJobWizard: View {
 
     private let stepTitles = ["What to back up", "Where", "How often", "Review"]
 
-    init(model: AppModel, isPresented: Binding<Bool>, initialFolder: URL? = nil) {
+    init(model: AppModel, isPresented: Binding<Bool>, initialFolder: URL? = nil, initialLibraryID: String? = nil) {
         self.model = model
         self._isPresented = isPresented
         self.initialFolder = initialFolder
+        self.initialLibraryID = initialLibraryID
         self._draft = StateObject(wrappedValue: JobDraft(model: model))
     }
 
@@ -371,6 +373,8 @@ struct NewJobWizard: View {
             let ct = ContentType.genericFolder(id: f.path, displayName: f.lastPathComponent, path: ContentView.libraryPath(for: f, home: NSHomeDirectory()))
             draft.addLibrary(ct, at: f)
             draft.selectedLibraryIDs = [ct.id]
+        } else if let id = initialLibraryID, draft.libraries.contains(where: { $0.id == id }) {
+            draft.selectedLibraryIDs = [id]         // arrived from "this isn't backed up" — start with it chosen
         }
         model.measureLibraries(draft.libraries)     // fill in source sizes in the background
     }
