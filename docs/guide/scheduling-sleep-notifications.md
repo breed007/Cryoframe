@@ -12,6 +12,16 @@ Each job sets its own frequency when you make or edit it. A job set to Manual ha
 
 The "If app is open" setting on a job decides what happens when the library's owning app is running at the scheduled time. You can proceed anyway, warn, or defer the run until the app is closed. For most libraries you can proceed, because the snapshot captures a consistent copy whether or not the app is open.
 
+### Missed runs
+
+A job whose time passed while the Mac was asleep or shut down is not skipped until the next cycle. Because the agent wakes about once an hour and asks whether each job's next run is now in the past, a backup missed at 2 AM runs shortly after you next wake the Mac. A long absence still owes one run, not one per night you were away.
+
+### Low battery
+
+An unattended run can spin disks and move gigabytes for a while, which is not what you want on a laptop that is nearly flat. When the Mac is on battery and below 20% charge, a scheduled run waits and tries again at the next hourly check — by which time it may well be plugged in. The wait is recorded in the run history with the battery level, so a backup never quietly fails to happen.
+
+Run now is never held back. Plugged in, on a desktop, or when the level cannot be read, runs proceed as normal. Turn the behaviour off, or move the threshold, in Settings ▸ General ▸ Running.
+
 ## Keeping the Mac awake
 
 A backup that runs at 2 a.m. is no use if the Mac idle-sleeps at 2:01 and severs the copy. "Keep the Mac awake while a backup runs" is in Settings ▸ General and is on by default. It holds a power assertion for the length of a run, so the Mac does not idle-sleep partway through.

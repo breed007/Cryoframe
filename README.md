@@ -26,7 +26,7 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 
 ## Features
 
-- A protection dashboard at the top of the window: whether everything is backed up, the last successful run, total size protected, and free space on the destination — the job list comes below it.
+- A protection dashboard at the top of the window: whether everything is backed up, the last successful run, total size protected, and free space on the destination — the job list comes below it. It also names any library on this Mac that no job covers, so a gap you forgot about does not stay invisible.
 - Guided setup — templates for common backups (Photos nightly, Music mirror) or a step-by-step wizard, and you can drag a folder onto the window to start a job. Each library shows its size and each destination its free space, so you can tell a backup will fit before you create it.
 - Consistent snapshots of live libraries using APFS, created and torn down per run.
 - Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
@@ -34,6 +34,8 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG — immutable, checksummed, split into volumes when the target caps file size.
 - Resumable transfers to network shares and external drives: the archive ships in part files and picks up from the last whole part after a dropped connection or unplugged drive.
 - Restore built in: find an archive, verify it, and copy the library back out with its original folder name — beside the live one, or in place over it (staged and verified first, with the old copy moved to the Trash). Browse inside an archive and extract just the files you need.
+- A restore timeline for versioned libraries: browse a library's nights, see how its size moved, and bring back the one you want. Versions that passed a restore drill are marked as restore-tested, and ones only checked by checksum say so instead — a version nothing has checked makes no claim at all.
+- Guided recovery for a new Mac: point it at your backups, unlock the encrypted ones with your recovery-key file, pick a moment, and every library comes back as it was then. It never restores a version written after the moment you chose, so you get the Mac you had rather than a mix of days.
 - Optional AES-256 encryption for sealed-DMG and live-mirror archives, with the passphrase kept in the Keychain so scheduled runs encrypt without prompting.
 - Versioned sealed archives with a retention policy — keep all, the last N, or a daily/weekly/monthly scheme — so you can restore a point in time without the disk filling up.
 - Verification built in: a checksum manifest on every archive, plus an optional mount-and-open check that confirms the library's database opens clean.
@@ -47,7 +49,7 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Cloud-sync aware: detects OneDrive/Dropbox/Google Drive/Box/iCloud folders, splits sealed archives under the plan's single-file limit, and skips offloaded (placeholder) archives during scheduled checks instead of silently re-downloading them.
 - Run jobs concurrently up to a configurable limit, with live progress — speed, time elapsed, and time remaining — and pause, resume, or stop a run in flight.
 - Durable run history: every run, manual or scheduled, is recorded with its outcome, per-library detail, duration, size, and any error, and survives quitting the app.
-- Scheduling through a launchd agent, with per-job control over what happens if the owning app is open.
+- Scheduling through a launchd agent, with per-job control over what happens if the owning app is open. A run missed while the Mac was asleep or off happens at the next check rather than waiting a whole cycle, and an unattended run holds off while the Mac is on battery and low on charge.
 - Keeps the Mac awake while a backup runs, and can optionally wake it for a scheduled run, so unattended backups actually finish.
 - A menu-bar status item and notifications, so you know at a glance whether the last run — including scheduled ones — succeeded.
 - Owns its snapshots end to end. It never touches Time Machine's snapshots.
@@ -149,6 +151,16 @@ Schedule and run policy:
 - "If app is open" controls what happens when the owning app is running. The default is proceed, because the snapshot is already consistent. Choose warn or defer if you would rather skip a run while the library is in use.
 
 The Help button in the app has worked examples for Apple Photos and Apple Music.
+
+## Getting your data back
+
+Two doors, because there are two situations.
+
+**Restore (⌘R)** is for "I need that library back." Pick a library, and its versions appear on a timeline — each night with its size and how it moved. Choose one and bring it back beside your live library (the default, which changes nothing you have now) or in place over it. You can also open a version and pull out a handful of files instead of the whole thing.
+
+**Recover to this Mac (⇧⌘R)** is for a new or wiped Mac. It walks four steps: find the drive or folder holding your backups, unlock the encrypted libraries with the recovery-key file you exported, choose the moment to rebuild to, and restore. Every library comes back as it was at that moment. A library that did not run that night contributes the last version it had before then, never a newer one — otherwise you would get a Mac assembled out of different days.
+
+Both verify an archive before writing it, and neither overwrites anything already on the Mac.
 
 ## How it works
 

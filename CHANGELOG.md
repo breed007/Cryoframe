@@ -2,6 +2,25 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.4.0] — 2026-08-01
+
+Recovery you can trust. The backup half of Cryoframe was well covered; this release does the same for getting your data back.
+
+### Added
+- **Restore timeline.** A library's versions now appear on a timeline instead of a flat list: pick a night, see its size and how it compares to the ones around it, and restore that point in time — beside your live library or in place. Live mirrors keep a single current copy, so they show that plainly rather than pretending to have history.
+- **Version badges.** A version that passed a restore drill is marked *Restore-tested*; one that only had its checksums re-read is marked *Checksum verified*. They are different promises, so they read differently, and a version nothing has checked says nothing at all.
+- **Recover to this Mac.** A guided four-step recovery for a new or wiped Mac: find the backups, unlock the encrypted ones with your recovery-key file, choose a moment, restore. Each library comes back as it was at that moment — never a version written after it, so you get the Mac you had rather than a mix of days. Reachable from ⇧⌘R, the File menu, or the empty state.
+- **Coverage advisor.** The dashboard now names libraries on this Mac that no job covers, with their size and a button that opens the wizard already pointed at them. Dismissing one is permanent.
+- **Battery-aware scheduling.** A scheduled run waits when the Mac is on battery and low on charge, records that it waited, and tries again at the next hourly check. Run now is never held back. Off or adjustable in Settings ▸ Running.
+
+### Changed
+- Health records now store the outcome for each archive version rather than a count and a list of failures, which is what lets a single version be badged honestly. Records written by earlier versions still load; they simply make no claim about which versions were checked.
+
+### Fixed
+- "Start from scratch" in the New Job wizard did nothing when clicked. It now clears the form to the defaults.
+- The size sparkline was drawn to the edge of its frame, clipping the endpoint marker.
+- VoiceOver labels for the chunk size, mirror size, and custom cloud-limit fields.
+
 ## [1.3.0] — 2026-07-14
 
 A UX overhaul — the app now tells you whether you're protected, and setting up a backup takes a few clicks.

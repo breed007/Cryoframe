@@ -12,7 +12,7 @@ This guide covers everything the app does. If you just want to get a backup runn
 4. [Encryption and recovery keys](encryption-and-recovery-keys.md): AES-256 archives and the master-password escrow file.
 5. [Versions, retention, and storage](versions-retention-storage.md): keep a history of a library, and watch disk use.
 6. [Health and verification](health-and-verification.md): prove an archive is still good before you need it.
-7. [Restoring](restoring.md): copy a library back, replace it in place, or pull out a few files.
+7. [Restoring](restoring.md): browse a library's versions on a timeline, copy one back or replace in place, pull out a few files, or rebuild a whole Mac.
 8. [Scheduling, sleep, and notifications](scheduling-sleep-notifications.md): run unattended and find out how it went.
 9. [Updating and troubleshooting](updating-troubleshooting.md): in-app updates and fixes for common problems.
 

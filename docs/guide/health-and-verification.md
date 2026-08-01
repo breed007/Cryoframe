@@ -46,6 +46,14 @@ Set the depth in Settings ▸ General ▸ Archive health: Checksum (fast, the de
 
 A drill is heavier than a checksum check — it opens every archive in scope — so "Latest version only" is usually the right scope for a scheduled drill on a job with many versions.
 
+### What a check tells the restore timeline
+
+Every check records its result per version, and the [restore timeline](restoring.md) shows it: a version a drill opened is marked **Restore-tested**, one whose checksums were re-read is marked **Checksum verified**, and one nothing has looked at yet carries no badge at all.
+
+That last case is the point of keeping them separate. Scheduled checks default to the latest version only, so on a job with a long history most versions have never been read — and a badge on those would be a claim Cryoframe cannot support. If you want the whole history badged, set the scope to all versions, knowing it costs proportionally more I/O.
+
+A version is only marked when every copy checked in that run passed. If a job writes to two destinations and one copy has rotted, the version stays unbadged rather than vouching for a copy that might be the one you restore from.
+
 ### Cloud archives that have been offloaded
 
 A cloud-sync client may replace a local archive with a placeholder to save space. Reading it re-downloads it. So a scheduled health check or drill **skips** an offloaded cloud archive rather than silently pulling gigabytes back down, and reports it as "not downloaded" — which is neither a pass nor a failure, just "couldn't check it without downloading." Turn on "Download cloud archives to check them" (Settings ▸ General ▸ Archive health) to download and verify them anyway. Either way, an on-demand check from the ⋯ menu honors the same setting.
