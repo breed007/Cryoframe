@@ -2,6 +2,11 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.4.1] — 2026-08-01
+
+### Fixed
+- **The job list could be squeezed to nothing.** With the new coverage card showing, the main window at its default size gave the dashboard, the card, and the activity log their space and left none for the jobs — so a Mac with one job and one unprotected library, which is a common setup, showed an empty gap where the backups should be. The list now keeps a minimum height and the window's minimum size accounts for the card.
+
 ## [1.4.0] — 2026-08-01
 
 Recovery you can trust. The backup half of Cryoframe was well covered; this release does the same for getting your data back.
