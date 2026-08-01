@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.4.0</title>
+      <description><![CDATA[Recovery you can trust. A restore timeline for browsing a library's versions and bringing one back, badges showing how thoroughly each version was checked, and a guided four-step recovery for a new Mac that rebuilds every library as it was at one moment. Plus a dashboard advisor naming libraries no job covers, and scheduled runs that wait when the battery is low.]]></description>
+      <pubDate>Sat, 01 Aug 2026 04:25:32 +0000</pubDate>
+      <sparkle:version>20260801.0023</sparkle:version>
+      <sparkle:shortVersionString>1.4.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.4.0/Cryoframe-1.4.0.dmg" type="application/octet-stream" sparkle:edSignature="7KyPBFiW+NWa4QPVTAxjgQijvCkVU01+MLHw4KQOnRtWt0jjgV93eyVbW2aq6Lp9GPM7KOYF8qmTWW8pNwOUDg==" length="3818624" />
+    </item>
+    <item>
       <title>1.3.0</title>
       <description><![CDATA[A UX overhaul: a protection dashboard that answers "am I backed up?" at a glance, a guided New Job wizard with templates, library sizes and destination free space, drag-and-drop, light mode, keyboard shortcuts, and a consistent design system across every window. Fixes an archive check that could wrongly fail a good archive under disk contention.]]></description>
       <pubDate>Fri, 24 Jul 2026 19:58:58 +0000</pubDate>
