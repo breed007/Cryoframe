@@ -78,6 +78,27 @@ public enum RestoreDiscovery {
         }
     }
 
+    /// the distinct libraries in a scan, in discovery order (scan already sorts by
+    /// library, then newest version first). Drives the restore timeline's library list.
+    public static func libraries(in archives: [RestorableArchive]) -> [String] {
+        var seen = Set<String>(), out: [String] = []
+        for a in archives where seen.insert(a.libraryName).inserted { out.append(a.libraryName) }
+        return out
+    }
+
+    /// one library's versions, newest first.
+    public static func versions(of library: String, in archives: [RestorableArchive]) -> [RestorableArchive] {
+        archives.filter { $0.libraryName == library }
+    }
+
+    /// true when a library has no point-in-time history — a live mirror (or a legacy
+    /// single copy) is one in-place copy with no version folders, so a timeline would
+    /// be a lie. The UI shows a single "current" state for these instead.
+    public static func isSingleCurrent(_ library: String, in archives: [RestorableArchive]) -> Bool {
+        let v = versions(of: library, in: archives)
+        return v.count == 1 && v[0].version == nil
+    }
+
     public static func archive(at dir: URL) -> RestorableArchive? {
         let sidecar = dir.appendingPathComponent(ArchiveManifest.sidecarName)
         guard let m = try? ArchiveManifest.read(sidecar), !m.artifacts.isEmpty else { return nil }

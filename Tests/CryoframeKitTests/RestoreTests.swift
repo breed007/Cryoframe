@@ -329,3 +329,53 @@ private func archive(_ kind: SealedArchiveEngine.Sealed, _ lib: URL, to dir: URL
 }
 
 }   // RestoreRoundTrips
+
+// MARK: - timeline grouping (1.4 restore timeline)
+//
+// Pure grouping over a scan result — no disk needed, so these stay outside the
+// serialized round-trip suite.
+
+private func stub(_ library: String, _ version: Date?, bytes: UInt64 = 1000,
+                  format: ArchiveFormat = .sealedDMG) -> RestorableArchive {
+    RestorableArchive(dir: URL(fileURLWithPath: "/tmp/\(library)/\(version.map { VersionStamp.string($0) } ?? "current")"),
+                      libraryName: library, format: format, bytes: bytes,
+                      artifactNames: ["\(library).dmg"], encrypted: false, version: version)
+}
+
+private let d20 = VersionStamp.date("2026-07-20-020000")!
+private let d21 = VersionStamp.date("2026-07-21-020000")!
+private let d22 = VersionStamp.date("2026-07-22-020000")!
+
+@Test func timelineListsLibrariesInDiscoveryOrder() {
+    let scan = [stub("Photos", d22), stub("Photos", d21), stub("Apple Music", d22)]
+    #expect(RestoreDiscovery.libraries(in: scan) == ["Photos", "Apple Music"])   // deduped, order kept
+    #expect(RestoreDiscovery.libraries(in: []).isEmpty)
+}
+
+@Test func timelineGroupsVersionsPerLibrary() {
+    let scan = [stub("Photos", d22), stub("Photos", d21), stub("Photos", d20), stub("Apple Music", d22)]
+    let photos = RestoreDiscovery.versions(of: "Photos", in: scan)
+    #expect(photos.count == 3)
+    #expect(photos.map(\.version) == [d22, d21, d20])                 // newest first, as scan sorts
+    #expect(RestoreDiscovery.versions(of: "Apple Music", in: scan).count == 1)
+    #expect(RestoreDiscovery.versions(of: "Nope", in: scan).isEmpty)
+}
+
+@Test func mirrorHasNoTimelineButSealedDoes() {
+    // a live mirror is one copy with NO version stamp → "current", not a timeline
+    let mirror = [stub("Apple Music", nil, format: .liveMirror)]
+    #expect(RestoreDiscovery.isSingleCurrent("Apple Music", in: mirror))
+
+    // one sealed version still counts as history (more can arrive; it has a date)
+    #expect(!RestoreDiscovery.isSingleCurrent("Photos", in: [stub("Photos", d22)]))
+
+    // several sealed versions are clearly a timeline
+    #expect(!RestoreDiscovery.isSingleCurrent("Photos", in: [stub("Photos", d22), stub("Photos", d21)]))
+}
+
+@Test func mixedScanSeparatesMirrorFromSealed() {
+    let scan = [stub("Photos", d22), stub("Photos", d21), stub("Apple Music", nil, format: .liveMirror)]
+    #expect(RestoreDiscovery.libraries(in: scan) == ["Photos", "Apple Music"])
+    #expect(!RestoreDiscovery.isSingleCurrent("Photos", in: scan))
+    #expect(RestoreDiscovery.isSingleCurrent("Apple Music", in: scan))
+}
