@@ -158,7 +158,19 @@ Two doors, because there are two situations.
 
 **Restore (⌘R)** is for "I need that library back." Pick a library, and its versions appear on a timeline — each night with its size and how it moved. Choose one and bring it back beside your live library (the default, which changes nothing you have now) or in place over it. You can also open a version and pull out a handful of files instead of the whole thing.
 
+<p align="center">
+  <img src="docs/screenshots/restore-timeline.png" alt="The restore timeline: a library's versions by night, each with its size, and badges showing which were restore-tested or checksum verified" width="640">
+</p>
+
+A version a restore drill has opened is marked *Restore-tested*; one whose checksums were re-read is marked *Checksum verified*. A version nothing has checked yet carries no badge, because Cryoframe won't claim more than it knows.
+
 **Recover to this Mac (⇧⌘R)** is for a new or wiped Mac. It walks four steps: find the drive or folder holding your backups, unlock the encrypted libraries with the recovery-key file you exported, choose the moment to rebuild to, and restore. Every library comes back as it was at that moment. A library that did not run that night contributes the last version it had before then, never a newer one — otherwise you would get a Mac assembled out of different days.
+
+<p align="center">
+  <img src="docs/screenshots/recovery-point-in-time.png" alt="Choosing a moment to rebuild to: one slider, and each library shows the version it had at that moment" width="560">
+</p>
+
+In this example the moment is 2:00 AM on 31 July. Photos, which runs nightly, contributes its 31 July version. Messages runs every few days at 3:00 AM, so its last version before that moment is the 28th — restoring its 31st would pull in changes that had not happened yet.
 
 Both verify an archive before writing it, and neither overwrites anything already on the Mac.
 

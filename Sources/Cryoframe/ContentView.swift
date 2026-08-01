@@ -57,7 +57,11 @@ struct ContentView: View {
                     VStack(spacing: 8) {
                         ForEach(model.jobs) { JobRow(model: model, job: $0, onEdit: { editingJob = $0 }) }
                     }
-                }.frame(maxHeight: .infinity)
+                }
+                // the jobs ARE the window — never let the coverage card and the
+                // activity log squeeze them out. At the default size with a card
+                // showing, this list used to collapse to nothing.
+                .frame(minHeight: 132, maxHeight: .infinity)
                 if !model.activity.isEmpty {
                     Divider()
                     activity
@@ -65,7 +69,9 @@ struct ContentView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 600, minHeight: 560)
+        // tall enough that the dashboard, a coverage card, at least one job row,
+        // and the activity log all fit without anything collapsing.
+        .frame(minWidth: 600, minHeight: 620)
         .sheet(isPresented: $model.showNewJob) {
             NewJobWizard(model: model, isPresented: $model.showNewJob,
                          initialFolder: droppedFolder, initialLibraryID: model.newJobLibraryID)
