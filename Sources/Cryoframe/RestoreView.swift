@@ -692,15 +692,20 @@ private struct Sparkline: View {
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width, h = geo.size.height
+            // inset so the endpoint dot and the stroke's round caps sit INSIDE the
+            // frame — drawn edge to edge they get sliced in half by the clip.
+            let inset: CGFloat = 3
+            let plotW = max(w - inset * 2, 1)
             let mn = values.min() ?? 0, mx = values.max() ?? 1, span = max(mx - mn, 1)
             let pts: [CGPoint] = values.count < 2 ? [] : values.enumerated().map { i, v in
-                CGPoint(x: w * Double(i) / Double(values.count - 1), y: h - (v - mn) / span * (h - 4) - 2)
+                CGPoint(x: inset + plotW * Double(i) / Double(values.count - 1),
+                        y: h - (v - mn) / span * (h - 4) - 2)
             }
             ZStack {
                 if pts.count >= 2 {
                     Path { p in
-                        p.move(to: CGPoint(x: 0, y: h)); pts.forEach { p.addLine(to: $0) }
-                        p.addLine(to: CGPoint(x: w, y: h)); p.closeSubpath()
+                        p.move(to: CGPoint(x: inset, y: h)); pts.forEach { p.addLine(to: $0) }
+                        p.addLine(to: CGPoint(x: w - inset, y: h)); p.closeSubpath()
                     }
                     .fill(LinearGradient(colors: [Color.cryoAccent.opacity(0.25), .clear], startPoint: .top, endPoint: .bottom))
                     Path { p in p.move(to: pts[0]); pts.dropFirst().forEach { p.addLine(to: $0) } }

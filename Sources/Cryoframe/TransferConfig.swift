@@ -31,6 +31,15 @@ enum TransferConfig {
         return n > 0 ? n : 2
     }
 
+    /// battery level below which scheduled runs wait. 0 disables the check.
+    /// Unset (the common case) means the default floor, not "off".
+    static func batteryFloorPercent() -> Int {
+        guard UserDefaults.standard.object(forKey: Prefs.batteryFloor) != nil else {
+            return BatteryPolicy.defaultMinimumPercent
+        }
+        return UserDefaults.standard.integer(forKey: Prefs.batteryFloor)
+    }
+
     /// a job executor configured with the resumable-transfer settings. Used by
     /// both the GUI and the scheduled agent.
     static func makeExecutor(detector: ProcessDetector, store: JobStore) -> JobExecutor {

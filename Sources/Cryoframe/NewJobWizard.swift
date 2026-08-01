@@ -379,11 +379,22 @@ struct NewJobWizard: View {
         model.measureLibraries(draft.libraries)     // fill in source sizes in the background
     }
     private func matchesTemplate(_ t: JobTemplate) -> Bool {
-        guard !t.libraryNames.isEmpty else { return false }
+        // "Start from scratch" has no libraries of its own — it's the active card
+        // when nothing is chosen yet.
+        guard !t.libraryNames.isEmpty else { return draft.selectedLibraryIDs.isEmpty }
         return Set(draft.selectedLibraries.map(\.displayName)) == Set(t.libraryNames) && draft.formatKind == t.formatKind
     }
     private func applyTemplate(_ t: JobTemplate) {
-        guard !t.libraryNames.isEmpty else { return }
+        // start from scratch: clear the slate back to the app's defaults instead of
+        // doing nothing (it used to silently ignore the click).
+        guard !t.libraryNames.isEmpty else {
+            draft.selectedLibraryIDs = []
+            draft.formatKind = t.formatKind
+            draft.verification = t.verify
+            draft.retentionKind = "all"
+            freqPreset = .nightly; applyFreq(.nightly)
+            return
+        }
         draft.selectedLibraryIDs = Set(draft.libraries.filter { t.libraryNames.contains($0.displayName) }.map(\.id))
         draft.formatKind = t.formatKind; draft.verification = t.verify
         switch t.retention {

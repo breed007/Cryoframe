@@ -15,7 +15,26 @@ enum AgentMain {
         let store = JobStore.standard()
         TransferResumer.resumeAll(store: PendingTransferStore.standard())   // finish interrupted transfers first
 
-        let due = Scheduler().dueJobs(store.load(), now: Date())
+        var due = Scheduler().dueJobs(store.load(), now: Date())
+
+        // Unattended work on a dying laptop battery is how a Mac ends up flat. Hold
+        // the run for the next hourly check (it may be plugged in by then), and
+        // RECORD the deferral — a backup that quietly doesn't happen is the whole
+        // failure mode this app exists to prevent. Manual runs never come through here.
+        let power = SystemPowerSource().current()
+        let floor = TransferConfig.batteryFloorPercent()
+        if floor > 0, !due.isEmpty,
+           BatteryPolicy.shouldDeferScheduledRun(power, minimumPercent: floor) {
+            let reason = BatteryPolicy.deferralReason(power)
+            let historyStore = RunHistoryStore.standard()
+            let now = Date()
+            for job in due {
+                historyStore.append(RunRecord.make(job: job, outcome: .deferred(reason),
+                                                   startedAt: now, finishedAt: now, trigger: "scheduled"))
+            }
+            due = []
+        }
+
         let healthDue = HealthSchedule.isDue(now: Date())
         let sleepGuard = SleepGuard()
         if !due.isEmpty || healthDue { sleepGuard.begin() }     // don't idle-sleep mid scheduled work

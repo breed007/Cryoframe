@@ -37,6 +37,7 @@ private struct TransferSettings: View {
                     Text("Part size")
                     Spacer()
                     TextField("", value: $chunkValue, format: .number)
+                        .accessibilityLabel("Chunk size")
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 64)
@@ -89,6 +90,7 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.mirrorGB) private var mirrorGB = 500
     @AppStorage(Prefs.mirrorUnit) private var mirrorUnit = "GB"
     @AppStorage(Prefs.maxConcurrent) private var maxConcurrent = 2
+    @AppStorage(Prefs.batteryFloor) private var batteryFloor = BatteryPolicy.defaultMinimumPercent
     @AppStorage(Prefs.keepAwake) private var keepAwake = true
     @AppStorage(Prefs.wakeForSchedule) private var wakeForSchedule = false
     @AppStorage(Prefs.notifyPolicy) private var notifyPolicy = "failure"
@@ -109,10 +111,17 @@ private struct GeneralSettings: View {
                 Toggle("Keep the Mac awake while a backup runs", isOn: $keepAwake)
                 Toggle("Wake the Mac for scheduled backups", isOn: $wakeForSchedule)
                     .onChange(of: wakeForSchedule) { Task { await WakeScheduler.arm() } }
+                Toggle("Wait for power when the battery is low",
+                       isOn: Binding(get: { batteryFloor > 0 },
+                                     set: { batteryFloor = $0 ? BatteryPolicy.defaultMinimumPercent : 0 }))
+                if batteryFloor > 0 {
+                    Stepper("Hold scheduled runs below \(batteryFloor)% battery",
+                            value: $batteryFloor, in: 5...50, step: 5)
+                }
             } header: {
                 Text("Running")
             } footer: {
-                Text("Keeping awake prevents idle sleep during a run. Waking for a schedule changes the system power schedule and asks the helper for permission; it can't wake a Mac that's shut down or one with its lid closed.")
+                Text("Keeping awake prevents idle sleep during a run. Waking for a schedule changes the system power schedule and asks the helper for permission; it can't wake a Mac that's shut down or one with its lid closed. A run held back for battery is recorded and retried at the next hourly check — pressing Run now always runs regardless.")
             }
             Section {
                 Picker("Notify me", selection: $notifyPolicy) {
@@ -181,6 +190,7 @@ private struct GeneralSettings: View {
                         Text("Mirror size")
                         Spacer()
                         TextField("", value: $mirrorGB, format: .number)
+                            .accessibilityLabel("Mirror size")
                             .textFieldStyle(.roundedBorder)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 64)

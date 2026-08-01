@@ -16,6 +16,7 @@ enum Prefs {
     static let mirrorUnit = "default.mirrorUnit"  // "GB" | "TB", default "GB"
     static let libraryOverrides = "library.overrides"  // [contentTypeID: absolute path]
     static let coverageDismissed = "coverage.dismissed"  // [contentTypeID] the user waved off in the advisor
+    static let batteryFloor = "schedule.batteryFloor"    // Int % — hold scheduled runs below this on battery; 0 = never hold
     static let transferChunkValue = "transfer.chunkValue"  // Int, default 2
     static let transferChunkUnit = "transfer.chunkUnit"    // "GB" | "TB", default "GB"
     static let scratchDir = "transfer.scratchDir"          // absolute path (empty = system cache)

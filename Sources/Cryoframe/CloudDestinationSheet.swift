@@ -50,6 +50,7 @@ struct CloudDestinationSheet: View {
                             Text("Max file size")
                             Spacer()
                             TextField("", value: $customGB, format: .number)
+                    .accessibilityLabel("Custom size limit in GB")
                                 .textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing).frame(width: 70)
                                 .onChange(of: customGB) { _, v in if v < 1 { customGB = 1 } }
                             Text("GB")
