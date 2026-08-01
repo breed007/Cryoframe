@@ -31,6 +31,8 @@ struct CryoframeApp: App {
                 Divider()
                 Button("Restore…") { model.showRestore = true }
                     .keyboardShortcut("r", modifiers: .command)
+                Button("Recover to This Mac…") { model.showRecovery = true }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
                 Button("Storage") { model.showStorage = true }
                     .keyboardShortcut("d", modifiers: .command)
                 Button("History") { model.showHistory = true }

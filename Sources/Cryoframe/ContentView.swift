@@ -83,6 +83,7 @@ struct ContentView: View {
         .sheet(isPresented: $model.showHelp) { HelpView(isPresented: $model.showHelp) }
         .sheet(isPresented: $model.showHistory) { HistoryView(model: model, isPresented: $model.showHistory) }
         .sheet(isPresented: $model.showRestore) { RestoreView(model: model, isPresented: $model.showRestore) }
+        .sheet(isPresented: $model.showRecovery) { RecoveryWizard(model: model, isPresented: $model.showRecovery) }
         .sheet(isPresented: $model.showStorage) { StorageView(model: model, isPresented: $model.showStorage) }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(model: model, isPresented: $showOnboarding,
@@ -146,6 +147,10 @@ struct ContentView: View {
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 360)
             Button { model.showNewJob = true } label: { Label("New Job", systemImage: "plus") }
                 .controlSize(.large)
+            // a Mac with no jobs is often a NEW Mac — the person may be here to get
+            // their libraries back, not to set up a backup.
+            Button("Already have backups? Recover them…") { model.showRecovery = true }
+                .buttonStyle(.link).font(.callout)
             if !(model.helper.isEnabled && model.fullDiskAccess) {
                 Button("Setup guide…") { showOnboarding = true }.controlSize(.small)
             }

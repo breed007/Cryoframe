@@ -45,6 +45,7 @@ final class AppModel: ObservableObject {
     // can drive the same state the toolbar buttons do.
     @Published var showNewJob = false
     @Published var showRestore = false
+    @Published var showRecovery = false
     @Published var showStorage = false
     @Published var showHistory = false
     @Published var protectedBytes: UInt64?              // total on-disk footprint across all destinations (dashboard)
