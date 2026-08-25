@@ -108,11 +108,11 @@ struct EscrowView: View {
         alert.messageText = "Recovered passphrases"
         alert.informativeText = entries.isEmpty
             ? "The file contained no passphrases."
-            : entries.map { "• \($0.jobName) (\($0.library))\n    \($0.passphrase)" }.joined(separator: "\n\n")
+            : entries.map { "• \($0.jobName) (\($0.libraryList))\n    \($0.passphrase)" }.joined(separator: "\n\n")
         alert.addButton(withTitle: "Copy all")
         alert.addButton(withTitle: "Done")
         if alert.runModal() == .alertFirstButtonReturn {
-            let text = entries.map { "\($0.jobName) (\($0.library)): \($0.passphrase)" }.joined(separator: "\n")
+            let text = entries.map { "\($0.jobName) (\($0.libraryList)): \($0.passphrase)" }.joined(separator: "\n")
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         }

@@ -78,15 +78,7 @@ final class RecoveryModel: ObservableObject {
         guard let entries = PassphraseEscrow.importEntries(data, password: masterPassword) else {
             unlockError = "Wrong master password, or this isn't a Cryoframe recovery file."; return
         }
-        var map: [String: String] = [:]
-        for e in entries {
-            // an entry's `library` is the job's libraries joined with ", " — split it
-            // back out so each library can be unlocked independently.
-            for lib in e.library.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) where !lib.isEmpty {
-                map[lib] = e.passphrase
-            }
-        }
-        passphrases = map
+        passphrases = PassphraseEscrow.passphrasesByLibrary(entries)
         unlockedCount = entries.count
         masterPassword = ""                       // don't keep it around once it's been used
     }
