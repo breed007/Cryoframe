@@ -49,7 +49,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             try? fm.removeItem(at: mountpoint)
         }
 
-        try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin)
+        try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
         let dest = mountpoint.appendingPathComponent(source.root.lastPathComponent)
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
         try execute(ArchivePlan.rsync(root: source.root, into: dest))

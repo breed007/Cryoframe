@@ -40,12 +40,12 @@ public struct ArchiveReader: Sendable {
         case .sealedDMG:
             let dmg = try singleFile(result.artifacts, work: work, name: "reassembled.dmg", fm: fm)
             let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-            try exec(ArchivePlan.attach(image: dmg, mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin)
+            try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: dmg, mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
             return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
 
         case .liveMirror:
             let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-            try exec(ArchivePlan.attach(image: result.artifacts[0], mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin)
+            try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: result.artifacts[0], mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
             return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
 
         case .sealedZip:
