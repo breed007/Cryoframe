@@ -15,7 +15,9 @@ struct CryoframeApp: App {
             ContentView(model: model)
                 .tint(.cryoAccent)          // Cryoframe's electric-cyan brand accent, app-wide
         }
-        .defaultSize(width: 680, height: 720)
+        // tall enough that a first run shows an actual job row under the dashboard,
+        // rather than opening onto advice with the backups below the fold
+        .defaultSize(width: 700, height: 860)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {

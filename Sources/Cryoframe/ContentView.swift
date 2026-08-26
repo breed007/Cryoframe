@@ -46,22 +46,27 @@ struct ContentView: View {
                 Spacer()
             } else {
                 ProtectionDashboard(model: model, onNewJob: { model.showNewJob = true })
-                StoragePressureCard(model: model)
-                CoverageCard(model: model)
-                HStack {
-                    Text("Jobs").font(.headline).foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(model.jobs.count) backup \(model.jobs.count == 1 ? "job" : "jobs")")
-                        .font(.caption).foregroundStyle(.tertiary)
-                }
+                // The advisory cards scroll WITH the jobs rather than sitting above
+                // them. Fixed, they push the list down: one card left it at its floor,
+                // and a second one pushed the window's own header off the top at the
+                // default size. Whatever advice is showing, the jobs stay reachable and
+                // nothing gets clipped.
                 ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(model.jobs) { JobRow(model: model, job: $0, onEdit: { editingJob = $0 }) }
+                    VStack(alignment: .leading, spacing: 14) {
+                        StoragePressureCard(model: model)
+                        CoverageCard(model: model)
+                        HStack {
+                            Text("Jobs").font(.headline).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(model.jobs.count) backup \(model.jobs.count == 1 ? "job" : "jobs")")
+                                .font(.caption).foregroundStyle(.tertiary)
+                        }
+                        VStack(spacing: 8) {
+                            ForEach(model.jobs) { JobRow(model: model, job: $0, onEdit: { editingJob = $0 }) }
+                        }
                     }
+                    .padding(.bottom, 2)      // room for the last row's shadow
                 }
-                // the jobs ARE the window — never let the coverage card and the
-                // activity log squeeze them out. At the default size with a card
-                // showing, this list used to collapse to nothing.
                 .frame(minHeight: 132, maxHeight: .infinity)
                 if !model.activity.isEmpty {
                     Divider()
@@ -70,8 +75,9 @@ struct ContentView: View {
             }
         }
         .padding(20)
-        // tall enough that the dashboard, a coverage card, at least one job row,
-        // and the activity log all fit without anything collapsing.
+        // tall enough for the dashboard, one job row, and the activity log. Advice
+        // cards no longer factor in: they scroll with the list instead of adding to
+        // the height the window has to be.
         .frame(minWidth: 600, minHeight: 620)
         .sheet(isPresented: $model.showNewJob) {
             NewJobWizard(model: model, isPresented: $model.showNewJob,
