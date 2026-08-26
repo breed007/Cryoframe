@@ -22,9 +22,13 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
     // MARK: SnapshotBackend
 
     public func create(on volume: VolumeRef) throws -> SnapshotRef {
-        let before = Self.parseSnapshotNames(try listOutput())
-        try sh("/usr/bin/tmutil", ["localsnapshot", "/"])
-        let after = Self.parseSnapshotNames(try listOutput())
+        // tmutil works per volume. This used to always say "/", so asking for a
+        // snapshot of an external drive silently froze the boot disk instead and the
+        // library was nowhere to be found inside it.
+        let target = Self.tmutilPath(for: volume)
+        let before = Self.parseSnapshotNames(try listOutput(target))
+        try sh("/usr/bin/tmutil", ["localsnapshot", target])
+        let after = Self.parseSnapshotNames(try listOutput(target))
         guard let name = Self.identifyNewSnapshot(before: before, after: after) else {
             throw SnapshotBackendError.couldNotIdentifyNewSnapshot
         }
@@ -62,11 +66,22 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
         guard let date = Self.snapshotDate(fromName: snapshot.name) else {
             throw SnapshotBackendError.refusedForeignSnapshot(name: snapshot.name)
         }
+        // `deletelocalsnapshots` takes EITHER a mount point (drop every snapshot on
+        // that volume) OR a date (drop that one, wherever it lives). We want the date:
+        // passing both, or passing the volume, would delete more than we made.
         try sh("/usr/bin/tmutil", ["deletelocalsnapshots", date])
     }
 
+    /// the path tmutil wants for a volume: "/" for the boot disk (its data half is
+    /// mounted at /System/Volumes/Data, which tmutil does not accept), the mount
+    /// point for anything else.
+    public static func tmutilPath(for volume: VolumeRef) -> String {
+        let m = volume.mountPoint
+        return (m.isEmpty || m == "/" || m == "/System/Volumes/Data") ? "/" : m
+    }
+
     public func list(on volume: VolumeRef) throws -> [SnapshotRef] {
-        Self.parseSnapshotNames(try listOutput()).map {
+        Self.parseSnapshotNames(try listOutput(Self.tmutilPath(for: volume))).map {
             SnapshotRef(name: $0, volume: volume, createdAt: Date(timeIntervalSince1970: 0))
         }
     }
@@ -101,8 +116,8 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
 
     // MARK: plumbing
 
-    private func listOutput() throws -> String {
-        let r = try runner.run("/usr/bin/tmutil", ["listlocalsnapshots", "/"])
+    private func listOutput(_ volumePath: String = "/") throws -> String {
+        let r = try runner.run("/usr/bin/tmutil", ["listlocalsnapshots", volumePath])
         guard r.ok else { throw SnapshotBackendError.commandFailed(tool: "tmutil", status: r.status, stderr: r.stderr) }
         return r.stdout
     }

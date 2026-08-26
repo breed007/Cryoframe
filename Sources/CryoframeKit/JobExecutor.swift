@@ -73,6 +73,46 @@ public struct JobExecutor: Sendable {
         let dests: [Target]         // the available destinations to copy/ship it to
     }
 
+    /// where one library lives, and how to reach it once its disk is frozen.
+    struct LibraryPlacement: Sendable {
+        let library: ContentType
+        let liveRoot: URL?
+        let volume: SourceVolume?
+
+        /// the library's root inside the snapshot of its own volume. A volume that
+        /// couldn't be frozen falls back to reading the files live — safe only because
+        /// the run refuses to start while that library's app is open.
+        func root(in mounts: [String: String]) -> URL? {
+            guard let live = liveRoot, let volume else { return nil }
+            guard let snapshotMount = mounts[volume.mountPoint] else {
+                return FileManager.default.fileExists(atPath: live.path) ? live : nil
+            }
+            guard let frozen = volume.frozenPath(live: live.path, snapshotMount: snapshotMount) else { return nil }
+            let url = URL(fileURLWithPath: frozen)
+            return FileManager.default.fileExists(atPath: frozen) ? url : nil
+        }
+    }
+
+    /// Freeze every volume the job touches, then run `body` once with them all held —
+    /// so a job spanning two disks still reads a single moment in time. Each snapshot
+    /// is torn down as its scope unwinds, exactly as the single-volume path always did.
+    private static func withFrozenVolumes(_ volumes: [SourceVolume],
+                                          coordinator: SnapshotCoordinator,
+                                          ownerUID: uid_t,
+                                          mounts: [String: String] = [:],
+                                          _ body: @escaping @Sendable ([String: String]) async throws -> SnapshotPass
+    ) async throws -> SnapshotPass {
+        guard let volume = volumes.first else { return try await body(mounts) }
+        let rest = Array(volumes.dropFirst())
+        let ref = VolumeRef(mountPoint: volume.mountPoint, bsdDevice: "")
+        return try await coordinator.withFrozenSnapshot(of: ref, ownerUID: ownerUID) { mount in
+            var next = mounts
+            next[volume.mountPoint] = mount.mountPoint
+            return try await withFrozenVolumes(rest, coordinator: coordinator, ownerUID: ownerUID,
+                                               mounts: next, body)
+        }
+    }
+
     private struct SnapshotPass: Sendable {
         var results: [LibraryRunResult]
         var builds: [SealedBuild]
@@ -106,8 +146,35 @@ public struct JobExecutor: Sendable {
         if job.encrypted, passphrase?.isEmpty ?? true { throw ArchiveError.passphraseUnavailable }
 
         onStage(.preparing)
+
+        // Where does each library actually live? A media library big enough to be
+        // worth backing up is often on an external SSD, and freezing the boot disk
+        // tells you nothing about it. Ask the kernel per library, then freeze every
+        // distinct volume involved — all of them at once, so a job spanning two disks
+        // still captures a single moment.
+        let placements = job.libraries.map { lib -> LibraryPlacement in
+            let live = self.locator.liveRoots(of: lib).first
+            return LibraryPlacement(library: lib, liveRoot: live,
+                                    volume: live.flatMap { VolumeInspector.volume(for: $0) })
+        }
+        var volumes: [SourceVolume] = []
+        for p in placements {
+            guard let v = p.volume, v.canSnapshot, !volumes.contains(where: { $0.mountPoint == v.mountPoint })
+            else { continue }
+            volumes.append(v)
+        }
+        // A volume we can't snapshot (an exFAT or HFS+ media drive) has to be read
+        // live, which is only safe with the owning app closed — enforced below.
+        let unfreezable = placements.filter { $0.volume.map { !$0.canSnapshot } ?? false }
+        if let blocked = unfreezable.first(where: { $0.library.owningProcess.map { self.detector.isRunning($0) } ?? false }) {
+            let app = blocked.library.owningProcess?.displayName ?? "its app"
+            let fs = blocked.volume?.fsType.uppercased() ?? "this drive's format"
+            throw TargetError.unavailable(
+                "\(blocked.library.displayName) is on a \(fs) volume, which can't be frozen. Quit \(app) so it can be copied safely, then run again.")
+        }
+
         let coordinator = SnapshotCoordinator(helper: helper)
-        let pass = try await coordinator.withFrozenSnapshot(of: dataVolume, ownerUID: ownerUID) { mount -> SnapshotPass in
+        let pass = try await Self.withFrozenVolumes(volumes, coordinator: coordinator, ownerUID: ownerUID) { mounts -> SnapshotPass in
             var results: [LibraryRunResult] = []
             var builds: [SealedBuild] = []
             var cancelled = false
@@ -115,7 +182,8 @@ public struct JobExecutor: Sendable {
                 let idx = offset + 1
                 if control.isCancelled { cancelled = true; break }
                 onLibrary(library.displayName)
-                guard let root = self.locator.frozenRoots(of: library, mountPoint: mount.mountPoint).first else {
+                guard let placement = placements.first(where: { $0.library.id == library.id }),
+                      let root = placement.root(in: mounts) else {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
                 }
                 let source = ArchiveSource(name: root.lastPathComponent, root: root)
