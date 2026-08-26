@@ -121,3 +121,33 @@ private func storage(_ archives: [ArchiveSize], free: UInt64, job: String = "j")
                                     runBytes: 1_000_000_000, versionCount: 40, reclaimable: 30_000_000_000)
     #expect(AlertPolicy.payload(forStorage: f) == nil)
 }
+
+// MARK: - measuring the destination
+
+// An external drive is the destination this release is about, and it is exactly the
+// one macOS will not answer "important usage" for: it reports 0 with tens of GB free.
+// Taken at face value that reads as a full disk, so every external destination raises
+// "may not have room for the next backup" — nightly, to your phone, about nothing.
+@Test func anExternalDriveThatWillNotAnswerIsNotReportedAsFull() {
+    let (free, total) = StorageReporter.capacity(importantUsage: 0, available: 52_378_648_576,
+                                                 total: 68_509_720_576)
+    #expect(free == 52_378_648_576)
+    #expect(total == 68_509_720_576)
+
+    // and that free figure has to survive into the finding: 12 versions kept forever
+    // is the thing worth saying here, not a fabricated "no room left".
+    let archives = sizes("Photos", days: Array(14...25), bytes: 1_100_000_000)
+    let s = JobStorage(jobID: "j", jobName: "Photos nightly", targetName: "Archive HD",
+                       targetPath: "/Volumes/Archive HD", archiveBytes: 13_200_000_000,
+                       versionCount: archives.count, archives: archives,
+                       volumeFree: free, volumeTotal: total)
+    let found = StoragePressure.findings(storage: [s], retention: ["j": .keepAll])
+    #expect(found.map(\.kind) == [.unbounded])
+}
+
+// a share that answers nothing at all stays unknown, so nothing is claimed about it
+@Test func aVolumeThatAnswersNothingStaysUnknown() {
+    let (free, total) = StorageReporter.capacity(importantUsage: 0, available: 0, total: 0)
+    #expect(free == nil)
+    #expect(total == nil)
+}

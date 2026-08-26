@@ -63,15 +63,34 @@ public enum StorageReporter {
     public static func volume(of url: URL) -> (free: UInt64?, total: UInt64?) {
         var dir = url
         for _ in 0..<8 {
-            if let v = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]) {
-                let free = v.volumeAvailableCapacityForImportantUsage.map { UInt64(max(0, $0)) }
-                let total = v.volumeTotalCapacity.map { UInt64(max(0, $0)) }
-                if free != nil || total != nil { return (free, total) }
+            // the first EXISTING ancestor is the volume being asked about. Read it and
+            // stop, even when it answers "unknown" — walking further would step off an
+            // external drive into /Volumes on the boot disk and report a free-space
+            // figure belonging to an entirely different volume.
+            if let v = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey,
+                                                         .volumeAvailableCapacityKey,
+                                                         .volumeTotalCapacityKey]) {
+                // "important usage" only means anything on the volume holding the home
+                // directory. External drives, disk images, and network shares answer 0,
+                // and 0 has to be read as "this filesystem doesn't say" rather than
+                // "full" — otherwise every external destination looks like it has no
+                // room for the next run, which is the alarm nobody can act on.
+                return capacity(importantUsage: v.volumeAvailableCapacityForImportantUsage,
+                                available: v.volumeAvailableCapacity,
+                                total: v.volumeTotalCapacity)
             }
             let parent = dir.deletingLastPathComponent()
             if parent == dir { break }
             dir = parent
         }
         return (nil, nil)
+    }
+
+    /// map what a filesystem reports into what the UI may claim. Split out from the
+    /// directory walk so the "0 means unknown" rule can be tested without a volume
+    /// that answers 0 — which, being an external drive, is the awkward one to conjure.
+    static func capacity(importantUsage: Int64?, available: Int?, total: Int?) -> (free: UInt64?, total: UInt64?) {
+        (JobExecutor.usableFree(importantUsage: importantUsage, available: available),
+         total.flatMap { $0 > 0 ? UInt64($0) : nil })
     }
 }
