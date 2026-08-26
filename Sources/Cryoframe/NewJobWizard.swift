@@ -320,7 +320,13 @@ struct NewJobWizard: View {
                             .pickerStyle(.segmented).labelsHidden().fixedSize()
                     }
                     advRow("Encryption") { Toggle("", isOn: $draft.encrypt).labelsHidden().toggleStyle(.switch).onChange(of: draft.encrypt) { _, on in if on, draft.formatKind == "zip" { draft.formatKind = "dmg" } } }
-                    if draft.encrypt { advRow("Passphrase") { SecureField("Required", text: $draft.passphrase).textFieldStyle(.roundedBorder).frame(width: 190) } }
+                    if draft.encrypt {
+                        advRow("Passphrase") { SecureField("Required", text: $draft.passphrase).textFieldStyle(.roundedBorder).frame(width: 190) }
+                        // Typed twice on purpose. A passphrase nobody can check is the
+                        // one thing here with no recovery: mistype it and the archive
+                        // is sealed with a secret you never knew.
+                        advRow("Confirm") { SecureField("Type it again", text: $draft.passphraseConfirm).textFieldStyle(.roundedBorder).frame(width: 190) }
+                    }
                     advRow("Verify") {
                         Picker("", selection: verifyBinding) { Text("Checksum").tag("c"); Text("Mount & open").tag("m") }.pickerStyle(.segmented).labelsHidden().fixedSize()
                     }
@@ -334,7 +340,7 @@ struct NewJobWizard: View {
             .padding(14).background(RoundedRectangle(cornerRadius: 12).fill(Color.cryoElevated)).overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.cryoLine))
 
             if !draft.encryptionValid {
-                Label("Enter a passphrase to finish — encryption is on.", systemImage: "lock.trianglebadge.exclamationmark").font(.caption).foregroundStyle(.cryoWarn)
+                Label(passphraseHint, systemImage: "lock.trianglebadge.exclamationmark").font(.caption).foregroundStyle(.cryoWarn)
             }
         }
     }
@@ -374,6 +380,14 @@ struct NewJobWizard: View {
         }
         .padding(18)
     }
+    /// say which of the two things is wrong, rather than "enter a passphrase" at
+    /// someone who just did.
+    private var passphraseHint: String {
+        if draft.passphrase.isEmpty { return "Enter a passphrase to finish — encryption is on." }
+        if draft.passphraseConfirm.isEmpty { return "Type the passphrase again to confirm it." }
+        return "The two passphrases don't match."
+    }
+
     private var canContinue: Bool {
         switch step {
         case 0: return !draft.selectedLibraries.isEmpty
