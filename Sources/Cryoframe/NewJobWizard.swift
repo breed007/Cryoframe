@@ -218,32 +218,70 @@ struct NewJobWizard: View {
     private func destRow(_ t: Target) -> some View {
         let on = draft.selectedTargetIDs.contains(t.id)
         let primary = draft.primaryTarget?.id == t.id
-        return Button { draft.toggleTarget(t.id) } label: {
-            HStack(spacing: 12) {
-                Image(systemName: on ? "checkmark.circle.fill" : "circle").foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)).font(.title3)
-                Image(systemName: destIcon(t)).foregroundStyle(.secondary).frame(width: 20)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(t.displayName).font(.callout.weight(.semibold))
-                    Text(t.destinationDir.path).font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
-                    if let vi = model.volumeInfo(for: t.destinationDir) {
-                        Text("\(human(vi.free)) free of \(human(vi.total))").font(.caption2).foregroundStyle(.tertiary)
+        // The ✕ is a SIBLING of the select button, not a control inside its label. A
+        // button nested in another button's label never receives the click — the outer
+        // one takes it — so the ✕ silently selected the row instead of removing it, and
+        // a destination you had finished with could not be got rid of.
+        return HStack(spacing: 0) {
+            Button { draft.toggleTarget(t.id) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)).font(.title3)
+                    Image(systemName: destIcon(t)).foregroundStyle(.secondary).frame(width: 20)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(t.displayName).font(.callout.weight(.semibold))
+                        Text(t.destinationDir.path).font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                        if let vi = model.volumeInfo(for: t.destinationDir) {
+                            Text("\(human(vi.free)) free of \(human(vi.total))").font(.caption2).foregroundStyle(.tertiary)
+                        }
                     }
+                    Spacer(minLength: 8)
                 }
-                Spacer()
-                if on && primary { Text("PRIMARY").font(.caption2.weight(.bold)).foregroundStyle(.tint).padding(.horizontal, 6).padding(.vertical, 2).background(Capsule().fill(Color.cryoAccent.opacity(0.15))) }
-                Button { draft.removeTarget(t.id) } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.borderless).controlSize(.small)
-                    .disabled(!model.canRemoveTarget(t.id))
-                    .help(model.removalBlockedReason(t.id) ?? "Remove \(t.displayName) from the list")
-                    .accessibilityLabel("Remove \(t.displayName)")
+                .padding(.leading, 12).padding(.vertical, 12)
+                .contentShape(Rectangle())
             }
-            .padding(12).contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(t.displayName)\(primary && on ? ", primary destination" : "")")
+            .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+
+            if on && primary {
+                Text("PRIMARY").font(.caption2.weight(.bold)).foregroundStyle(.tint)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.cryoAccent.opacity(0.15)))
+            }
+            // a destination a job depends on stays put: removing it here would hide it
+            // without changing the job, so backups would keep going somewhere the app
+            // no longer lists. A lock says that before the click, where a dimmed ✕ —
+            // indistinguishable from a live one — said nothing at all.
+            Group {
+                if let blocked = model.removalBlockedReason(t.id) {
+                    Image(systemName: "lock.fill")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .help(blocked)
+                        .accessibilityLabel("\(t.displayName) can't be removed. \(blocked)")
+                } else {
+                    Button { draft.removeTarget(t.id) } label: {
+                        // the glyph is ~11pt; on its own that is a target you have to
+                        // aim at. The frame + contentShape give it something to hit.
+                        Image(systemName: "xmark")
+                            .font(.callout)
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                        .buttonStyle(.borderless)
+                        .help("Remove \(t.displayName) from the list")
+                        .accessibilityLabel("Remove \(t.displayName)")
+                }
+            }
+            .padding(.leading, 8).padding(.trailing, 12)
         }
-        .buttonStyle(.plain)
         .background(RoundedRectangle(cornerRadius: 11).fill(Color.cryoElevated))
-        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(on ? Color.cryoAccent.opacity(0.5) : Color.cryoLine, lineWidth: 1))
-        .accessibilityLabel("\(t.displayName)\(primary && on ? ", primary destination" : "")")
-        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+        // decoration only. An overlay sits ON TOP of the row, so without this it
+        // intercepts every click meant for the buttons underneath it — the row stops
+        // selecting and the ✕ stops removing, with nothing on screen to suggest why.
+        .overlay(RoundedRectangle(cornerRadius: 11)
+            .strokeBorder(on ? Color.cryoAccent.opacity(0.5) : Color.cryoLine, lineWidth: 1)
+            .allowsHitTesting(false))
     }
     private func destIcon(_ t: Target) -> String {
         switch t.kind { case .local: "internaldrive"; case .networkShare: "externaldrive.connected.to.line.below"; case .cloudSync: "cloud" }
