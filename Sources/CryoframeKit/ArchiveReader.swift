@@ -36,23 +36,35 @@ public struct ArchiveReader: Sendable {
         let enc = passphrase != nil
         let stdin = passphrase.map { Data($0.utf8) }
 
-        switch result.format {
-        case .sealedDMG:
-            let dmg = try singleFile(result.artifacts, work: work, name: "reassembled.dmg", fm: fm)
-            let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-            try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: dmg, mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
-            return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
+        // Anything that throws below has already created `work`, and may have got as
+        // far as attaching a device. Left alone that debris compounds: a failed attach
+        // makes the NEXT attach likelier to fail, until nothing will mount at all.
+        var mountPoint: URL?
+        do {
+            switch result.format {
+            case .sealedDMG:
+                let dmg = try singleFile(result.artifacts, work: work, name: "reassembled.dmg", fm: fm)
+                let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
+                mountPoint = mnt
+                try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: dmg, mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
+                return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
 
-        case .liveMirror:
-            let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-            try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: result.artifacts[0], mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
-            return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
+            case .liveMirror:
+                let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
+                mountPoint = mnt
+                try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: result.artifacts[0], mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
+                return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
 
-        case .sealedZip:
-            let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
-            let ex = work.appendingPathComponent("extract"); try fm.createDirectory(at: ex, withIntermediateDirectories: true)
-            try exec(Command("/usr/bin/ditto", ["-x", "-k", zip.path, ex.path]))
-            return OpenedArchive(root: ex, work: work) {}
+            case .sealedZip:
+                let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
+                let ex = work.appendingPathComponent("extract"); try fm.createDirectory(at: ex, withIntermediateDirectories: true)
+                try exec(Command("/usr/bin/ditto", ["-x", "-k", zip.path, ex.path]))
+                return OpenedArchive(root: ex, work: work) {}
+            }
+        } catch {
+            if let mnt = mountPoint { Self.detach(mnt, runner: runner) }   // may be a no-op; cheap either way
+            try? fm.removeItem(at: work)
+            throw error
         }
     }
 
