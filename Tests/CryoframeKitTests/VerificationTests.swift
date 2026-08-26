@@ -157,3 +157,71 @@ private final class Counter: @unchecked Sendable {
     func bump() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
     var value: Int { lock.lock(); defer { lock.unlock() }; return n }
 }
+
+// MARK: - cleaning up after a failed attach
+
+/// records every command, and fails detaches the way a saturated disk-image
+/// subsystem does: EAGAIN, until it has been asked enough times.
+private final class BusyDetachRunner: CommandRunner, @unchecked Sendable {
+    let lock = NSLock()
+    var commands: [[String]] = []
+    var detachAttempts = 0
+    let succeedOnAttempt: Int
+    let infoPlist: String
+    init(succeedOnAttempt: Int, infoPlist: String) {
+        self.succeedOnAttempt = succeedOnAttempt; self.infoPlist = infoPlist
+    }
+    func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+        lock.lock(); defer { lock.unlock() }
+        commands.append(args)
+        if args.first == "info" { return CommandResult(status: 0, stdout: infoPlist, stderr: "") }
+        if args.first == "detach" {
+            detachAttempts += 1
+            if detachAttempts < succeedOnAttempt {
+                return CommandResult(status: 1, stdout: "",
+                                     stderr: "hdiutil: detach failed - Resource temporarily unavailable")
+            }
+            return CommandResult(status: 0, stdout: "", stderr: "")
+        }
+        return CommandResult(status: 0, stdout: "", stderr: "")
+    }
+}
+
+private func infoPlist(imagePath: String, devices: [String]) -> String {
+    let entities = devices.map { "<dict><key>dev-entry</key><string>\($0)</string></dict>" }.joined()
+    return """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0"><dict><key>images</key><array><dict>
+    <key>image-path</key><string>\(imagePath)</string>
+    <key>system-entities</key><array>\(entities)</array>
+    </dict></array></dict></plist>
+    """
+}
+
+// The orphan cleanup runs at the worst possible moment: right after an attach failed
+// because the disk-image subsystem was saturated. A detach fired once into that same
+// contention comes back EAGAIN too, and giving up there leaves the device behind —
+// which is precisely what makes the next attach fail. The spiral is the cleanup's own
+// fault, so the cleanup has to be as patient as the attach was.
+@Test func aDetachThatComesBackBusyIsRetriedRatherThanAbandoned() {
+    let image = URL(fileURLWithPath: "/tmp/orphan-test/Photos.dmg")
+    let runner = BusyDetachRunner(succeedOnAttempt: 4,
+                                  infoPlist: infoPlist(imagePath: image.path, devices: ["/dev/disk9"]))
+    ArchiveReader.detachDevices(forImage: image, runner: runner)
+    #expect(runner.detachAttempts >= 4, "gave up after \(runner.detachAttempts) attempt(s)")
+}
+
+@Test func everyDeviceOfAnOrphanedImageIsDetached() {
+    // a failed attach leaves the whole-disk node AND its partitions; missing any of
+    // them leaves the image attached, so the orphan survives the cleanup.
+    let image = URL(fileURLWithPath: "/tmp/orphan-test/Lib.dmg")
+    let runner = BusyDetachRunner(succeedOnAttempt: 1,
+                                  infoPlist: infoPlist(imagePath: image.path,
+                                                       devices: ["/dev/disk9s1", "/dev/disk9"]))
+    ArchiveReader.detachDevices(forImage: image, runner: runner)
+    let detached = runner.commands.filter { $0.first == "detach" }.compactMap { $0.dropFirst().first }
+    #expect(Set(detached) == ["/dev/disk9", "/dev/disk9s1"])
+    // whole-disk first: detaching it takes the partitions with it
+    #expect(detached.first == "/dev/disk9")
+}

@@ -117,7 +117,12 @@ public struct ArchiveReader: Sendable {
             // whole-disk entries first: detaching one takes its partitions with it.
             let devices = entities.compactMap { $0["dev-entry"] as? String }
                 .sorted { $0.count < $1.count }
-            for dev in devices { _ = try? runner.run("/usr/bin/hdiutil", ["detach", dev, "-force"]) }
+            // A detach issued during the contention that caused the failed attach is
+            // itself likely to come back EAGAIN. Firing it once and discarding the
+            // result leaves the orphan exactly where it was — and an orphan is what
+            // makes the NEXT attach fail. Cleanup that gives up quietly is how one busy
+            // moment becomes a Mac that will not mount anything.
+            for dev in devices { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", dev, "-force"]) }
         }
     }
 
@@ -126,7 +131,7 @@ public struct ArchiveReader: Sendable {
             if let r = try? runner.run("/usr/bin/hdiutil", ["detach", mnt.path]), r.ok { return }
             Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
         }
-        _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path])
+        _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", mnt.path])
     }
 
     /// on launch, force-detach and remove any browse mounts left attached by a crash.

@@ -86,8 +86,18 @@ private func writeArchive(_ dest: URL, library: String, day: Int, passphrase: St
         let dest = tempDir(); defer { try? FileManager.default.removeItem(at: dest) }
         try writeArchive(dest, library: "Photos", day: 20, passphrase: "right", format: .dmg)
 
-        let r = RecoveryRehearsal().rehearse(destination: dest, expecting: ["Photos"],
+        // Under load the attach can come back EAGAIN before it ever looks at the key,
+        // and "the disk-image system was busy" is then the honest answer — just not the
+        // one under test. Retry past contention rather than assert on whichever answer
+        // the machine's mood produced.
+        var r = RecoveryRehearsal().rehearse(destination: dest, expecting: ["Photos"],
                                              passphrase: { _ in "wrong" })
+        for _ in 0..<3 where r.outcomes.first?.detail.contains("busy") == true {
+            r = RecoveryRehearsal().rehearse(destination: dest, expecting: ["Photos"],
+                                             passphrase: { _ in "wrong" })
+        }
+        try #require(r.outcomes.first?.detail.contains("busy") != true,
+                     "the disk-image system stayed busy for every attempt")
         #expect(!r.passed)
         #expect(r.outcomes.first?.locked == false)
         #expect(r.outcomes.first?.detail.contains("may no longer match") == true)
@@ -127,5 +137,23 @@ private func writeArchive(_ dest: URL, library: String, day: Int, passphrase: St
         #expect(!r.passed)
         #expect(r.missing == ["Photos"])
         #expect(r.outcomes.isEmpty)
+    }
+
+    // A rehearsal that runs while something else is hammering hdiutil gets the same
+    // tool failure a wrong key produces. Reporting that as "your passphrase may no
+    // longer match" tells someone their recovery key is gone when nothing is wrong,
+    // which is the one lie a rehearsal must never tell.
+    @Test func aBusyDiskImageSubsystemIsNotBlamedOnThePassphrase() {
+        let busy = ArchiveError.toolFailed(tool: "hdiutil", status: 1,
+                                           stderr: "hdiutil: attach failed - Resource temporarily unavailable")
+        #expect(RecoveryRehearsal.reason(busy, encrypted: true).contains("busy"))
+        #expect(!RecoveryRehearsal.reason(busy, encrypted: true).contains("passphrase"))
+        // and the same for a plaintext archive: still contention, not corruption
+        #expect(RecoveryRehearsal.reason(busy, encrypted: false).contains("busy"))
+
+        // a genuine authentication failure still reads as one
+        let wrongKey = ArchiveError.toolFailed(tool: "hdiutil", status: 1,
+                                               stderr: "hdiutil: attach failed - Authentication error")
+        #expect(RecoveryRehearsal.reason(wrongKey, encrypted: true).contains("may no longer match"))
     }
 }

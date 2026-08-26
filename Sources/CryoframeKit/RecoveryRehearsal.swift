@@ -126,6 +126,13 @@ public struct RecoveryRehearsal: Sendable {
         if let a = e as? ArchiveError {
             switch a {
             case .toolFailed(let tool, _, let stderr):
+                // A saturated disk-image subsystem fails an encrypted attach exactly the
+                // way a bad key does. Blaming the passphrase for contention is the worst
+                // wrong answer available here: it sends someone hunting for a recovery
+                // key, and doubting the backup, over a machine that was merely busy.
+                if ProcessCommandRunner.isTransient(stderr) {
+                    return "couldn't be opened right now — the disk-image system was busy. Worth rehearsing again."
+                }
                 if encrypted { return "wouldn't open — the passphrase on this Mac may no longer match" }
                 let line = stderr.split(separator: "\n").last.map(String.init) ?? "no output"
                 return "wouldn't open — \(tool): \(line)"
