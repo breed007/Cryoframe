@@ -30,6 +30,8 @@ public struct ArchiveCheck: Codable, Sendable, Equatable, Identifiable {
 public struct HealthReport: Sendable {
     public var checks: [ArchiveCheck]
     public var passed: Bool { checks.allSatisfy(\.passed) }
+
+    public init(checks: [ArchiveCheck]) { self.checks = checks }
 }
 
 /// the outcome for ONE archive version, kept in the health record so the UI can say
@@ -106,6 +108,32 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
 
     public var passed: Bool { failures.isEmpty }
     public var isDrill: Bool { kind == "drill" }
+    public var isRehearsal: Bool { kind == "rehearsal" }
+
+    /// what this check actually did, for anywhere it's reported. A rehearsal is not
+    /// a drill and not a checksum pass, and calling it either would misdescribe what
+    /// was proven.
+    public var passedSummary: String {
+        switch kind {
+        case "drill":     return "Restore-drilled"
+        case "rehearsal": return "Recovery-rehearsed"
+        default:          return "Archives verified"
+        }
+    }
+    public var failureNoun: String {
+        switch kind {
+        case "drill":     return "restore drill"
+        case "rehearsal": return "recovery rehearsal"
+        default:          return "archive"
+        }
+    }
+    public var explanation: String {
+        switch kind {
+        case "drill":     return "Reassembled, opened, and reopened each archive"
+        case "rehearsal": return "Looked at the destination the way a recovery would, and opened what it found"
+        default:          return "Re-verified against checksums"
+        }
+    }
 
     public init(id: String = UUID().uuidString, jobID: String, jobName: String, checkedAt: Date,
                 archivesChecked: Int, failures: [String], kind: String = "checksum", skipped: Int = 0,

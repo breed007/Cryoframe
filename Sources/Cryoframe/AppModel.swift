@@ -169,6 +169,23 @@ final class AppModel: ObservableObject {
         healthRecords = all
     }
 
+    /// Rehearse recovering this job: look at its destinations the way a recovery
+    /// would, and report what would actually come back. Off the main thread — it
+    /// opens archives.
+    func rehearseRecovery(_ job: BackupJob) {
+        guard !verifyingJobIDs.contains(job.id) else { return }
+        verifyingJobIDs.insert(job.id)
+        log("🎯 \(job.name): rehearsing a recovery…")
+        let store = JobStore.standard()
+        Task.detached {
+            let records = RehearsalSchedule.run(store: store, now: Date(), only: job.id)
+            await MainActor.run {
+                self.verifyingJobIDs.remove(job.id)
+                for r in records { self.applyHealth(r) }
+            }
+        }
+    }
+
     /// re-verify a job's existing archives against their checksums, off the main thread.
     func verifyArchives(_ job: BackupJob) {
         guard !verifyingJobIDs.contains(job.id) else { return }
@@ -299,12 +316,12 @@ final class AppModel: ObservableObject {
 
     static func healthLine(_ r: HealthRecord) -> String {
         let when = r.checkedAt.formatted(date: .abbreviated, time: .shortened)
-        let glyph = r.isDrill ? "🧪" : "🔍"
-        let verb = r.isDrill ? "drilled clean" : "verified"
+        let glyph = r.isRehearsal ? "🎯" : (r.isDrill ? "🧪" : "🔍")
+        let verb = r.isRehearsal ? "rehearsed clean" : (r.isDrill ? "drilled clean" : "verified")
         let skip = r.skipped > 0 ? " (\(r.skipped) not downloaded)" : ""
         return r.passed
             ? "\(glyph) \(r.jobName): \(r.archivesChecked) archive\(r.archivesChecked == 1 ? "" : "s") \(verb)\(skip) · \(when)"
-            : "⚠︎ \(r.jobName): \(r.failures.count) \(r.isDrill ? "restore drill" : "archive") check(s) failed\(skip) · \(when)"
+            : "⚠︎ \(r.jobName): \(r.failures.count) \(r.failureNoun) check(s) failed\(skip) · \(when)"
     }
 
     /// post a notification for a record once per session (policy is applied inside).

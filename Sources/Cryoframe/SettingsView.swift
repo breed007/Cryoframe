@@ -91,6 +91,7 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.mirrorUnit) private var mirrorUnit = "GB"
     @AppStorage(Prefs.maxConcurrent) private var maxConcurrent = 2
     @AppStorage(Prefs.batteryFloor) private var batteryFloor = BatteryPolicy.defaultMinimumPercent
+    @AppStorage(Prefs.rehearsalCadence) private var rehearsalCadence = "monthly"
     @AppStorage(Prefs.keepAwake) private var keepAwake = true
     @AppStorage(Prefs.wakeForSchedule) private var wakeForSchedule = false
     @AppStorage(Prefs.notifyPolicy) private var notifyPolicy = "failure"
@@ -111,6 +112,9 @@ private struct GeneralSettings: View {
                 Toggle("Keep the Mac awake while a backup runs", isOn: $keepAwake)
                 Toggle("Wake the Mac for scheduled backups", isOn: $wakeForSchedule)
                     .onChange(of: wakeForSchedule) { Task { await WakeScheduler.arm() } }
+                Toggle("Rehearse a recovery every month",
+                       isOn: Binding(get: { rehearsalCadence != "off" },
+                                     set: { rehearsalCadence = $0 ? "monthly" : "off" }))
                 Toggle("Wait for power when the battery is low",
                        isOn: Binding(get: { batteryFloor > 0 },
                                      set: { batteryFloor = $0 ? BatteryPolicy.defaultMinimumPercent : 0 }))
@@ -121,7 +125,7 @@ private struct GeneralSettings: View {
             } header: {
                 Text("Running")
             } footer: {
-                Text("Keeping awake prevents idle sleep during a run. Waking for a schedule changes the system power schedule and asks the helper for permission; it can't wake a Mac that's shut down or one with its lid closed. A run held back for battery is recorded and retried at the next hourly check — pressing Run now always runs regardless.")
+                Text("Keeping awake prevents idle sleep during a run. Waking for a schedule changes the system power schedule and asks the helper for permission; it can't wake a Mac that's shut down or one with its lid closed. A run held back for battery is recorded and retried at the next hourly check — pressing Run now always runs regardless. A rehearsal looks at each destination the way a recovery would and reports what would actually come back, opening only the newest version of each library.")
             }
             Section {
                 Picker("Notify me", selection: $notifyPolicy) {

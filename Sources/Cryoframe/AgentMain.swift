@@ -73,7 +73,8 @@ enum AgentMain {
             group.wait()
         }
 
-        let healthRecords = HealthSchedule.runIfDue(store: store, now: Date())   // re-verify cold archives if due
+        var healthRecords = HealthSchedule.runIfDue(store: store, now: Date())   // re-verify cold archives if due
+        healthRecords += RehearsalSchedule.runIfDue(store: store, now: Date())   // and prove a recovery would work
 
         // A destination that fills up doesn't fail loudly, it just stops working —
         // and on an unattended Mac nobody sees the dashboard say so. Warn while

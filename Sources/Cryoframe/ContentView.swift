@@ -271,6 +271,9 @@ private struct JobRow: View {
                     Button("Run restore drill…") { model.drillArchives(job) }
                         .disabled(model.verifyingJobIDs.contains(job.id))
                         .help("Reassemble, open, and reopen each archive — proves it actually restores")
+                    Button("Rehearse recovery…") { model.rehearseRecovery(job) }
+                        .disabled(model.verifyingJobIDs.contains(job.id))
+                        .help("Look at the destination the way a recovery would, and report what would actually come back")
                     if model.hasStoredPassphrase(job) {
                         Button("Copy passphrase") { model.copyPassphrase(job) }
                     }
@@ -389,8 +392,8 @@ private struct JobRow: View {
                 } else {
                     Image(systemName: h.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(h.passed ? .cryoGood : .cryoCrit)
-                    Text((h.passed ? "\(h.isDrill ? "Restore-drilled" : "Archives verified") (\(h.archivesChecked))"
-                                   : "\(h.failures.count) \(h.isDrill ? "restore drill" : "archive") check(s) failed")
+                    Text((h.passed ? "\(h.passedSummary) (\(h.archivesChecked))"
+                                   : "\(h.failures.count) \(h.failureNoun) check(s) failed")
                          + (h.skipped > 0 ? " · \(h.skipped) skipped" : ""))
                         .foregroundStyle(h.passed ? Color.secondary : Color.cryoCrit)
                 }
@@ -398,7 +401,7 @@ private struct JobRow: View {
             }
             .font(.caption2)
             .help(h.archivesChecked == 0 ? "Nothing was checked — the target may be offline, or the job hasn't run yet."
-                  : (h.passed ? (h.isDrill ? "Reassembled, opened, and reopened each archive" : "Re-verified against checksums") : h.failures.joined(separator: "\n")))
+                  : (h.passed ? h.explanation : h.failures.joined(separator: "\n")))
         }
     }
 

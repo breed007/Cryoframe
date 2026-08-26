@@ -15,6 +15,8 @@ enum Prefs {
     static let mirrorGB = "default.mirrorGB"      // Int — mirror size value (paired with mirrorUnit)
     static let mirrorUnit = "default.mirrorUnit"  // "GB" | "TB", default "GB"
     static let libraryOverrides = "library.overrides"  // [contentTypeID: absolute path]
+    static let rehearsalCadence = "rehearsal.cadence"   // "off" | "monthly" (default monthly)
+    static let lastRehearsal = "rehearsal.last"        // epoch seconds
     static let knownTargets = "targets.known"        // destinations you've chosen, remembered between launches
     static let coverageDismissed = "coverage.dismissed"  // [contentTypeID] the user waved off in the advisor
     static let batteryFloor = "schedule.batteryFloor"    // Int % — hold scheduled runs below this on battery; 0 = never hold

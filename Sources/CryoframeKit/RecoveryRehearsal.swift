@@ -145,3 +145,26 @@ public struct RecoveryRehearsal: Sendable {
         return "wouldn't open — \((e as NSError).localizedDescription)"
     }
 }
+
+extension RecoveryRehearsal.Report {
+    /// Express a rehearsal in the same shape as a health check, so it travels the
+    /// paths that already exist — run history, the job row, notifications, remote
+    /// alerts — instead of growing a second reporting system beside them.
+    ///
+    /// A library the jobs expect but that isn't there becomes a failed check with no
+    /// version, because that is exactly what it is: nothing to check.
+    public func asHealthReport(multiDestination: Bool) -> HealthReport {
+        let dest = multiDestination ? destination : nil
+        var checks = outcomes.map { o in
+            ArchiveCheck(library: o.library, version: o.version,
+                         passed: o.ok || o.skipped, detail: o.detail,
+                         destination: dest, skipped: o.skipped)
+        }
+        checks += missing.map { lib in
+            ArchiveCheck(library: lib, version: nil, passed: false,
+                         detail: "nothing to recover here — a restore would not find this library",
+                         destination: dest)
+        }
+        return HealthReport(checks: checks)
+    }
+}
