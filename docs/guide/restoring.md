@@ -62,7 +62,7 @@ If the Mac is new, or you have wiped this one, you are not looking for one libra
 
 ![Choosing a moment: one slider, and each library shows the version it had then](../screenshots/recovery-point-in-time.png)
 
-This is the part worth understanding. Libraries rarely run on the same nights — Photos might back up nightly while a project folder runs weekly. When you choose a moment, each library contributes the newest version it had **at or before** that moment, never a later one. Pick Wednesday and a library whose last run was Monday gives you its Monday version, because that is what existed on Wednesday. Its Friday version holds changes that had not happened yet, so using it would rebuild a Mac that never existed. If a library is newer than the moment you chose and has nothing that old, it offers its earliest version and says so.
+This is the part worth understanding. Libraries rarely run on the same nights — Photos might back up nightly while a project folder runs weekly. When you choose a moment, each library contributes the newest version it had **at or before** that moment, never a later one. Pick Wednesday and a library whose last run was Monday gives you its Monday version, because that is what existed on Wednesday. Its Friday version holds changes that had not happened yet, so using it would rebuild a Mac that never existed. If a library is newer than the moment you chose and has nothing that old, it gives you its earliest version and says so.
 
 ![The review step: what will be restored, from when, to where, and how much space it needs](../screenshots/recovery-review.png)
 

@@ -54,7 +54,10 @@ A rehearsal starts where a recovery starts. It scans the destination, works out 
 
 What it adds is the question no per-archive check can answer: **is everything you think you're protecting actually here?** A library your jobs claim to back up that a restore would not find is named in the result. An empty destination fails loudly rather than reporting that nothing went wrong.
 
-Rehearsals run monthly, and you can run one at any time from a job's ⋯ menu (Rehearse recovery). Only the newest version of each library is opened, so the work depends on how much you protect rather than how long you have kept it. Turn the schedule off in Settings ▸ General ▸ Running.
+Rehearsals run monthly, and you can run one at any time from a job's ⋯ menu (Rehearse recovery).
+
+![A job's ⋯ menu, with Verify archives, Run restore drill, and Rehearse recovery](../screenshots/rehearse-recovery.png)
+ Only the newest version of each library is opened, so the work depends on how much you protect rather than how long you have kept it. Turn the schedule off in Settings ▸ General ▸ Running.
 
 ### What a check tells the restore timeline
 

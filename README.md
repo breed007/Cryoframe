@@ -26,22 +26,22 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 
 ## Features
 
-- A protection dashboard at the top of the window: whether everything is backed up, the last successful run, total size protected, and free space on the destination — the job list comes below it. It also names any library on this Mac that no job covers, so a gap you forgot about does not stay invisible.
+- A protection dashboard at the top of the window: whether everything is backed up, the last successful run, total size protected, and free space on the destination. The job list comes below it. It also names any library on this Mac that no job covers, so a gap you forgot about does not stay invisible.
 - Guided setup — templates for common backups (Photos nightly, Music mirror) or a step-by-step wizard, and you can drag a folder onto the window to start a job. Each library shows its size and each destination its free space, so you can tell a backup will fit before you create it.
 - Consistent snapshots of live libraries using APFS, created and torn down per run.
-- Libraries anywhere, not just the boot disk. A Photos or Music library kept on an external SSD is backed up from a snapshot of the drive it actually lives on, and a job spanning two drives still captures a single moment. Drives that can't be snapshotted (exFAT, HFS+) are read directly instead, and the run won't start while that library's app is open, since a closed app is what makes reading it live safe.
+- Libraries on any disk. A Photos or Music library kept on an external SSD is backed up from a snapshot of the drive it actually lives on, and a job spanning two drives still captures a single moment. Drives that can't be snapshotted (exFAT, HFS+) are read directly instead, and the run won't start while that library's app is open, since a closed app is what makes reading it live safe.
 - Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
 - Several destinations per job (the 3-2-1 rule): a local drive plus a NAS plus a cloud-sync folder, all from the same snapshot. Sealed archives are compressed once and copied to each. The primary must be reached; a downed secondary finishes the run as a partial backup instead of failing it.
-- Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG — immutable, checksummed, split into volumes when the target caps file size.
+- Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG: immutable, checksummed, split into volumes when the target caps file size.
 - Resumable transfers to network shares and external drives: the archive ships in part files and picks up from the last whole part after a dropped connection or unplugged drive.
 - Restore built in: find an archive, verify it, and copy the library back out with its original folder name — beside the live one, or in place over it (staged and verified first, with the old copy moved to the Trash). Browse inside an archive and extract just the files you need.
-- A restore timeline for versioned libraries: browse a library's nights, see how its size moved, and bring back the one you want. Versions that passed a restore drill are marked as restore-tested, and ones only checked by checksum say so instead — a version nothing has checked makes no claim at all.
+- A restore timeline for versioned libraries: browse a library's nights, see how its size moved, and bring back the one you want. Versions that passed a restore drill are marked as restore-tested, and ones only checked by checksum say so instead. A version nothing has checked makes no claim at all.
 - Guided recovery for a new Mac: point it at your backups, unlock the encrypted ones with your recovery-key file, pick a moment, and every library comes back as it was then. It never restores a version written after the moment you chose, so you get the Mac you had rather than a mix of days.
 - Optional AES-256 encryption for sealed-DMG and live-mirror archives, with the passphrase kept in the Keychain so scheduled runs encrypt without prompting.
 - Versioned sealed archives with a retention policy — the last N (seven by default), a daily/weekly/monthly scheme, or keep everything if you'd rather. Bounded by default, so a job can't quietly grow until the destination is full.
 - Verification built in: a checksum manifest on every archive, plus an optional mount-and-open check that confirms the library's database opens clean.
-- Archive health monitoring: re-hash existing archives against their manifests on demand or on a weekly/monthly schedule, to catch bit rot before a restore needs them — works on encrypted archives with no passphrase.
-- Restore drills: a deeper check that reassembles, mounts or extracts, and reopens each archive (a database integrity check), proving the restore path itself works — not just that the bytes match.
+- Archive health monitoring: re-hash existing archives against their manifests on demand or on a weekly/monthly schedule, to catch bit rot before a restore needs them. Works on encrypted archives with no passphrase.
+- Restore drills: a deeper check that reassembles, mounts or extracts, and reopens each archive (a database integrity check), proving the restore path itself works, which matching bytes alone cannot.
 - Recovery rehearsals: monthly, Cryoframe looks at a destination the way a recovery would — scanning what is actually there rather than the paths a job computes — and reports what would come back. A library a job claims to protect but that a restore would not find is named, which no per-archive check can tell you.
 - Remote alerts over ntfy or a webhook (Slack/Discord/custom), sent by the scheduled runner itself, so an unattended Mac whose backups are failing reaches your phone whether or not the app is open. A destination running out of room is sent the same way, before the run that would fail.
 - Recovery-key escrow: export every archive passphrase into one master-password-encrypted file (PBKDF2 + AES-GCM), so encrypted backups survive a lost Mac.
@@ -55,6 +55,10 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Keeps the Mac awake while a backup runs, and can optionally wake it for a scheduled run, so unattended backups actually finish.
 - A menu-bar status item and notifications, so you know at a glance whether the last run — including scheduled ones — succeeded.
 - Owns its snapshots end to end. It never touches Time Machine's snapshots.
+
+<div align="center">
+  <img src="docs/screenshots/rehearse-recovery.png" alt="A job's ⋯ menu: Verify archives, Run restore drill, and Rehearse recovery" width="640">
+</div>
 
 ## Supported libraries
 
@@ -85,7 +89,7 @@ Anything else: point at any folder with "Add library", and it is treated as stat
 
 A built-in library kept somewhere other than its default location — an external drive, say — can be pointed at where it really is. Every library row in the New Job wizard has a **Change…** link, and one that isn't where the default says shows **Locate…** instead. Repointing keeps the library's identity: Photos is still Photos, so it still knows the owning app to watch for and still gets its database integrity check. Anything else can be added with **Back up another folder…**, and the same locations are editable later in Settings ▸ Libraries.
 
-Libraries on other drives are backed up from a snapshot of the drive they live on, so an external APFS SSD works the same way the boot disk does. A drive formatted exFAT or HFS+ can't be snapshotted at all; those are read directly instead, and the run refuses to start while the library's app is open — with the app closed, reading it live is consistent.
+Libraries on other drives are backed up from a snapshot of the drive they live on, so an external APFS SSD works the same way the boot disk does. A drive formatted exFAT or HFS+ can't be snapshotted at all; those are read directly instead, and the run refuses to start while the library's app is open. With the app closed, reading it live is consistent.
 
 ## Install
 
@@ -103,7 +107,7 @@ xcodegen generate
 open Cryoframe.xcodeproj
 ```
 
-Set `DEVELOPMENT_TEAM` in `project.yml` to your own Team ID first — the privileged helper will not register without a Developer ID. The `.xcodeproj` is generated and gitignored; edit `project.yml`, never the project file. To build, sign, and install in one step:
+Set `DEVELOPMENT_TEAM` in `project.yml` to your own Team ID first. The privileged helper will not register without a Developer ID. The `.xcodeproj` is generated and gitignored; edit `project.yml`, never the project file. To build, sign, and install in one step:
 
 ```
 ./scripts/build-and-install.sh
@@ -168,13 +172,13 @@ Two doors, because there are two situations.
 
 A version a restore drill has opened is marked *Restore-tested*; one whose checksums were re-read is marked *Checksum verified*. A version nothing has checked yet carries no badge, because Cryoframe won't claim more than it knows.
 
-**Recover to this Mac (⇧⌘R)** is for a new or wiped Mac. It walks four steps: find the drive or folder holding your backups, unlock the encrypted libraries with the recovery-key file you exported, choose the moment to rebuild to, and restore. Every library comes back as it was at that moment. A library that did not run that night contributes the last version it had before then, never a newer one — otherwise you would get a Mac assembled out of different days.
+**Recover to this Mac (⇧⌘R)** is for a new or wiped Mac. It walks four steps: find the drive or folder holding your backups, unlock the encrypted libraries with the recovery-key file you exported, choose the moment to rebuild to, and restore. Every library comes back as it was at that moment. A library that did not run that night contributes the last version it had before then, never a newer one. Otherwise you would get a Mac assembled out of different days.
 
 <p align="center">
   <img src="docs/screenshots/recovery-point-in-time.png" alt="Choosing a moment to rebuild to: one slider, and each library shows the version it had at that moment" width="560">
 </p>
 
-In this example the moment is 2:00 AM on 31 July. Photos, which runs nightly, contributes its 31 July version. Messages runs every few days at 3:00 AM, so its last version before that moment is the 28th — restoring its 31st would pull in changes that had not happened yet.
+In this example the moment is 2:00 AM on 31 July. Photos, which runs nightly, contributes its 31 July version. Messages runs every few days at 3:00 AM, so its last version before that moment is the 28th; restoring its 31st would pull in changes that had not happened yet.
 
 Both verify an archive before writing it, and neither overwrites anything already on the Mac.
 
