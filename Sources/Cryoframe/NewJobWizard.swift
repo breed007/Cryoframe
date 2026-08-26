@@ -129,6 +129,8 @@ struct NewJobWizard: View {
             }
             HStack { Rectangle().fill(Color.cryoLine).frame(height: 1); Text("or pick libraries").font(.caption).foregroundStyle(.tertiary).fixedSize(); Rectangle().fill(Color.cryoLine).frame(height: 1) }
             VStack(spacing: 2) { ForEach(draft.libraries) { lib in libraryRow(lib) } }
+            Button { addFolderLibrary() } label: { Label("Back up another folder…", systemImage: "folder.badge.plus") }
+                .buttonStyle(.link).font(.callout)
         }
     }
     private func templateCard(_ t: JobTemplate) -> some View {
@@ -161,6 +163,14 @@ struct NewJobWizard: View {
                     Text(lib.paths.first?.liveURL(home: NSHomeDirectory()).path ?? "").font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                 }
                 Spacer()
+                if model.libraryValid[lib.id] == false {
+                    // a library kept on an external drive isn't where the default says.
+                    // Say so here and let it be pointed at, instead of failing at run time.
+                    Text("not at this path").font(.caption2).foregroundStyle(.cryoWarn)
+                }
+                Button(model.libraryValid[lib.id] == false ? "Locate…" : "Change…") { relocate(lib) }
+                    .buttonStyle(.link).font(.caption)
+                    .accessibilityLabel("Choose where \(lib.displayName) is kept")
                 librarySizeTrailing(lib)
             }
             .padding(.vertical, 8).padding(.horizontal, 10).contentShape(Rectangle())
@@ -176,6 +186,18 @@ struct NewJobWizard: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("WHERE THE COPIES GO").font(.caption2.weight(.bold)).tracking(0.5).foregroundStyle(.tertiary)
             ForEach(draft.targets) { t in destRow(t) }
+            if draft.targets.isEmpty {
+                Text("No destinations yet — add the drive, share, or folder your backups should go to.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            if let clash = sameDiskAsSource {
+                // a copy on the same disk as the original is not a backup: one drive
+                // failure takes both. Worth saying plainly rather than counting it.
+                Label("\(clash) is on the same disk as what you're backing up, so one drive failure would take both copies. Add a second destination on another drive.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.cryoWarn)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Menu {
                 Button("Local folder…") { addTarget(.local) }
                 Button("Network or external drive…") { addTarget(.external) }
@@ -209,6 +231,11 @@ struct NewJobWizard: View {
                 }
                 Spacer()
                 if on && primary { Text("PRIMARY").font(.caption2.weight(.bold)).foregroundStyle(.tint).padding(.horizontal, 6).padding(.vertical, 2).background(Capsule().fill(Color.cryoAccent.opacity(0.15))) }
+                Button { draft.removeTarget(t.id) } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless).controlSize(.small)
+                    .disabled(!model.canRemoveTarget(t.id))
+                    .help(model.removalBlockedReason(t.id) ?? "Remove \(t.displayName) from the list")
+                    .accessibilityLabel("Remove \(t.displayName)")
             }
             .padding(12).contentShape(Rectangle())
         }
@@ -412,6 +439,46 @@ struct NewJobWizard: View {
         case .manual:      draft.freqKind = .manual
         }
     }
+    /// point a known library at where it actually lives — an external SSD, usually.
+    /// Saved as a location override, so every job and every check uses it from now on.
+    private func relocate(_ lib: ContentType) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.allowsMultipleSelection = false
+        panel.message = "Where is \(lib.displayName) kept?"
+        if let current = lib.paths.first?.liveURL(home: NSHomeDirectory()) {
+            panel.directoryURL = current.deletingLastPathComponent()
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        LibraryOverrides.set(id: lib.id, path: url.path)
+        draft.refreshBuiltInLibraries()
+        draft.selectedLibraryIDs.insert(lib.id)
+        model.measureLibraries(draft.libraries)
+    }
+
+    /// back up any folder, not just the libraries Cryoframe knows by name.
+    private func addFolderLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+        panel.message = "Choose a folder to back up"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let ct = ContentType.genericFolder(id: url.path, displayName: url.lastPathComponent,
+                                           path: ContentView.libraryPath(for: url, home: NSHomeDirectory()))
+        draft.addLibrary(ct, at: url)
+        model.measureLibraries(draft.libraries)
+    }
+
+    /// the name of a chosen destination that shares a disk with a selected library.
+    private var sameDiskAsSource: String? {
+        let sourceMounts = Set(draft.selectedLibraries.compactMap { lib -> String? in
+            guard let root = lib.paths.first?.liveURL(home: NSHomeDirectory()) else { return nil }
+            return VolumeInspector.volume(for: root)?.mountPoint
+        })
+        guard !sourceMounts.isEmpty else { return nil }
+        return draft.dedupedTargets.first {
+            VolumeInspector.volume(for: $0.destinationDir).map { sourceMounts.contains($0.mountPoint) } ?? false
+        }?.displayName
+    }
+
     private enum DestKind { case local, external, cloud }
     private func addTarget(_ kind: DestKind) {
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.allowsMultipleSelection = false

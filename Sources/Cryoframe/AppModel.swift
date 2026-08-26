@@ -63,11 +63,11 @@ final class AppModel: ObservableObject {
     }
 
     init() {
-        let pref = UserDefaults.standard.string(forKey: Prefs.archiveDir)
-        let dir = (pref.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) })
-            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Cryoframe Archives", isDirectory: true)
-        targets = [.localVolume(id: "local-default", name: dir.lastPathComponent, dir: dir)]
+        // No default destination. Seeding one put a backup of the boot disk ON the
+        // boot disk, pre-selected — the path of least resistance produced a copy that
+        // survives nothing but an accidental delete. Choosing is the whole point.
+        // The destinations you do choose are remembered, so choosing happens once.
+        targets = Self.loadKnownTargets()
         let loaded = store.load()
         jobs = loaded.jobs
         reloadHistory()                         // last-run badges, persisted across launches
@@ -344,16 +344,39 @@ final class AppModel: ObservableObject {
 
     func addJob(_ job: BackupJob) { store.upsert(job); jobs = store.load().jobs; revalidate(); armWake(); refreshProtectedSize(force: true) }
     func deleteJob(_ id: String) { stopJob(id); KeychainArchiveKey.delete(jobID: id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
-    func addTarget(_ target: Target) { targets.removeAll { $0.id == target.id }; targets.append(target) }
+    func addTarget(_ target: Target) {
+        targets.removeAll { $0.id == target.id }; targets.append(target)
+        Self.saveKnownTargets(targets)
+    }
 
-    /// drop a destination from the picker list. Refuses the built-in default and any
-    /// destination a job still uses (removing it wouldn't change the job, just hide it).
+    /// destinations you've picked before, so a removed default doesn't mean choosing
+    /// your NAS again on every launch.
+    private static func loadKnownTargets() -> [Target] {
+        guard let data = UserDefaults.standard.data(forKey: Prefs.knownTargets),
+              let list = try? JSONDecoder().decode([Target].self, from: data) else { return [] }
+        return list
+    }
+    private static func saveKnownTargets(_ list: [Target]) {
+        guard let data = try? JSONEncoder().encode(list) else { return }
+        UserDefaults.standard.set(data, forKey: Prefs.knownTargets)
+    }
+
+    /// drop a destination from the picker list. Still refuses one a job depends on —
+    /// removing it there would hide the destination without changing the job, which
+    /// reads as "deleted" while backups keep going to it.
     func canRemoveTarget(_ id: String) -> Bool {
-        id != "local-default" && !jobs.contains { $0.targets.contains { $0.id == id } }
+        !jobs.contains { $0.targets.contains { $0.id == id } }
+    }
+    /// why a destination can't be removed, for the UI to say out loud.
+    func removalBlockedReason(_ id: String) -> String? {
+        let users = jobs.filter { $0.targets.contains { $0.id == id } }.map(\.name)
+        guard !users.isEmpty else { return nil }
+        return "\(users.joined(separator: ", ")) back\(users.count == 1 ? "s" : "") up here. Edit or delete the job first."
     }
     func removeTarget(_ id: String) {
         guard canRemoveTarget(id) else { return }
         targets.removeAll { $0.id == id }
+        Self.saveKnownTargets(targets)
     }
 
     /// distinct destinations to offer in Restore — the session targets plus every
