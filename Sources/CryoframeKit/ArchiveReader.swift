@@ -40,18 +40,19 @@ public struct ArchiveReader: Sendable {
         // far as attaching a device. Left alone that debris compounds: a failed attach
         // makes the NEXT attach likelier to fail, until nothing will mount at all.
         var mountPoint: URL?
+        var attemptedImage: URL?          // so a device left behind by a failed attach can be found
         do {
             switch result.format {
             case .sealedDMG:
                 let dmg = try singleFile(result.artifacts, work: work, name: "reassembled.dmg", fm: fm)
                 let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-                mountPoint = mnt
+                mountPoint = mnt; attemptedImage = dmg
                 try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: dmg, mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
                 return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
 
             case .liveMirror:
                 let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-                mountPoint = mnt
+                mountPoint = mnt; attemptedImage = result.artifacts[0]
                 try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: result.artifacts[0], mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
                 return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
 
@@ -63,6 +64,7 @@ public struct ArchiveReader: Sendable {
             }
         } catch {
             if let mnt = mountPoint { Self.detach(mnt, runner: runner) }   // may be a no-op; cheap either way
+            if let image = attemptedImage { Self.detachDevices(forImage: image, runner: runner) }
             try? fm.removeItem(at: work)
             throw error
         }
@@ -95,6 +97,30 @@ public struct ArchiveReader: Sendable {
 
     /// detach a browse mount, retrying then forcing — Finder holding the mount open
     /// otherwise leaves it (and the temp dir) attached after "Done browsing".
+    /// Force-detach every device still attached for this image.
+    ///
+    /// A failed attach can leave a device behind with NO mount point — the device
+    /// node exists, nothing was mounted. Detaching by path cannot find those, so they
+    /// accumulate, and each orphan makes the next attach likelier to fail with EAGAIN
+    /// until nothing on the Mac will mount. Only a reboot or a manual detach clears
+    /// them, which is not a thing to ask of someone whose backup just failed.
+    @Sendable static func detachDevices(forImage image: URL, runner: CommandRunner) {
+        guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"]), r.ok,
+              let data = r.stdout.data(using: .utf8),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let images = root["images"] as? [[String: Any]] else { return }
+        let target = image.resolvingSymlinksInPath().path
+        for img in images {
+            guard let path = img["image-path"] as? String,
+                  URL(fileURLWithPath: path).resolvingSymlinksInPath().path == target,
+                  let entities = img["system-entities"] as? [[String: Any]] else { continue }
+            // whole-disk entries first: detaching one takes its partitions with it.
+            let devices = entities.compactMap { $0["dev-entry"] as? String }
+                .sorted { $0.count < $1.count }
+            for dev in devices { _ = try? runner.run("/usr/bin/hdiutil", ["detach", dev, "-force"]) }
+        }
+    }
+
     @Sendable static func detach(_ mnt: URL, runner: CommandRunner) {
         for i in 0..<5 {
             if let r = try? runner.run("/usr/bin/hdiutil", ["detach", mnt.path]), r.ok { return }
