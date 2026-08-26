@@ -23,7 +23,14 @@ enum RehearsalSchedule {
     static func isDue(now: Date) -> Bool {
         guard enabled else { return false }
         let last = UserDefaults.standard.double(forKey: Prefs.lastRehearsal)
-        guard last > 0 else { return true }                 // never run: do one
+        guard last > 0 else {
+            // Never run here. Start the clock instead of rehearsing immediately:
+            // otherwise updating the app makes the next hourly tick open an archive
+            // from every library, which on a big NAS is real work nobody asked for
+            // at a moment they didn't choose. The first one lands a month out.
+            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Prefs.lastRehearsal)
+            return false
+        }
         return now.timeIntervalSince1970 - last >= month
     }
 

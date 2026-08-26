@@ -2,6 +2,28 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.5.0] — 2026-08-26
+
+Making good on things the app already claimed. Every item here closes a gap between what Cryoframe said it did and what it actually did.
+
+### Added
+- **Libraries on other disks.** A library kept on an external SSD — where a photo or music library big enough to be worth backing up usually lives — could not be backed up at all. Cryoframe froze the boot disk wherever the library was, looked for it inside that snapshot, and reported "library not found" about a library sitting right there. Each library is now placed by asking the kernel which volume its files are on, and every disk involved is frozen; a job spanning two drives still captures one moment. Volumes that cannot be frozen (exFAT, HFS+) are read live instead, and the run refuses to start while that library's app is open, naming the drive, the format, and the app to quit.
+- **Alerts from an unattended Mac.** Remote alerts existed to tell you a backup failed while you were away, but only the running app ever sent one. The scheduled runner — the thing actually running when you are away — sent nothing, and the app suppresses anything that predates its launch, so a failure it was not running for was never announced at all. The agent now alerts for the runs and health checks it performs.
+- **Recovery rehearsal.** A restore drill proves an archive opens; it cannot prove a recovery works, because it derives every path from the job. A rehearsal looks where a recovery looks: it scans the destination, plans the newest moment, and opens what it finds. A library the jobs claim to protect but that a restore would not find is named. Monthly by default, on demand from a job's ⋯ menu, and bounded to the newest version of each library.
+- **Storage pressure.** A destination that fills up does not degrade, it stops, and every run after it fails the same way. Cryoframe now says so first, measured against what the last run of that job actually took rather than a percentage of the volume. The agent sends it as an alert, at most once a day per destination.
+- **Choosing sources and destinations.** Any library row can be pointed at where it is really kept, any folder can be added as a source, and destinations can be removed.
+
+### Changed
+- **New jobs keep the last 7 versions instead of every version.** Keeping everything meant a sealed job grew until the destination filled, while the app promised retention was what stopped that. Existing jobs are untouched.
+- **There is no default destination.** The old one wrote a backup of the boot disk onto the boot disk, pre-selected, so the path of least resistance produced a copy that one drive failure would take along with the original. A destination on the same disk as its source now says so.
+- Checks say what they actually did: *Recovery-rehearsed*, *Restore-drilled*, *Archives verified*.
+
+### Fixed
+- **A library name containing a comma locked you out of your own backup.** Recovery matches archives to keys by library name, and those names were stored joined by commas and split apart again — so "Client Work, 2026" came back as two names matching nothing, and that library could never be unlocked on a new Mac. Recovery files written by earlier versions still open.
+- **An encrypted backup could not be created from the New Job wizard.** Turning encryption on and typing a passphrase left it asking for a passphrase, and Create job did nothing; the confirmation field it validated against did not exist.
+- **A failed disk-image attach left a device behind**, and each one made the next attach likelier to fail, until nothing on the Mac would mount. Attaches also queue now, so two concurrent jobs cannot fail each other's verification.
+- The job list could be squeezed to nothing at the default window size when a coverage card was showing.
+
 ## [1.4.1] — 2026-08-01
 
 ### Fixed

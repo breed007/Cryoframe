@@ -2,6 +2,8 @@
 
 [← Back to contents](README.md)
 
+> **A library somewhere other than its default location** — on an external SSD, typically — is chosen the same way as any other. In the New Job wizard, a library row that isn't where the default path says shows **Locate…**; any row can be repointed with **Change…**. Repointing keeps the library's identity, so Photos still knows to watch for the Photos app and still gets its database check. Backing up a library on another drive works the same as the boot disk when that drive is APFS; exFAT and HFS+ drives can't be snapshotted, so Cryoframe reads them directly and won't start while the owning app is open.
+
 A job is one backup definition: which libraries to capture, where to put them, in what format, and how often. The main window lists your jobs, each with its last result and next run time.
 
 ## Making a job

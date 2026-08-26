@@ -12,13 +12,21 @@ A live mirror works differently. It keeps a single copy that each run updates in
 
 ## Retention
 
-Keeping every version forever fills a disk. When you make a sealed job, you choose a retention policy:
+Keeping every version forever fills a disk. A new sealed job keeps **the last 7 versions**, which bounds it; you can change that when you make the job or any time after:
 
-- Keep all versions.
-- Keep the last N versions.
+- Keep the last N versions (the default, N of 7).
+- Keep all versions — unbounded, so watch the destination.
 - Keep a daily, weekly, and monthly set (a grandfather-father-son scheme), which thins older versions while keeping long-range coverage.
 
+Jobs made before this was the default keep whatever you chose then, including "keep all". Cryoframe will tell you if one of them is growing with nothing to stop it, and how much keeping only the recent versions would give back.
+
 After each run, Cryoframe prunes the versions the policy no longer keeps. Only a complete version with a checksum manifest counts toward the policy. A version left half-written by a failed or cancelled run is swept away and never occupies a slot that would push out a good archive.
+
+## When a destination is filling up
+
+A full destination doesn't slow backups down, it stops them: the run fails on a free-space check and every run after it fails the same way, while the dashboard still shows the last success. Cryoframe warns first.
+
+The measure is whether there's room for another run of that job, compared against what its last run actually took rather than a percentage of the volume. Ten percent of a 4 TB NAS is enormous; ten percent of a 500 GB drive is nothing. When there isn't, the main window says so and the scheduled runner sends it as an alert, at most once a day per destination.
 
 ## Storage
 

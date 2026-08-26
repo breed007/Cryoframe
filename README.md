@@ -29,6 +29,7 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - A protection dashboard at the top of the window: whether everything is backed up, the last successful run, total size protected, and free space on the destination — the job list comes below it. It also names any library on this Mac that no job covers, so a gap you forgot about does not stay invisible.
 - Guided setup — templates for common backups (Photos nightly, Music mirror) or a step-by-step wizard, and you can drag a folder onto the window to start a job. Each library shows its size and each destination its free space, so you can tell a backup will fit before you create it.
 - Consistent snapshots of live libraries using APFS, created and torn down per run.
+- Libraries anywhere, not just the boot disk. A Photos or Music library kept on an external SSD is backed up from a snapshot of the drive it actually lives on, and a job spanning two drives still captures a single moment. Drives that can't be snapshotted (exFAT, HFS+) are read directly instead, and the run won't start while that library's app is open, since a closed app is what makes reading it live safe.
 - Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
 - Several destinations per job (the 3-2-1 rule): a local drive plus a NAS plus a cloud-sync folder, all from the same snapshot. Sealed archives are compressed once and copied to each. The primary must be reached; a downed secondary finishes the run as a partial backup instead of failing it.
 - Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG — immutable, checksummed, split into volumes when the target caps file size.
@@ -37,15 +38,16 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - A restore timeline for versioned libraries: browse a library's nights, see how its size moved, and bring back the one you want. Versions that passed a restore drill are marked as restore-tested, and ones only checked by checksum say so instead — a version nothing has checked makes no claim at all.
 - Guided recovery for a new Mac: point it at your backups, unlock the encrypted ones with your recovery-key file, pick a moment, and every library comes back as it was then. It never restores a version written after the moment you chose, so you get the Mac you had rather than a mix of days.
 - Optional AES-256 encryption for sealed-DMG and live-mirror archives, with the passphrase kept in the Keychain so scheduled runs encrypt without prompting.
-- Versioned sealed archives with a retention policy — keep all, the last N, or a daily/weekly/monthly scheme — so you can restore a point in time without the disk filling up.
+- Versioned sealed archives with a retention policy — the last N (seven by default), a daily/weekly/monthly scheme, or keep everything if you'd rather. Bounded by default, so a job can't quietly grow until the destination is full.
 - Verification built in: a checksum manifest on every archive, plus an optional mount-and-open check that confirms the library's database opens clean.
 - Archive health monitoring: re-hash existing archives against their manifests on demand or on a weekly/monthly schedule, to catch bit rot before a restore needs them — works on encrypted archives with no passphrase.
 - Restore drills: a deeper check that reassembles, mounts or extracts, and reopens each archive (a database integrity check), proving the restore path itself works — not just that the bytes match.
-- Remote alerts over ntfy or a webhook (Slack/Discord/custom), so an unattended Mac whose backups are failing can push a message to your phone, independent of local notifications.
+- Recovery rehearsals: monthly, Cryoframe looks at a destination the way a recovery would — scanning what is actually there rather than the paths a job computes — and reports what would come back. A library a job claims to protect but that a restore would not find is named, which no per-archive check can tell you.
+- Remote alerts over ntfy or a webhook (Slack/Discord/custom), sent by the scheduled runner itself, so an unattended Mac whose backups are failing reaches your phone whether or not the app is open. A destination running out of room is sent the same way, before the run that would fail.
 - Recovery-key escrow: export every archive passphrase into one master-password-encrypted file (PBKDF2 + AES-GCM), so encrypted backups survive a lost Mac.
 - Storage overview: per-job, per-version sizes against the free space on each destination volume.
 - In-app updates over an Ed25519-signed appcast, and a first-run walkthrough for the helper and Full Disk Access.
-- Targets for local disks, network shares, and cloud-sync folders, each with its own size cap and an availability preflight so a run never starts against an unmounted drive.
+- Targets for local disks, network shares, and cloud-sync folders, each with its own size cap and an availability preflight so a run never starts against an unmounted drive. There's no default destination to accept without thinking, and choosing one that shares a disk with what you're backing up says so.
 - Cloud-sync aware: detects OneDrive/Dropbox/Google Drive/Box/iCloud folders, splits sealed archives under the plan's single-file limit, and skips offloaded (placeholder) archives during scheduled checks instead of silently re-downloading them.
 - Run jobs concurrently up to a configurable limit, with live progress — speed, time elapsed, and time remaining — and pause, resume, or stop a run in flight.
 - Durable run history: every run, manual or scheduled, is recorded with its outcome, per-library detail, duration, size, and any error, and survives quitting the app.
@@ -81,7 +83,9 @@ Templates (you point at the library, since these live anywhere — often on exte
 
 Anything else: point at any folder with "Add library", and it is treated as static content.
 
-A built-in library kept somewhere other than its default location — an external drive, say — can be repointed in Settings ▸ Libraries. The owning app and integrity check stay attached.
+A built-in library kept somewhere other than its default location — an external drive, say — can be pointed at where it really is. Every library row in the New Job wizard has a **Change…** link, and one that isn't where the default says shows **Locate…** instead. Repointing keeps the library's identity: Photos is still Photos, so it still knows the owning app to watch for and still gets its database integrity check. Anything else can be added with **Back up another folder…**, and the same locations are editable later in Settings ▸ Libraries.
+
+Libraries on other drives are backed up from a snapshot of the drive they live on, so an external APFS SSD works the same way the boot disk does. A drive formatted exFAT or HFS+ can't be snapshotted at all; those are read directly instead, and the run refuses to start while the library's app is open — with the app closed, reading it live is consistent.
 
 ## Install
 

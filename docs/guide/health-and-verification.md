@@ -46,6 +46,16 @@ Set the depth in Settings ▸ General ▸ Archive health: Checksum (fast, the de
 
 A drill is heavier than a checksum check — it opens every archive in scope — so "Latest version only" is usually the right scope for a scheduled drill on a job with many versions.
 
+### Recovery rehearsals
+
+A drill proves an archive opens. It cannot prove a *recovery* works, because it looks for each archive at the path the job says it should be. If a destination is reorganised, a library folder renamed, or a job quietly stops writing one library, the drill keeps checking the paths it computed and keeps passing — while someone restoring on a new Mac would find nothing there.
+
+A rehearsal starts where a recovery starts. It scans the destination, works out the newest moment it could restore to, and for each library verifies the checksums, opens the archive, and confirms there is something readable inside. It stops before copying anything back: moving the bytes is the slow part, and finding the archives, matching the keys, choosing the versions and opening them is the part that goes wrong.
+
+What it adds is the question no per-archive check can answer: **is everything you think you're protecting actually here?** A library your jobs claim to back up that a restore would not find is named in the result. An empty destination fails loudly rather than reporting that nothing went wrong.
+
+Rehearsals run monthly, and you can run one at any time from a job's ⋯ menu (Rehearse recovery). Only the newest version of each library is opened, so the work depends on how much you protect rather than how long you have kept it. Turn the schedule off in Settings ▸ General ▸ Running.
+
 ### What a check tells the restore timeline
 
 Every check records its result per version, and the [restore timeline](restoring.md) shows it: a version a drill opened is marked **Restore-tested**, one whose checksums were re-read is marked **Checksum verified**, and one nothing has looked at yet carries no badge at all.
