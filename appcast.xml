@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.5.0</title>
+      <description><![CDATA[Making good on things Cryoframe already claimed: libraries on other disks, alerts from an unattended Mac, recovery rehearsals, and storage pressure.]]></description>
+      <pubDate>Wed, 26 Aug 2026 14:35:02 +0000</pubDate>
+      <sparkle:version>20260826.1033</sparkle:version>
+      <sparkle:shortVersionString>1.5.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.5.0/Cryoframe-1.5.0.dmg" type="application/octet-stream" sparkle:edSignature="IMDjQmjNqvOx7h8sIYTKJmzF1kZ2nZ28cXvHlB2l8DQ17y4qNuNR/mwbiAPk8N5B98Vdv2LJWzaUVvLcDHqFBA==" length="3978925" />
+    </item>
+    <item>
       <title>1.4.1</title>
       <description><![CDATA[Fixes a layout bug in 1.4.0: with the coverage card showing, the job list could be squeezed to nothing at the default window size, so a Mac with one job and one unprotected library showed an empty gap where the backups should be.]]></description>
       <pubDate>Sat, 01 Aug 2026 05:19:25 +0000</pubDate>
