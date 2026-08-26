@@ -102,19 +102,20 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
     public var kind: String            // "checksum" (re-hash) | "drill" (restore + reopen)
     public var skipped: Int            // cloud placeholders not downloaded, so not checked
     public var verified: [VerifiedArchive]   // per-version outcomes (empty on pre-1.4 records)
+    public var trigger: String              // "manual" (you asked) | "scheduled" (the agent) — decides who alerts
 
     public var passed: Bool { failures.isEmpty }
     public var isDrill: Bool { kind == "drill" }
 
     public init(id: String = UUID().uuidString, jobID: String, jobName: String, checkedAt: Date,
                 archivesChecked: Int, failures: [String], kind: String = "checksum", skipped: Int = 0,
-                verified: [VerifiedArchive] = []) {
+                verified: [VerifiedArchive] = [], trigger: String = "manual") {
         self.id = id; self.jobID = jobID; self.jobName = jobName; self.checkedAt = checkedAt
         self.archivesChecked = archivesChecked; self.failures = failures; self.kind = kind
-        self.skipped = skipped; self.verified = verified
+        self.skipped = skipped; self.verified = verified; self.trigger = trigger
     }
 
-    enum CodingKeys: String, CodingKey { case id, jobID, jobName, checkedAt, archivesChecked, failures, kind, skipped, verified }
+    enum CodingKeys: String, CodingKey { case id, jobID, jobName, checkedAt, archivesChecked, failures, kind, skipped, verified, trigger }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -127,10 +128,12 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
         kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "checksum"   // pre-1.1 records
         skipped = try c.decodeIfPresent(Int.self, forKey: .skipped) ?? 0          // pre-1.2 records
         verified = try c.decodeIfPresent([VerifiedArchive].self, forKey: .verified) ?? []   // pre-1.4 records
+        trigger = try c.decodeIfPresent(String.self, forKey: .trigger) ?? "manual"          // pre-1.5 records
     }
 
     public static func from(job: BackupJob, report: HealthReport, at date: Date,
-                            kind: String = "checksum", id: String = UUID().uuidString) -> HealthRecord {
+                            kind: String = "checksum", id: String = UUID().uuidString,
+                            trigger: String = "manual") -> HealthRecord {
         let checked = report.checks.filter { !$0.skipped }
         return HealthRecord(id: id, jobID: job.id, jobName: job.name, checkedAt: date,
                      archivesChecked: checked.count,
@@ -144,7 +147,7 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
                      verified: report.checks.map {
                         VerifiedArchive(library: $0.library, version: $0.version,
                                         passed: $0.passed && !$0.skipped, skipped: $0.skipped)
-                     })
+                     }, trigger: trigger)
     }
 }
 

@@ -28,33 +28,37 @@ enum RemoteAlert {
     // MARK: events
 
     static func send(for record: RunRecord) {
-        guard isConfigured else { return }
-        let ok = record.outcome == .verified || record.outcome == .completed
-        let attention = record.outcome == .failed || record.outcome == .partial
-        guard attention || (allEvents && ok) else { return }     // failure policy unless "every run"
-        post(title: "Cryoframe — \(record.jobName)",
-             body: "\(ok ? "✓" : "⚠️") \(record.summary)",
-             high: attention, tags: attention ? "warning" : "white_check_mark")
+        guard isConfigured, let p = AlertPolicy.payload(for: record, everyEvent: allEvents) else { return }
+        post(title: p.title, body: p.body, high: p.high, tags: p.tags)
     }
 
     static func sendHealth(for record: HealthRecord) {
-        guard isConfigured else { return }
-        // all copies offloaded to cloud placeholders, none downloaded — benign, not "offline".
-        if record.archivesChecked == 0 && record.skipped > 0 {
-            if allEvents {
-                post(title: "Cryoframe — archive health",
-                     body: "☁︎ \(record.jobName): \(record.skipped) cloud archive(s) not downloaded — skipped",
-                     high: false, tags: "cloud")
-            }
-            return
-        }
-        let clean = record.passed && record.archivesChecked > 0
-        guard !clean else { if allEvents { post(title: "Cryoframe — archive health",
-                                                body: "✓ \(record.jobName): \(record.archivesChecked) verified", high: false, tags: "white_check_mark") }; return }
-        let body = record.archivesChecked == 0
-            ? "⚠️ \(record.jobName): no archives found to check — is the target connected?"
-            : "⚠️ \(record.jobName): \(record.failures.count) archive check(s) failed"
-        post(title: "Cryoframe — archive health", body: body, high: true, tags: "warning")
+        guard isConfigured, let p = AlertPolicy.payload(forHealth: record, everyEvent: allEvents) else { return }
+        post(title: p.title, body: p.body, high: p.high, tags: p.tags)
+    }
+
+    // MARK: delivery that outlives the caller
+    //
+    // `post` fires and forgets, which is fine in the app because the app is still
+    // there when the request completes. The agent exits the moment its work is done,
+    // so a fire-and-forget alert would be killed on the way out — the exact case
+    // these alerts exist for. These wait for the send.
+
+    /// deliver an alert for a run, awaiting the request. No-op when nothing to say.
+    static func deliver(for record: RunRecord) async {
+        guard isConfigured, let p = AlertPolicy.payload(for: record, everyEvent: allEvents) else { return }
+        await deliver(p)
+    }
+
+    /// deliver an alert for a health check, awaiting the request.
+    static func deliverHealth(for record: HealthRecord) async {
+        guard isConfigured, let p = AlertPolicy.payload(forHealth: record, everyEvent: allEvents) else { return }
+        await deliver(p)
+    }
+
+    private static func deliver(_ p: AlertPolicy.Payload) async {
+        guard let req = request(title: p.title, body: p.body, high: p.high, tags: p.tags) else { return }
+        _ = try? await URLSession.shared.data(for: req)
     }
 
     /// for the Settings test button — awaits the result so the UI can report success/failure.

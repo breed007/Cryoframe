@@ -16,6 +16,7 @@ enum AgentMain {
         TransferResumer.resumeAll(store: PendingTransferStore.standard())   // finish interrupted transfers first
 
         var due = Scheduler().dueJobs(store.load(), now: Date())
+        var alerts: [RunRecord] = []      // deferrals, delivered once the run loop is done
 
         // Unattended work on a dying laptop battery is how a Mac ends up flat. Hold
         // the run for the next hourly check (it may be plugged in by then), and
@@ -29,8 +30,10 @@ enum AgentMain {
             let historyStore = RunHistoryStore.standard()
             let now = Date()
             for job in due {
-                historyStore.append(RunRecord.make(job: job, outcome: .deferred(reason),
-                                                   startedAt: now, finishedAt: now, trigger: "scheduled"))
+                let record = RunRecord.make(job: job, outcome: .deferred(reason),
+                                            startedAt: now, finishedAt: now, trigger: "scheduled")
+                historyStore.append(record)
+                alerts.append(record)
             }
             due = []
         }
@@ -53,11 +56,15 @@ enum AgentMain {
                     let started = Date()
                     do {
                         let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date())
-                        historyStore.append(RunRecord.make(job: job, outcome: outcome,
-                                                           startedAt: started, finishedAt: Date(), trigger: "scheduled"))
+                        let record = RunRecord.make(job: job, outcome: outcome,
+                                                    startedAt: started, finishedAt: Date(), trigger: "scheduled")
+                        historyStore.append(record)
+                        await RemoteAlert.deliver(for: record)      // nobody is watching the screen
                     } catch {
-                        historyStore.append(RunRecord.failure(job: job, error: error.localizedDescription,
-                                                              startedAt: started, finishedAt: Date(), trigger: "scheduled"))
+                        let record = RunRecord.failure(job: job, error: error.localizedDescription,
+                                                       startedAt: started, finishedAt: Date(), trigger: "scheduled")
+                        historyStore.append(record)
+                        await RemoteAlert.deliver(for: record)
                     }
                     limit.signal()
                     group.leave()
@@ -66,12 +73,21 @@ enum AgentMain {
             group.wait()
         }
 
-        HealthSchedule.runIfDue(store: store, now: Date())     // re-verify cold archives if due
+        let healthRecords = HealthSchedule.runIfDue(store: store, now: Date())   // re-verify cold archives if due
         sleepGuard.end()
 
+        // Send everything before exiting. This process is the ONLY thing that will
+        // tell you a scheduled backup failed while you weren't at the Mac: the app
+        // marks every record that predates its launch as already-seen, so a failure
+        // it wasn't running for is never announced later.
         // re-point the optional pmset wake at the next due job (lastRun may have changed).
         let sem = DispatchSemaphore(value: 0)
-        Task { await WakeScheduler.arm(store: store); sem.signal() }
+        Task {
+            for record in alerts { await RemoteAlert.deliver(for: record) }
+            for record in healthRecords { await RemoteAlert.deliverHealth(for: record) }
+            await WakeScheduler.arm(store: store)
+            sem.signal()
+        }
         sem.wait()
         exit(0)
     }

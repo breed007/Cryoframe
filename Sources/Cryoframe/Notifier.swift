@@ -42,13 +42,15 @@ enum Notifier {
             UNUserNotificationCenter.current().add(
                 UNNotificationRequest(identifier: record.id, content: content, trigger: nil))
         }
-        RemoteAlert.send(for: record)        // off-machine, on its own policy — fires even if local is off
+        // the agent alerts for the runs it performs on a schedule, so alerting here
+        // too would send everything twice whenever the app happens to be running.
+        if record.trigger != "scheduled" { RemoteAlert.send(for: record) }
     }
 
     /// post for an archive health check. Failures alert unless notifications are off;
     /// clean results alert only on the "every run" policy.
     static func notifyHealth(_ record: HealthRecord) {
-        RemoteAlert.sendHealth(for: record)   // off-machine, independent of the local policy
+        if record.trigger != "scheduled" { RemoteAlert.sendHealth(for: record) }   // see above
         let policy = current()
         // all copies were offloaded cloud placeholders we chose not to download — that's a
         // benign "couldn't check without downloading", NOT "target offline". Only mention on "all".
