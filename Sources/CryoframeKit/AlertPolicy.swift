@@ -39,6 +39,18 @@ public enum AlertPolicy {
                        tags: attention ? "warning" : "white_check_mark")
     }
 
+    /// A destination about to run out. Only the "no room for the next run" case is
+    /// sent: a job quietly keeping every version is worth showing in the app, but it
+    /// is not worth a notification on someone's phone.
+    public static func payload(forStorage finding: StoragePressure.Finding) -> Payload? {
+        guard finding.kind == .tight else { return nil }
+        let free = ByteCountFormatter.string(fromByteCount: Int64(finding.free), countStyle: .file)
+        let run = ByteCountFormatter.string(fromByteCount: Int64(finding.runBytes), countStyle: .file)
+        return Payload(title: "Cryoframe — \(finding.destination) is nearly full",
+                       body: "⚠️ \(free) free, and \(finding.jobName) needs about \(run). The next backup is likely to fail.",
+                       high: true, tags: "warning")
+    }
+
     /// nil when this health check isn't worth an alert.
     public static func payload(forHealth record: HealthRecord, everyEvent: Bool) -> Payload? {
         // every copy was a cloud placeholder nobody downloaded: benign, and not the

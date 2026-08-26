@@ -117,6 +117,23 @@ final class AppModel: ObservableObject {
         for h in healthStore.all() { maybeNotifyHealth(h) }
     }
 
+    // MARK: - storage pressure
+
+    @Published var storageFindings: [StoragePressure.Finding] = []
+
+    /// measure the destinations and work out what is going to run out. Off the main
+    /// thread: it walks the archive folders.
+    func refreshStoragePressure() {
+        let jobs = self.jobs
+        guard !jobs.isEmpty else { storageFindings = []; return }
+        let retention = Dictionary(uniqueKeysWithValues: jobs.map { ($0.id, $0.retention) })
+        Task.detached {
+            let report = StorageReporter.report(jobs)
+            let found = StoragePressure.findings(storage: report, retention: retention)
+            await MainActor.run { self.storageFindings = found }
+        }
+    }
+
     // MARK: - coverage advisor
 
     /// libraries on this Mac that no job covers, minus the ones waved off.

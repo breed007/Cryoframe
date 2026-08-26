@@ -32,7 +32,11 @@ final class JobDraft: ObservableObject {
     @Published var passphrase = ""
     @Published var passphraseConfirm = ""
 
-    @Published var retentionKind = "all"                   // all | lastN | gfs
+    // Bounded by default. "Keep every version" meant a sealed job grew until the
+    // destination filled and every run after that failed — while the app promised
+    // retention was what kept the disk from filling. Keeping every version is still
+    // one choice away; it is just no longer the one you get without deciding.
+    @Published var retentionKind = "lastN"                 // all | lastN | gfs
     @Published var keepN = 7
     @Published var gfsDaily = 7
     @Published var gfsWeekly = 4

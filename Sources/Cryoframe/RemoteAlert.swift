@@ -56,6 +56,12 @@ enum RemoteAlert {
         await deliver(p)
     }
 
+    /// deliver a low-space warning, awaiting the request.
+    static func deliverStorage(for finding: StoragePressure.Finding) async {
+        guard isConfigured, let p = AlertPolicy.payload(forStorage: finding) else { return }
+        await deliver(p)
+    }
+
     private static func deliver(_ p: AlertPolicy.Payload) async {
         guard let req = request(title: p.title, body: p.body, high: p.high, tags: p.tags) else { return }
         _ = try? await URLSession.shared.data(for: req)

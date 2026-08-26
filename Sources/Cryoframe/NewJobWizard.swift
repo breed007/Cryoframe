@@ -418,7 +418,7 @@ struct NewJobWizard: View {
             draft.selectedLibraryIDs = []
             draft.formatKind = t.formatKind
             draft.verification = t.verify
-            draft.retentionKind = "all"
+            draft.retentionKind = "lastN"; draft.keepN = 7
             freqPreset = .nightly; applyFreq(.nightly)
             return
         }

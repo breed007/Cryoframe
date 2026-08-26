@@ -46,6 +46,7 @@ struct ContentView: View {
                 Spacer()
             } else {
                 ProtectionDashboard(model: model, onNewJob: { model.showNewJob = true })
+                StoragePressureCard(model: model)
                 CoverageCard(model: model)
                 HStack {
                     Text("Jobs").font(.headline).foregroundStyle(.secondary)
@@ -108,6 +109,7 @@ struct ContentView: View {
                 model.reloadHistory()      // pick up any scheduled runs since we last looked
                 model.reloadHealth()
                 model.refreshProtectedSize()
+                model.refreshStoragePressure()
                 model.measureLibraries(model.coverageGaps.compactMap { g in
                     model.registry.types.first { $0.id == g.typeID }
                 })

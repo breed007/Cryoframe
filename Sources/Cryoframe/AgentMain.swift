@@ -74,6 +74,15 @@ enum AgentMain {
         }
 
         let healthRecords = HealthSchedule.runIfDue(store: store, now: Date())   // re-verify cold archives if due
+
+        // A destination that fills up doesn't fail loudly, it just stops working —
+        // and on an unattended Mac nobody sees the dashboard say so. Warn while
+        // there's still room to act. Only once per destination per day, so a full
+        // drive doesn't turn into an hourly alarm.
+        let pressure = StoragePressure.findings(
+            storage: StorageReporter.report(store.load().jobs),
+            retention: Dictionary(uniqueKeysWithValues: store.load().jobs.map { ($0.id, $0.retention) })
+        ).filter { $0.kind == .tight && StorageNag.shouldWarn($0.destination, now: Date()) }
         sleepGuard.end()
 
         // Send everything before exiting. This process is the ONLY thing that will
@@ -85,6 +94,10 @@ enum AgentMain {
         Task {
             for record in alerts { await RemoteAlert.deliver(for: record) }
             for record in healthRecords { await RemoteAlert.deliverHealth(for: record) }
+            for finding in pressure {
+                await RemoteAlert.deliverStorage(for: finding)
+                StorageNag.recordWarned(finding.destination, now: Date())
+            }
             await WakeScheduler.arm(store: store)
             sem.signal()
         }
