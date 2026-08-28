@@ -106,7 +106,14 @@ public enum ArchivePlan {
     /// incremental sync into the attached mirror; --delete prunes removed files,
     /// --partial keeps partially-transferred files so a dropped run resumes them,
     /// and the sparsebundle only rewrites the ~8MB bands that actually changed.
+    ///
+    /// -E carries extended attributes, resource forks and ACLs. Without it `-a`
+    /// alone silently drops all three — /usr/bin/rsync is openrsync on macOS 15+,
+    /// where -a covers neither (and -X is not even a recognised option). That made
+    /// the DEFAULT format the one lossy path in the app: sealed zip goes through
+    /// ditto and sealed DMG through a filesystem image, both faithful, while the
+    /// mirror quietly discarded Finder tags and every resource fork on every run.
     public static func rsync(root: URL, into destination: URL) -> Command {
-        Command("/usr/bin/rsync", ["-a", "--delete", "--partial", root.path + "/", destination.path + "/"])
+        Command("/usr/bin/rsync", ["-aE", "--delete", "--partial", root.path + "/", destination.path + "/"])
     }
 }

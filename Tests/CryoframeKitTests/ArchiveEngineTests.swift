@@ -60,7 +60,66 @@ private func tempOutDir() -> URL {
 @Test func rsyncPlanIsArchiveDeleteWithTrailingSlashes() {
     let c = ArchivePlan.rsync(root: URL(fileURLWithPath: "/m/lib"), into: URL(fileURLWithPath: "/v/lib"))
     #expect(c.tool == "/usr/bin/rsync")
-    #expect(c.args == ["-a", "--delete", "--partial", "/m/lib/", "/v/lib/"])
+    #expect(c.args == ["-aE", "--delete", "--partial", "/m/lib/", "/v/lib/"])
+}
+
+/// The argv check above would keep passing if -E stopped meaning what we think it
+/// means, so this runs the real tool. A mirror that drops extended attributes and
+/// resource forks is not a copy of the library — it is a copy of the file contents
+/// with the Finder tags, and anything else macOS keeps beside a file, thrown away.
+@Test func theMirrorSyncCarriesExtendedAttributesAndResourceForks() throws {
+    let fm = FileManager.default
+    let base = fm.temporaryDirectory.appendingPathComponent("cf-xattr-\(UUID().uuidString)")
+    let src = base.appendingPathComponent("src"), dst = base.appendingPathComponent("dst")
+    defer { try? fm.removeItem(at: base) }
+    try fm.createDirectory(at: src, withIntermediateDirectories: true)
+    try fm.createDirectory(at: dst, withIntermediateDirectories: true)
+
+    let file = src.appendingPathComponent("photo.jpg")
+    try "content".write(to: file, atomically: true, encoding: .utf8)
+    try #require("tagged".withCString { setxattr(file.path, "com.apple.metadata:cf_test", $0, strlen($0), 0, 0) } == 0)
+    try Data("RESOURCEFORK".utf8).write(to: file.appendingPathComponent("..namedfork/rsrc"))
+
+    let plan = ArchivePlan.rsync(root: src, into: dst)
+    let r = try ProcessCommandRunner().run(plan.tool, plan.args)
+    try #require(r.ok, "rsync failed: \(r.stderr)")
+
+    let copied = dst.appendingPathComponent("photo.jpg")
+    var value = [CChar](repeating: 0, count: 64)
+    let got = getxattr(copied.path, "com.apple.metadata:cf_test", &value, 64, 0, 0)
+    #expect(got > 0, "extended attribute did not survive the sync")
+    let fork = (try? Data(contentsOf: copied.appendingPathComponent("..namedfork/rsrc")))?.count ?? 0
+    #expect(fork == 12, "resource fork did not survive the sync (\(fork) bytes)")
+}
+
+/// An existing mirror was written without -E, so its files already lack the
+/// metadata. They must heal on the next run even though their size and mtime are
+/// unchanged — otherwise a library whose files never change never recovers.
+@Test func anExistingMirrorRegainsMetadataWithoutAFullResync() throws {
+    let fm = FileManager.default
+    let base = fm.temporaryDirectory.appendingPathComponent("cf-heal-\(UUID().uuidString)")
+    let src = base.appendingPathComponent("src"), dst = base.appendingPathComponent("dst")
+    defer { try? fm.removeItem(at: base) }
+    try fm.createDirectory(at: src, withIntermediateDirectories: true)
+    try fm.createDirectory(at: dst, withIntermediateDirectories: true)
+
+    let file = src.appendingPathComponent("photo.jpg")
+    try "content".write(to: file, atomically: true, encoding: .utf8)
+    try #require("tagged".withCString { setxattr(file.path, "com.apple.metadata:cf_test", $0, strlen($0), 0, 0) } == 0)
+
+    // the 1.5 mirror: -a, which drops the attribute
+    let runner = ProcessCommandRunner()
+    _ = try runner.run("/usr/bin/rsync", ["-a", "--delete", src.path + "/", dst.path + "/"])
+    let copied = dst.appendingPathComponent("photo.jpg")
+    var probe = [CChar](repeating: 0, count: 64)
+    #expect(getxattr(copied.path, "com.apple.metadata:cf_test", &probe, 64, 0, 0) < 0)
+
+    // the next run under 1.5.1 repairs it, with the file otherwise untouched
+    let plan = ArchivePlan.rsync(root: src, into: dst)
+    let r = try runner.run(plan.tool, plan.args)
+    try #require(r.ok, "rsync failed: \(r.stderr)")
+    #expect(getxattr(copied.path, "com.apple.metadata:cf_test", &probe, 64, 0, 0) > 0,
+            "an existing mirror never regains its metadata")
 }
 
 // MARK: - real runs
