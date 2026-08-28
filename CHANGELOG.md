@@ -2,6 +2,12 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.5.1] — 2026-08-26
+
+### Fixed
+- **A live mirror was dropping your files' extended attributes, resource forks, and ACLs** — every run, in the default format. The mirror syncs with `rsync -a`, and on macOS 15+ `/usr/bin/rsync` is openrsync, where `-a` carries none of the three (and `-X` is not even a recognised option). So Finder tags and anything else macOS keeps beside a file were discarded on the way in, while sealed zip (via `ditto`) and sealed DMG (a filesystem image) preserved them. Adding `-E` fixes it, and existing mirrors repair themselves on their next run — the metadata is restored without re-copying file contents, so there is no oversized catch-up run.
+- **The README overstated what a mirror's health check proves.** It said a checksum manifest covers every archive and that re-hashing catches bit rot. A mirror is verified structurally, against its file list and sizes, which finds dropped or truncated files but not a flipped bit inside an intact one. The user guide already said so; the README now agrees with it. Byte-level verification for mirrors is a real gap, and a later release's problem.
+
 ## [1.5.0] — 2026-08-26
 
 Making good on things the app already claimed. Every item here closes a gap between what Cryoframe said it did and what it actually did.
