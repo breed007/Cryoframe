@@ -89,7 +89,13 @@ final class JobDraft: ObservableObject {
     var retentionPolicy: RetentionPolicy {
         switch retentionKind {
         case "lastN": return .keepLast(max(1, keepN))
-        case "gfs":   return .gfs(daily: gfsDaily, weekly: gfsWeekly, monthly: gfsMonthly)
+        // an individual bucket at zero is a real preference ("no monthlies"); all
+        // three at zero is a setting that means "keep nothing", which is not a
+        // retention policy. retentionPrune refuses to act on it either way — this
+        // just stops the UI expressing it.
+        case "gfs":
+            let (d, w, m) = (max(0, gfsDaily), max(0, gfsWeekly), max(0, gfsMonthly))
+            return d + w + m == 0 ? .keepLast(1) : .gfs(daily: d, weekly: w, monthly: m)
         default:      return .keepAll
         }
     }
@@ -116,11 +122,22 @@ final class JobDraft: ObservableObject {
 
     /// another sealed job already archiving the same library to the same destination —
     /// they'd share version folders and cross-prune. Blocks create.
+    /// Two sealed jobs writing the same library to the same folder share version
+    /// folders and cross-prune each other, so this blocks the combination. Compared
+    /// on canonical paths and case-insensitively: /Volumes/D/Backups and
+    /// /Volumes/d/backups are the SAME directory on case-insensitive APFS, and a raw
+    /// string compare let that pair through into exactly the data loss this prevents.
+    private static func samePlace(_ a: URL, _ b: URL) -> Bool {
+        TMUtilSnapshotBackend.canonicalPath(a.resolvingSymlinksInPath().path)
+            .compare(TMUtilSnapshotBackend.canonicalPath(b.resolvingSymlinksInPath().path),
+                     options: .caseInsensitive) == .orderedSame
+    }
+
     var destinationConflicts: [String] {
         guard isSealed else { return [] }
         var out = Set<String>()
         for job in model.jobs where job.id != editingID && job.format.isSealed {
-            for t in selectedTargets where job.targets.contains(where: { $0.destinationDir.path == t.destinationDir.path }) {
+            for t in selectedTargets where job.targets.contains(where: { Self.samePlace($0.destinationDir, t.destinationDir) }) {
                 for lib in selectedLibraries where job.libraries.contains(where: { $0.displayName == lib.displayName }) {
                     out.insert("“\(job.name)” already archives \(lib.displayName) to \(t.displayName)")
                 }
