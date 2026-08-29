@@ -454,10 +454,15 @@ struct RecoveryWizard: View {
         let dest = r.toOriginalLocations
             ? FileManager.default.homeDirectoryForCurrentUser
             : (r.customFolder ?? FileManager.default.homeDirectoryForCurrentUser)
-        guard let free = try? dest.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
-        else { return "" }
+        // "important usage" only means anything on the volume holding the home
+        // directory. An external drive — where someone recovering onto a fresh Mac
+        // is most likely to point this — answers 0, and saying "only Zero KB free,
+        // not enough room" on the worst day is how you talk someone out of a
+        // recovery that would have worked. JobExecutor.freeSpace already reads a
+        // volume correctly; use it rather than a third private copy of the rule.
+        guard let free = JobExecutor.freeSpace(for: dest) else { return "" }
         let freeStr = ByteCountFormatter.string(fromByteCount: Int64(free), countStyle: .file)
-        return Int64(r.totalBytes) > free ? "only \(freeStr) free — not enough room" : "\(freeStr) free"
+        return r.totalBytes > free ? "only \(freeStr) free — not enough room" : "\(freeStr) free"
     }
 
     private var resultsBlock: some View {

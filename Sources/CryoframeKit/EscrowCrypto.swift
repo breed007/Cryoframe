@@ -5,7 +5,8 @@
 //  Encrypts a passphrase-escrow bundle with a master password the user chooses, so
 //  they can store it offsite and recover their archive passphrases on a new Mac
 //  (the only defense against "machine died, encrypted backups now unreadable").
-//  PBKDF2-SHA256 (200k rounds) → key → AES-GCM. File = magic ‖ salt ‖ sealed.
+//  PBKDF2-SHA256 (600k rounds, OWASP guidance) → key → AES-GCM.
+//  File = magic ‖ salt ‖ sealed.
 //
 
 import Foundation
