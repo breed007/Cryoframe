@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.5.2</title>
+      <description><![CDATA[A retention setting could delete every version you had.]]></description>
+      <pubDate>Sat, 29 Aug 2026 21:06:40 +0000</pubDate>
+      <sparkle:version>20260829.1705</sparkle:version>
+      <sparkle:shortVersionString>1.5.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.5.2/Cryoframe-1.5.2.dmg" type="application/octet-stream" sparkle:edSignature="12/iJGq/gohA7GA+fOdCMsflrk/sAu21NNqF8Z/GLa3n77CmpdmUcaknenk80EjDO3g9TWQB8PaCedtVly8KAw==" length="3988590" />
+    </item>
+    <item>
       <title>1.5.1</title>
       <description><![CDATA[A live mirror was dropping extended attributes, resource forks and ACLs on every run.]]></description>
       <pubDate>Fri, 28 Aug 2026 17:23:22 +0000</pubDate>
