@@ -2,6 +2,21 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.5.2] — 2026-08-28
+
+A QA pass over 1.5.1 found one way to lose every backup you have. The rest are the
+smaller things that pass turned up.
+
+### Fixed
+- **A retention setting could delete every version you had.** The daily/weekly/monthly steppers each allow zero, and setting all three to zero meant "keep nothing", so a run would archive the library and then delete the entire history, including the version it had just written, without reporting anything. Keeping the last N was already protected against this; the grandfather-father-son scheme was not. No retention policy can now select the newest version, whatever it is set to, and the setting that meant "keep nothing" resolves to keeping the newest. An individual bucket at zero is still allowed, because "no monthlies" is a real preference.
+- **Retention could stop working without saying so.** A share that dropped, a file still held open, a permissions change: the deletion silently didn't happen, the destination went on growing, and the storage warning went on believing the job was bounded. A run that backs up cleanly but can't tidy up now says which versions it couldn't remove. It still counts as a successful run, because the backup was written and verified; only the tidying failed.
+- **Recovering to an external drive said "Zero KB free — not enough room."** Free space in the recovery flow came from a figure that only means anything on the disk holding your home folder, so an external drive — the likeliest place to recover from onto a fresh Mac — reported nothing free. The check was advisory and never blocked the restore, but on the worst day it is the wrong sentence to read. Two earlier releases fixed this same figure elsewhere; this was the last place still reading it raw.
+- **Two backup jobs could quietly share, and prune, each other's versions.** Cryoframe already refuses to let two sealed jobs write the same library to the same folder, but it compared the folders as plain text, so `/Volumes/Drive/Backups` and `/Volumes/Drive/backups`, which are the same folder, read as two different ones, and a shortcut got past it entirely.
+- **The privileged helper would unmount any location it was asked to.** It is only reachable by Cryoframe itself, so nothing could ask it to, but it should not have been able to comply. It now only unmounts the temporary mounts it created.
+
+### Changed
+- The recovery-key file's documentation understated its own strength (it says 600,000 PBKDF2 rounds, which is what it has always done).
+
 ## [1.5.1] — 2026-08-26
 
 ### Fixed
