@@ -52,7 +52,12 @@ public struct MountRef: Codable, Sendable, Equatable {
 }
 
 public struct HelperInfo: Codable, Sendable {
-    public var version: String       // helper build, must match GUI's expectation
+    /// the helper's own build string, for logging and for telling an old resident
+    /// daemon from a freshly-respawned one. NOT a compatibility gate: nothing
+    /// compares it, and the reload-on-update path keys off the app's build number
+    /// in Prefs instead (see HelperManager). Said "must match GUI's expectation"
+    /// for four releases while no such check existed.
+    public var version: String
     public var pid: Int32
     public init(version: String, pid: Int32) { self.version = version; self.pid = pid }
 }
@@ -81,6 +86,7 @@ public enum HelperError: Error, Codable, Sendable {
     case unmountFailed(errno: Int32)
     case deleteFailed(errno: Int32)
     case refusedForeignSnapshot(name: String)   // guard: someone asked us to touch a non-cryoframe snapshot
+    case refusedForeignMount(path: String)      // guard: a mount point outside the ones we create
     case volumeNotFound(String)
     case internalError(String)
 }

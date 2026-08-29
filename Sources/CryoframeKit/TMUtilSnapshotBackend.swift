@@ -14,7 +14,37 @@ import CryoframeShared
 
 public struct TMUtilSnapshotBackend: SnapshotBackend {
     static let tmName = "com.apple.TimeMachine."          // namespace we create into
-    static let mountBase = "/private/var/run/app.cryoframe/mnt"
+    public static let mountBase = "/private/var/run/app.cryoframe/mnt"
+
+    /// true only for a path genuinely inside the directory we mount snapshots into.
+    /// The helper runs umount, `diskutil unmount force` and removeItem on whatever
+    /// path a caller hands it, so this is what keeps that to mounts we made.
+    ///
+    /// Deliberately LEXICAL. Foundation's standardizedFileURL resolves /private/var
+    /// to /var only when the path already exists, so the base normalised and a mount
+    /// point under it did not — the guard rejected every legitimate unmount, which
+    /// would have leaked mounts and walked straight back into the orphaned-device
+    /// spiral 1.5.1 fixed. A containment check must not depend on what happens to be
+    /// on disk at the instant it runs; that is also how these checks get raced.
+    public static func isOwnMountPoint(_ path: String) -> Bool {
+        let base = canonicalPath(mountBase), p = canonicalPath(path)
+        return p != base && p.hasPrefix(base + "/")
+    }
+
+    /// resolve `.`, `..` and separator noise without touching the filesystem, and
+    /// fold macOS's /private aliases so /private/var and /var compare equal.
+    public static func canonicalPath(_ s: String) -> String {
+        var out: [String] = []
+        for comp in s.split(separator: "/", omittingEmptySubsequences: true) {
+            switch comp {
+            case ".":  continue
+            case "..": if !out.isEmpty { out.removeLast() }
+            default:   out.append(String(comp))
+            }
+        }
+        if out.count >= 2, out[0] == "private", ["var", "tmp", "etc"].contains(out[1]) { out.removeFirst() }
+        return "/" + out.joined(separator: "/")
+    }
 
     let runner: CommandRunner
     public init(runner: CommandRunner = ProcessCommandRunner()) { self.runner = runner }

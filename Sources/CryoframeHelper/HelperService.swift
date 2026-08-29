@@ -16,7 +16,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     private let ledger: SnapshotLedger
     private let runner: CommandRunner
     private let dataVolume = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: "")
-    private static let mountBase = "/private/var/run/app.cryoframe/mnt"
+    private static let mountBase = TMUtilSnapshotBackend.mountBase   // one source of truth
     private static let wakeStatePath = "/private/var/db/app.cryoframe/wake.txt"
 
     init(backend: SnapshotBackend = TMUtilSnapshotBackend(),
@@ -60,6 +60,14 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     func unmount(mount: Data, reply: @escaping (Error?) -> Void) {
         respondVoid(reply) {
             let m = try Wire.decode(MountRef.self, from: mount)
+            // The mount point arrives from the client. Root then umounts it, force-
+            // unmounts it with diskutil, and removes the directory — so an arbitrary
+            // path here is root detaching a volume nobody asked about. The client is
+            // signature-pinned, so this is depth rather than an open door; but
+            // deleteSnapshot below has an ownership guard and this had none.
+            guard TMUtilSnapshotBackend.isOwnMountPoint(m.mountPoint) else {
+                throw HelperError.refusedForeignMount(path: m.mountPoint)
+            }
             try self.backend.unmount(m)
         }
     }
@@ -168,7 +176,9 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
 
     // MARK: reply plumbing
 
-    static let version = "0.3.0"
+    /// build string reported by handshake(); see HelperInfo.version for what it is
+    /// and is not. Bumped when the wire protocol changes shape.
+    static let version = "1.5.2"
 
     private func respond<T: Encodable>(_ reply: (Data?, Error?) -> Void, _ work: () throws -> T) {
         do { reply(try Wire.encode(try work()), nil) }

@@ -127,3 +127,32 @@ private final class ListSequencer: @unchecked Sendable {
         return outputs[min(i, outputs.count - 1)]
     }
 }
+
+// MARK: - the unmount containment guard
+
+// The helper takes a mount point from the client and, as root, runs umount,
+// `diskutil unmount force`, and removeItem on it. Without this predicate that is
+// root detaching any volume it is handed. deleteSnapshot has always had an
+// ownership guard; unmount had none until 1.5.2.
+@Test func onlyOurOwnMountPointsCanBeUnmounted() {
+    let base = TMUtilSnapshotBackend.mountBase
+    // ours
+    #expect(TMUtilSnapshotBackend.isOwnMountPoint("\(base)/1719240000-ab12cd34"))
+    #expect(TMUtilSnapshotBackend.isOwnMountPoint("\(base)/x/y"))
+    #expect(TMUtilSnapshotBackend.isOwnMountPoint("\(base)//doubled"))       // separator noise
+    // not ours
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint("/"))
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint("/Volumes/Someones Backup Drive"))
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint("/System/Volumes/Data"))
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint(base))                    // the base itself
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint(""))
+}
+
+@Test func theContainmentGuardCannotBeWalkedOutOf() {
+    let base = TMUtilSnapshotBackend.mountBase
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint("\(base)/../../../../Volumes/Backup"))
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint("\(base)/.."))
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint("\(base)/a/../.."))
+    // a sibling directory whose name merely starts with the base string
+    #expect(!TMUtilSnapshotBackend.isOwnMountPoint(base + "-evil/x"))
+}
