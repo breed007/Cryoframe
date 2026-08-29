@@ -33,21 +33,32 @@ public enum VersionStamp {
 /// given the dates of all existing versions, return the ones to DELETE under
 /// `policy`. Pure and total — the engine maps these back to folders. The newest
 /// versions are always kept (keepLast(n)/gfs select from newest down).
+///
+/// THE NEWEST VERSION IS NEVER RETURNED, whatever the policy says. A retention
+/// setting that selects nothing — keepLast(0), or a GFS with every bucket at zero,
+/// both of which the UI could express — otherwise means "delete every backup",
+/// and the engine would carry that out on the version it had just finished
+/// writing. No policy should be able to say that, and no future policy should be
+/// able to reintroduce it, so the floor lives here in the one function every
+/// caller shares rather than at the call sites.
 public func retentionPrune(_ versions: [Date], policy: RetentionPolicy,
                            calendar: Calendar = Calendar(identifier: .gregorian)) -> Set<Date> {
     let sorted = versions.sorted(by: >)            // newest first
+    var doomed: Set<Date>
     switch policy {
     case .keepAll:
         return []
     case .keepLast(let n):
-        return Set(sorted.dropFirst(max(0, n)))
+        doomed = Set(sorted.dropFirst(max(0, n)))
     case .gfs(let daily, let weekly, let monthly):
         var keep = Set<Date>()
         keep.formUnion(newestPerBucket(sorted, limit: daily) { calendar.startOfDay(for: $0) })
         keep.formUnion(newestPerBucket(sorted, limit: weekly) { bucketStart($0, [.yearForWeekOfYear, .weekOfYear], calendar) })
         keep.formUnion(newestPerBucket(sorted, limit: monthly) { bucketStart($0, [.year, .month], calendar) })
-        return Set(versions).subtracting(keep)
+        doomed = Set(versions).subtracting(keep)
     }
+    if let newest = sorted.first { doomed.remove(newest) }
+    return doomed
 }
 
 /// keep the newest version in each of the newest `limit` distinct buckets.

@@ -62,3 +62,49 @@ private func day(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 12) -> Date {
     #expect(pruned.contains(day(2026, 6, 24)))       // same week as Jun 25, not newest
     #expect(pruned.contains(day(2026, 6, 10)))       // 3rd week, beyond limit
 }
+
+// MARK: - the floor: no policy may select every version
+
+// A retention setting that selects nothing means "delete every backup", and the
+// engine carries the result straight into removeItem — including on the version it
+// has just finished writing. Both of these were reachable: keepLast(0) from a
+// hand-edited jobs.json, and a GFS with all three buckets at zero straight from the
+// steppers in the UI.
+@Test func noPolicyCanPruneEveryVersion() {
+    let versions = (1...30).map { day(2026, 7, $0) }
+    let policies: [RetentionPolicy] = [
+        .keepLast(0), .keepLast(-1),
+        .gfs(daily: 0, weekly: 0, monthly: 0),
+        .gfs(daily: -1, weekly: -1, monthly: -1),
+    ]
+    for p in policies {
+        let doomed = retentionPrune(versions, policy: p, calendar: cal)
+        #expect(doomed.count < versions.count, "\(p) selected every version for deletion")
+        #expect(!doomed.contains(day(2026, 7, 30)), "\(p) selected the newest version")
+    }
+}
+
+@Test func theFloorKeepsExactlyTheNewestAndNothingElse() {
+    // degrading to "keep the newest" must not quietly keep more than that
+    let versions = (1...5).map { day(2026, 7, $0) }
+    let doomed = retentionPrune(versions, policy: .gfs(daily: 0, weekly: 0, monthly: 0), calendar: cal)
+    #expect(versions.count - doomed.count == 1)
+    #expect(!doomed.contains(day(2026, 7, 5)))
+}
+
+@Test func theFloorDoesNotDisturbAWorkingPolicy() {
+    // the newest is already kept by every sane policy, so the floor must be a no-op
+    let versions = (1...30).map { day(2026, 7, $0) }
+    #expect(retentionPrune(versions, policy: .keepLast(7), calendar: cal).count == 23)
+    #expect(retentionPrune(versions, policy: .keepAll, calendar: cal).isEmpty)
+    let gfs = retentionPrune(versions, policy: .gfs(daily: 7, weekly: 4, monthly: 6), calendar: cal)
+    #expect(versions.count - gfs.count == 9)
+}
+
+@Test func aSingleVersionIsNeverPruned() {
+    // the first run of a job: one version exists, and it is the one just written
+    let only = [day(2026, 7, 1)]
+    for p: RetentionPolicy in [.keepLast(0), .keepLast(1), .gfs(daily: 0, weekly: 0, monthly: 0)] {
+        #expect(retentionPrune(only, policy: p, calendar: cal).isEmpty, "\(p) pruned the only version there is")
+    }
+}
