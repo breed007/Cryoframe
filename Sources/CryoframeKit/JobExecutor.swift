@@ -347,20 +347,34 @@ public struct JobExecutor: Sendable {
             if !keepBuild { cleanupBuild(build) }
         }
 
+        var pruneFailures: [String] = []
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
-            for t in job.targets { Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention) }
+            for t in job.targets {
+                pruneFailures += Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention)
+            }
         }
         onStage(.completed)
         jobStore?.recordRun(id: job.id, at: now)
-        return .finished(results: results, warning: decision.warning)
+        // a run that backed up fine but could not prune still succeeded — say so in the
+        // warning rather than failing it, but do not let it pass in silence.
+        let pruneNote = pruneFailures.isEmpty ? nil
+            : "couldn't remove \(pruneFailures.count) old version\(pruneFailures.count == 1 ? "" : "s") — \(pruneFailures.joined(separator: "; "))"
+        let warning = [decision.warning, pruneNote].compactMap { $0 }.joined(separator: " · ")
+        return .finished(results: results, warning: warning.isEmpty ? nil : warning)
     }
 
     /// sweep empty/partial sealed-version folders left by failed or cancelled runs,
     /// then delete completed versions the retention policy doesn't keep. Only version
     /// folders with a manifest count as real versions — otherwise a failed run's empty
     /// husk could occupy a "keep" slot and evict a good archive.
-    static func pruneVersions(target: URL, libraries: [ContentType], policy: RetentionPolicy) {
+    /// Returns what it could NOT delete. Retention failing is not cosmetic: the
+    /// destination keeps growing while the app, and the storage-pressure warning,
+    /// both go on believing the job is bounded. A share that dropped, a file still
+    /// held open, a permissions change — all silent before 1.5.2.
+    @discardableResult
+    static func pruneVersions(target: URL, libraries: [ContentType], policy: RetentionPolicy) -> [String] {
         let fm = FileManager.default
+        var failures: [String] = []
         for library in libraries {
             let libDir = target.appendingPathComponent(library.displayName, isDirectory: true)
             let entries = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
@@ -376,8 +390,12 @@ public struct JobExecutor: Sendable {
             }
             guard policy != .keepAll else { continue }
             let prune = retentionPrune(complete.map(\.date), policy: policy)
-            for v in complete where prune.contains(v.date) { try? fm.removeItem(at: v.url) }
+            for v in complete where prune.contains(v.date) {
+                do { try fm.removeItem(at: v.url) }
+                catch { failures.append("\(library.displayName) \(VersionStamp.string(v.date)): \((error as NSError).localizedDescription)") }
+            }
         }
+        return failures
     }
 
     /// confirm a distributed copy matches the verified build. A single file is hashed
