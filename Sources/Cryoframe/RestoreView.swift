@@ -208,7 +208,16 @@ final class RestoreModel: ObservableObject {
             }
         }
         if encrypted { return "couldn't open the archive — check the passphrase" }
-        return (e as NSError).localizedDescription
+        // Anything else reaches the user as Foundation wrote it, which for a copy
+        // failure means a sentence naming a path inside /private/var/folders that
+        // exists only while the archive is mounted. 1.5.1 gave run failures real
+        // descriptions; a restore failure deserves the same, minus the scratch path.
+        let ns = e as NSError
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError,
+           let file = (ns.userInfo[NSFilePathErrorKey] as? String).map({ ($0 as NSString).lastPathComponent }) {
+            return "couldn't restore \(file) — \(underlying.localizedDescription.lowercased())"
+        }
+        return ns.localizedDescription
     }
 }
 

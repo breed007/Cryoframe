@@ -505,7 +505,11 @@ final class AppModel: ObservableObject {
         refreshSleepGuard()
         let control = RunControl(); controls[id] = control
         jobStage[id] = .preparing
+        // marks the run as started; replaced by its result line when it finishes, so
+        // the log doesn't accumulate a timestamp-less "▶ JobName" beside every
+        // completed run — which reads like a run that started and never came back.
         log("▶ \(job.name)")
+        runningLogLine[id] = "▶ \(job.name)"
         let resolved = job.resolvingLibraries(in: registry)
         let executor = TransferConfig.makeExecutor(detector: detector, store: store)
         Task {
@@ -534,7 +538,7 @@ final class AppModel: ObservableObject {
         history.append(record)
         lastRecords[record.jobID] = record
         if let w = record.warning { log("⚠︎ \(w)") }
-        log(Self.historyLine(record))
+        logFinished(record.jobID, Self.historyLine(record))
         maybeNotify(record)
     }
 
@@ -554,9 +558,21 @@ final class AppModel: ObservableObject {
         return "\(symbol(r.outcome)) \(r.jobName)\(tag): \(r.summary) · \(when)"
     }
 
+    /// the "▶ started" line for a run in flight, so its result can replace it.
+    private var runningLogLine: [String: String] = [:]
+
     private func log(_ line: String) {
         activity.insert(line, at: 0)
         if activity.count > 60 { activity.removeLast() }
+    }
+
+    /// log a finished run, taking its "started" line out of the list.
+    private func logFinished(_ id: String, _ line: String) {
+        if let started = runningLogLine.removeValue(forKey: id),
+           let i = activity.firstIndex(of: started) {
+            activity.remove(at: i)
+        }
+        log(line)
     }
 }
 
