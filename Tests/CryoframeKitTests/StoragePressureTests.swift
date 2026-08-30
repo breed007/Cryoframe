@@ -151,3 +151,25 @@ private func storage(_ archives: [ArchiveSize], free: UInt64, job: String = "j")
     #expect(free == nil)
     #expect(total == nil)
 }
+
+// MARK: - a backup of nothing
+
+// An empty source seals into an archive that reports success and then cannot be
+// restored — RestoreEngine finds nothing to rebuild the bundle from and throws
+// libraryNotFound, while the checksum check passes the artifact forever.
+@Test func anEmptySourceIsRecognisedBeforeItIsArchived() throws {
+    let fm = FileManager.default
+    let base = fm.temporaryDirectory.appendingPathComponent("cf-empty-\(UUID().uuidString)")
+    let hollow = base.appendingPathComponent("hollow/deeper", isDirectory: true)
+    let real = base.appendingPathComponent("real", isDirectory: true)
+    defer { try? fm.removeItem(at: base) }
+    try fm.createDirectory(at: hollow, withIntermediateDirectories: true)
+    try fm.createDirectory(at: real, withIntermediateDirectories: true)
+    try Data("x".utf8).write(to: real.appendingPathComponent("f.txt"))
+
+    // folders alone are still nothing to back up
+    #expect(JobExecutor.isEmptyTree(base.appendingPathComponent("hollow")))
+    #expect(!JobExecutor.isEmptyTree(real))
+    // and a source that doesn't exist at all reads as empty rather than crashing
+    #expect(JobExecutor.isEmptyTree(base.appendingPathComponent("nope")))
+}

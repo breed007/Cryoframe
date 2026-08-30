@@ -48,3 +48,26 @@ import Foundation
     #expect(text.contains("no mountable file systems"))
     #expect(!text.contains("earlier noise"))
 }
+
+// MARK: - the sealed-DMG ACL failure
+
+// hdiutil refuses to build a sealed DMG when a file inside carries a deny-delete
+// ACL, and says only "Permission denied" — which reads as Cryoframe lacking access.
+// It isn't: ditto archives the same file, so sealed zip is the way out. Every
+// standard home folder carries that ACL by default and inheriting ones propagate,
+// so the message has to carry the way out rather than a bare errno.
+@Test func aSealedDMGBlockedByAnACLExplainsItself() {
+    let e = ArchiveError.toolFailed(tool: "hdiutil", status: 1,
+        stderr: "could not access /Volumes/Lib/database/main.sqlite - Permission denied\nhdiutil: create failed - Permission denied")
+    let text = e.localizedDescription
+    #expect(text.contains("sealed zip"), "should point at the format that works: \(text)")
+    #expect(text.contains("main.sqlite"), "should name the file: \(text)")
+    #expect(!text.hasPrefix("hdiutil failed"), "should not just echo the tool: \(text)")
+}
+
+// a permission failure from any other tool keeps the ordinary treatment
+@Test func anotherToolsPermissionFailureIsNotBlamedOnACLs() {
+    let e = ArchiveError.toolFailed(tool: "ditto", status: 1, stderr: "ditto: /x/y: Permission denied")
+    #expect(!e.localizedDescription.contains("sealed zip"))
+    #expect(e.localizedDescription.contains("ditto"))
+}
