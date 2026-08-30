@@ -112,6 +112,40 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
     let staticType = ContentType.genericFolder(id: "d", displayName: "Docs", path: .home("Docs"))
     let rep = try StrongVerifier().verify(result, type: staticType)
     #expect(rep.passed)
+    #expect(rep.details.contains("opened"), "the drill should say it opened the files, not that it counted them")
+}
+
+// A folder library has no database to reopen, so the drill used to count entries at
+// the root and stop. That passed an archive holding a file nobody can read — and the
+// version then wore a "Restore-tested" badge while the actual restore failed on
+// exactly that file. The drill has to fail wherever the restore would.
+@Test func aDrillFailsOnAFileTheRestoreCouldNotRead() throws {
+    let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+    try Data("readable".utf8).write(to: dir.appendingPathComponent("fine.txt"))
+    let locked = dir.appendingPathComponent("locked.txt")
+    try Data("secret".utf8).write(to: locked)
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked.path) }
+
+    let out = tempDir(); defer { try? FileManager.default.removeItem(at: out) }
+    let result = try SealedArchiveEngine(.dmg).archive(ArchiveSource(name: "Docs", root: dir), to: out)
+    let staticType = ContentType.genericFolder(id: "d", displayName: "Docs", path: .home("Docs"))
+    let rep = try StrongVerifier().verify(result, type: staticType)
+
+    #expect(!rep.passed, "the drill passed an archive that cannot be restored")
+    #expect(rep.details.contains("locked.txt"), "it should name the file: \(rep.details)")
+}
+
+// An empty archive is not a restorable one — RestoreEngine throws libraryNotFound —
+// so the drill must not call it good.
+@Test func aDrillFailsOnAnEmptyLibrary() throws {
+    let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+    let out = tempDir(); defer { try? FileManager.default.removeItem(at: out) }
+    let result = try SealedArchiveEngine(.dmg).archive(ArchiveSource(name: "Empty", root: dir), to: out)
+    let staticType = ContentType.genericFolder(id: "e", displayName: "Empty", path: .home("Empty"))
+    let rep = try StrongVerifier().verify(result, type: staticType)
+    #expect(!rep.passed)
+    #expect(rep.details.contains("empty"))
 }
 
 // MARK: - transient tool-error retry

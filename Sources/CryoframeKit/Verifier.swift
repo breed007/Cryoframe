@@ -74,10 +74,51 @@ public struct StrongVerifier: Sendable {
                              : "quick_check: \(out.isEmpty ? r.stderr.trimmingCharacters(in: .whitespacesAndNewlines) : out)",
                           ok ? [] : ["integrity check failed"])
         } else {
-            let entries = (try? fm.contentsOfDirectory(atPath: libRoot.path))?.count ?? 0
-            return report(.mountAndOpen, entries > 0, "static root has \(entries) entries",
-                          entries > 0 ? [] : ["empty root"])
+            return staticReport(libRoot, fm: fm)
         }
+    }
+
+    /// A folder library has no database to reopen, so the drill used to count the
+    /// entries at its root and stop there. That is a mount test wearing a restore
+    /// test's badge: an archive holding a file nobody can read passed it ("static
+    /// root has 1 entries") and then failed the actual restore. The restore copies
+    /// every file, so the drill opens every file — the cheapest check that fails
+    /// wherever the restore would. It reads no data; open and close is what proves
+    /// readability, and the checksum manifest already covers the bytes.
+    private func staticReport(_ libRoot: URL, fm: FileManager) -> VerificationReport {
+        var files = 0, dirs = 0
+        var unreadable: [String] = []
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
+        guard let walker = fm.enumerator(at: libRoot, includingPropertiesForKeys: keys) else {
+            return report(.mountAndOpen, false, "couldn't read the library inside the archive", ["unreadable root"])
+        }
+        for case let url as URL in walker {
+            let v = try? url.resourceValues(forKeys: Set(keys))
+            if v?.isDirectory == true { dirs += 1; continue }
+            if v?.isSymbolicLink == true { continue }        // the target is checked on its own
+            guard v?.isRegularFile == true else { continue }
+            files += 1
+            // O_RDONLY and straight back out. This is exactly what a restore's copy
+            // needs and exactly what it fails on.
+            let fd = open(url.path, O_RDONLY)
+            if fd < 0 {
+                if unreadable.count < 5 {
+                    unreadable.append("\(url.lastPathComponent) (\(String(cString: strerror(errno))))")
+                }
+            } else {
+                close(fd)
+            }
+        }
+        if files == 0 && dirs == 0 {
+            return report(.mountAndOpen, false, "the library inside the archive is empty", ["empty root"])
+        }
+        guard unreadable.isEmpty else {
+            let more = unreadable.count >= 5 ? " and others" : ""
+            return report(.mountAndOpen, false,
+                          "\(files) file(s) checked, but some could not be opened: \(unreadable.joined(separator: ", "))\(more)",
+                          ["unreadable files"])
+        }
+        return report(.mountAndOpen, true, "opened all \(files) file(s) in \(dirs) folder(s)", [])
     }
 
     /// the library may be at the archive root (dmg) or one level down (zip
