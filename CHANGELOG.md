@@ -2,6 +2,21 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.5.3] — 2026-08-30
+
+A second QA pass, this one driving the app rather than reading it. The good news
+first: a backup made through the wizard and restored through the restore window came
+back byte for byte, extended attributes, resource forks, ACLs and all. The fixes
+below are the gaps that pass found around it.
+
+### Fixed
+- **A restore drill could pass an archive that could not be restored.** For a library with a database, like Photos or Music, the drill reopens it and checks it. For a plain folder it only counted the items at the top of the archive, which is a test that it mounted, not a test that it restores. An archive holding a single unreadable file passed the drill, wore the *Restore-tested* badge, and then failed when actually restored. The drill now opens every file in the archive, which is exactly what a restore does, and names the file when one won't open. An empty archive fails outright instead of reporting an empty root.
+- **Backing up an empty folder reported success and produced something unrestorable.** The archive was written, the checksum check passed it every time, and a restore found nothing to bring back. A run now says the library is empty rather than claiming it backed it up. Folders on their own still count as empty; it is files that make a backup.
+- **A sealed DMG could fail with nothing but "Permission denied."** macOS puts a rule on every standard home folder that stops files being deleted, and that rule spreads to new files inside folders that carry it. The tool that builds a sealed DMG refuses to read a file carrying it, while the one that builds a sealed zip has no trouble. The failure now names the file and says that the sealed zip format can archive it.
+- **A failed restore showed a path from inside a temporary folder** that only exists while the archive is open. It now names the file that couldn't be restored, and why.
+- **The activity list kept a line for every run that had already finished.** Starting a run added an entry, finishing it added a second one, and the first stayed — so the list filled with entries that looked like runs that began and never came back. The result now replaces the start.
+- Progress could read past 100% on a sealed archive, since it was measured against the size of the original.
+
 ## [1.5.2] — 2026-08-28
 
 A QA pass over 1.5.1 found one way to lose every backup you have. The rest are the
