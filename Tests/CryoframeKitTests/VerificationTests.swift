@@ -120,6 +120,7 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
 // version then wore a "Restore-tested" badge while the actual restore failed on
 // exactly that file. The drill has to fail wherever the restore would.
 @Test func aDrillFailsOnAFileTheRestoreCouldNotRead() throws {
+    try #require(geteuid() != 0, "mode bits do not bind root; this test proves nothing there")
     let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
     try Data("readable".utf8).write(to: dir.appendingPathComponent("fine.txt"))
     let locked = dir.appendingPathComponent("locked.txt")
@@ -145,7 +146,7 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
     let staticType = ContentType.genericFolder(id: "e", displayName: "Empty", path: .home("Empty"))
     let rep = try StrongVerifier().verify(result, type: staticType)
     #expect(!rep.passed)
-    #expect(rep.details.contains("empty"))
+    #expect(rep.details.contains("no files"), "\(rep.details)")
 }
 
 // MARK: - transient tool-error retry
@@ -258,4 +259,70 @@ private func infoPlist(imagePath: String, devices: [String]) -> String {
     #expect(Set(detached) == ["/dev/disk9", "/dev/disk9s1"])
     // whole-disk first: detaching it takes the partitions with it
     #expect(detached.first == "/dev/disk9")
+}
+
+// MARK: - 1.5.4: the folder-library drill, probed directly (no image needed)
+
+private func staticFixture() throws -> URL {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cf-static-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+}
+
+// A directory the walk cannot enter fails a restore exactly the way a file it
+// cannot open does — the copy trips on it the same way. An enumerator skips such
+// directories silently by default, which is the one class of false pass the
+// 1.5.3 rewrite left open.
+@Test func aDrillFailsOnAFolderItCannotEnter() throws {
+    try #require(geteuid() != 0, "mode bits do not bind root; this test proves nothing there")
+    let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
+    try Data("ok".utf8).write(to: dir.appendingPathComponent("fine.txt"))
+    let sealed = dir.appendingPathComponent("sealed", isDirectory: true)
+    try FileManager.default.createDirectory(at: sealed, withIntermediateDirectories: true)
+    try Data("hidden".utf8).write(to: sealed.appendingPathComponent("inside.txt"))
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: sealed.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sealed.path) }
+
+    let rep = StrongVerifier().staticReport(dir, fm: .default)
+    #expect(!rep.passed, "passed a tree with a folder the restore cannot enter")
+    #expect(rep.details.contains("sealed/"), "should name the folder: \(rep.details)")
+}
+
+// exactly `namedUnreadableLimit` failures used to say "and others" about none
+@Test func theUnreadableListIsHonestAboutHowManyMoreThereAre() throws {
+    try #require(geteuid() != 0)
+    let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
+    let n = StrongVerifier.namedUnreadableLimit
+    var locked: [URL] = []
+    for i in 0..<n {
+        let f = dir.appendingPathComponent("locked\(i).txt")
+        try Data("x".utf8).write(to: f)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: f.path)
+        locked.append(f)
+    }
+    defer { for f in locked { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: f.path) } }
+
+    let rep = StrongVerifier().staticReport(dir, fm: .default)
+    #expect(!rep.passed)
+    #expect(!rep.details.contains("more"), "claimed more failures than there were: \(rep.details)")
+}
+
+// the executor and the drill must agree on what "empty" means: no files. Folders on
+// their own are not a backup, and the drill must not bless an archive of them.
+@Test func aFolderOnlyArchiveIsEmptyToTheDrillToo() throws {
+    let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir.appendingPathComponent("a/b/c"), withIntermediateDirectories: true)
+    let rep = StrongVerifier().staticReport(dir, fm: .default)
+    #expect(!rep.passed)
+    #expect(rep.details.contains("no files"), "\(rep.details)")
+    #expect(JobExecutor.isEmptyTree(dir), "the executor disagrees with the drill about this tree")
+}
+
+// a sealed zip was fully extracted by ditto to get here; the probe is for mounts
+@Test func aSealedZipDrillCountsWithoutProbing() throws {
+    let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
+    try Data("x".utf8).write(to: dir.appendingPathComponent("f.txt"))
+    let rep = StrongVerifier().staticReport(dir, fm: .default, probeReadability: false)
+    #expect(rep.passed)
+    #expect(rep.details.hasPrefix("found"), "\(rep.details)")
 }

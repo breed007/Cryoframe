@@ -74,7 +74,11 @@ public struct StrongVerifier: Sendable {
                              : "quick_check: \(out.isEmpty ? r.stderr.trimmingCharacters(in: .whitespacesAndNewlines) : out)",
                           ok ? [] : ["integrity check failed"])
         } else {
-            return staticReport(libRoot, fm: fm)
+            // ditto has just extracted a sealed zip in full, reading every byte of
+            // every entry to do it; opening each extracted file afterwards proves
+            // nothing the extraction didn't. The open probe is for the mounted
+            // formats, where a mount can hide a file the copy will then trip on.
+            return staticReport(libRoot, fm: fm, probeReadability: result.format != .sealedZip)
         }
     }
 
@@ -85,40 +89,65 @@ public struct StrongVerifier: Sendable {
     /// every file, so the drill opens every file — the cheapest check that fails
     /// wherever the restore would. It reads no data; open and close is what proves
     /// readability, and the checksum manifest already covers the bytes.
-    private func staticReport(_ libRoot: URL, fm: FileManager) -> VerificationReport {
+    /// how many unreadable files get named before the sentence stops listing them.
+    static let namedUnreadableLimit = 5
+
+    func staticReport(_ libRoot: URL, fm: FileManager, probeReadability: Bool = true) -> VerificationReport {
         var files = 0, dirs = 0
-        var unreadable: [String] = []
-        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
-        guard let walker = fm.enumerator(at: libRoot, includingPropertiesForKeys: keys) else {
+        var unreadableCount = 0
+        var named: [String] = []
+        // A directory the walk cannot enter is exactly as fatal to a restore as a file
+        // it cannot open — the copy fails on it the same way — so it is recorded as an
+        // unreadable entry rather than silently skipped, which is what an enumerator
+        // does by default.
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
+        guard let walker = fm.enumerator(at: libRoot, includingPropertiesForKeys: Array(keys), options: [],
+                                         errorHandler: { url, error in
+            unreadableCount += 1
+            if named.count < Self.namedUnreadableLimit {
+                let why = ((error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError)
+                    .map { $0.domain == NSPOSIXErrorDomain ? String(cString: strerror(Int32($0.code))) : $0.localizedDescription }
+                    ?? error.localizedDescription
+                named.append("\(url.lastPathComponent)/ (\(why))")
+            }
+            return true          // keep walking; the verdict is already fixed, the count is still useful
+        }) else {
             return report(.mountAndOpen, false, "couldn't read the library inside the archive", ["unreadable root"])
         }
         for case let url as URL in walker {
-            let v = try? url.resourceValues(forKeys: Set(keys))
+            let v = try? url.resourceValues(forKeys: keys)
             if v?.isDirectory == true { dirs += 1; continue }
             if v?.isSymbolicLink == true { continue }        // the target is checked on its own
             guard v?.isRegularFile == true else { continue }
             files += 1
+            // once enough failures are recorded the verdict cannot change; keep counting
+            // files from the prefetched attributes but stop paying for the syscall.
+            guard probeReadability, unreadableCount < Self.namedUnreadableLimit else { continue }
             // O_RDONLY and straight back out. This is exactly what a restore's copy
             // needs and exactly what it fails on.
             let fd = open(url.path, O_RDONLY)
             if fd < 0 {
-                if unreadable.count < 5 {
-                    unreadable.append("\(url.lastPathComponent) (\(String(cString: strerror(errno))))")
-                }
+                unreadableCount += 1
+                named.append("\(url.lastPathComponent) (\(String(cString: strerror(errno))))")
             } else {
                 close(fd)
             }
         }
-        if files == 0 && dirs == 0 {
-            return report(.mountAndOpen, false, "the library inside the archive is empty", ["empty root"])
+        // "empty" means what JobExecutor.isEmptyTree means: no files. Folders alone are
+        // not a backup, and a folder-only archive is one the executor now refuses to
+        // make — so the drill must not bless the ones that predate that.
+        if files == 0 {
+            return report(.mountAndOpen, false, "the library inside the archive has no files in it", ["empty root"])
         }
-        guard unreadable.isEmpty else {
-            let more = unreadable.count >= 5 ? " and others" : ""
+        guard unreadableCount == 0 else {
+            let more = unreadableCount > named.count ? " and \(unreadableCount - named.count) more" : ""
+            let checked = unreadableCount >= Self.namedUnreadableLimit ? "stopped checking after" : "\(files) file(s) checked,"
             return report(.mountAndOpen, false,
-                          "\(files) file(s) checked, but some could not be opened: \(unreadable.joined(separator: ", "))\(more)",
+                          "\(checked) \(unreadableCount) could not be opened: \(named.joined(separator: ", "))\(more)",
                           ["unreadable files"])
         }
-        return report(.mountAndOpen, true, "opened all \(files) file(s) in \(dirs) folder(s)", [])
+        let how = probeReadability ? "opened all" : "found"
+        return report(.mountAndOpen, true, "\(how) \(files) file(s) in \(dirs) folder(s)", [])
     }
 
     /// the library may be at the archive root (dmg) or one level down (zip
