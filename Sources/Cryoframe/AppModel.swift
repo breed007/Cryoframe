@@ -505,11 +505,10 @@ final class AppModel: ObservableObject {
         refreshSleepGuard()
         let control = RunControl(); controls[id] = control
         jobStage[id] = .preparing
-        // marks the run as started; replaced by its result line when it finishes, so
+        // marks the run as started; its result line replaces it when it finishes, so
         // the log doesn't accumulate a timestamp-less "▶ JobName" beside every
         // completed run — which reads like a run that started and never came back.
-        log("▶ \(job.name)")
-        runningLogLine[id] = "▶ \(job.name)"
+        log(Self.startedLine(job.name))
         let resolved = job.resolvingLibraries(in: registry)
         let executor = TransferConfig.makeExecutor(detector: detector, store: store)
         Task {
@@ -538,7 +537,7 @@ final class AppModel: ObservableObject {
         history.append(record)
         lastRecords[record.jobID] = record
         if let w = record.warning { log("⚠︎ \(w)") }
-        logFinished(record.jobID, Self.historyLine(record))
+        logFinished(record)
         maybeNotify(record)
     }
 
@@ -558,21 +557,21 @@ final class AppModel: ObservableObject {
         return "\(symbol(r.outcome)) \(r.jobName)\(tag): \(r.summary) · \(when)"
     }
 
-    /// the "▶ started" line for a run in flight, so its result can replace it.
-    private var runningLogLine: [String: String] = [:]
+    /// the one place the "started" line is formatted — the finish path has to find
+    /// the exact string the start path wrote, and two literals drift.
+    static func startedLine(_ jobName: String) -> String { "▶ \(jobName)" }
 
     private func log(_ line: String) {
         activity.insert(line, at: 0)
         if activity.count > 60 { activity.removeLast() }
     }
 
-    /// log a finished run, taking its "started" line out of the list.
-    private func logFinished(_ id: String, _ line: String) {
-        if let started = runningLogLine.removeValue(forKey: id),
-           let i = activity.firstIndex(of: started) {
-            activity.remove(at: i)
-        }
-        log(line)
+    /// log a finished run, taking its "started" line out of the list. Derived from
+    /// the record rather than kept in a side table: nothing to leak when a run ends
+    /// by a path that doesn't come through here.
+    private func logFinished(_ record: RunRecord) {
+        if let i = activity.firstIndex(of: Self.startedLine(record.jobName)) { activity.remove(at: i) }
+        log(Self.historyLine(record))
     }
 }
 
