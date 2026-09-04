@@ -2,6 +2,22 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.5.4] — 2026-09-04
+
+A code review of 1.5.3. Most of it tightens things that release introduced; two
+items are the same bug it fixed, one level up.
+
+### Fixed
+- **A restore drill could still pass an archive with a folder it couldn't enter.** 1.5.3 made the drill open every file, but the walk skipped a folder it lacked permission for without a word, and a restore fails on that folder the same way it fails on a file. The walk now reports the folder instead of stepping around it.
+- **An unreadable source was reported as an empty one.** A folder the app could not read looked, to the new empty check, exactly like a folder with nothing in it, so the run said "there is nothing to back up" about a folder full of files. Only a folder the app could actually see is now called empty, and a folder holding only links counts as something to back up.
+- **The "switch to sealed zip" advice could appear for the wrong failure.** It was keyed on the disk-image tool reporting "Permission denied", but the same tool says that when it can't *mount* an archive at check time, where the advice is wrong on both cause and remedy. It now fires only when a sealed DMG is being built.
+- **A failed restore still showed a temporary path in two places.** 1.5.3 fixed the restore window; the recovery flow and the scheduled rehearsal, whose text reaches notifications and alerts, still printed the full scratch path. All three now say the same thing, and the reason reads "permission denied" rather than Foundation's sentence around it.
+- **The empty-library run summary miscounted.** The failure was recorded with a blank destination, which turned "1 library" into "2 copies" in the summary line. It is now recorded once per destination, the way an unreachable destination already is.
+- **The drill and the run disagreed about what "empty" means.** The run refused a source with folders but no files; the drill passed an archive of the same. Both now mean no files.
+- The drill's list of unreadable files said "and others" when there were exactly five and no others, and kept opening files after the verdict was already decided. It now stops at five and says how many more there were.
+- A sealed zip's drill opened every extracted file a second time, after the extraction had already read every byte of them. It counts them instead.
+- A source was walked twice before archiving, once for its size and once for whether it was empty. Once, now.
+
 ## [1.5.3] — 2026-08-30
 
 A second QA pass, this one driving the app rather than reading it. The good news
