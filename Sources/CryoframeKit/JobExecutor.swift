@@ -187,16 +187,27 @@ public struct JobExecutor: Sendable {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
                 }
                 let source = ArchiveSource(name: root.lastPathComponent, root: root)
-                let sourceSize = Self.directorySize(root)
+                let stats = Self.directoryStats(root)
+                let sourceSize = stats.bytes
 
                 // An empty source seals into an archive that reports success and then
                 // cannot be restored: RestoreEngine finds nothing to rebuild the bundle
                 // from and throws libraryNotFound, while the checksum check passes the
                 // artifact forever. A backup of nothing is not a backup, so say so now
                 // rather than at the restore.
-                if Self.isEmptyTree(root) {
-                    results.append(.failed(library: library.displayName, destination: "",
-                                           error: "\(library.displayName) is empty — there is nothing to back up"))
+                //
+                // Only when the walk could actually see the tree. A root the app may not
+                // read also yields no files, and calling that "empty" sends someone
+                // checking their folder when they should be checking permissions — the
+                // archive tool reports that case correctly on its own, so let it.
+                if stats.readable, stats.entries == 0 {
+                    // one failure per destination we would have written to, the same way
+                    // an unavailable destination is reported — a "" destination lands in
+                    // the run summary's destination set and turns "libraries" into "copies"
+                    for d in dests {
+                        results.append(.failed(library: library.displayName, destination: d.target.displayName,
+                                               error: "\(library.displayName) is empty — there is nothing to back up"))
+                    }
                     continue
                 }
                 onStage(.archiving)
@@ -494,41 +505,50 @@ public struct JobExecutor: Sendable {
                 }
                 let remaining = total > written ? total - written : 0
                 let eta: TimeInterval? = (rate ?? 0) > 0 ? Double(remaining) / rate! : nil
+                // the denominator is the SOURCE size, and a sealed archive can exceed
+                // it, so "5.2 MB of 4.5 MB" was reachable beside a bar pinned at 99%.
+                // Past the estimate, just report what's been written.
+                let haveEstimate = total > 0 && written <= total
                 let fraction = total > 0 ? min(0.99, Double(written) / Double(total)) : nil
+                let detail = haveEstimate ? "\(Self.human(written)) of \(Self.human(total))" : Self.human(written)
                 onProgress(RunProgress(stage: .archiving, libraryIndex: idx, libraryCount: count, fraction: fraction,
-                                       // the denominator is the SOURCE size, and a sealed
-                                       // archive can exceed it, so "5.2 MB of 4.5 MB" was
-                                       // reachable — nonsense beside a bar pinned at 99%.
-                                       // Past the estimate, just report what's been written.
-                                       detail: (total > 0 && written <= total)
-                                           ? "\(Self.human(written)) of \(Self.human(total))"
-                                           : Self.human(written),
-                                       speed: rate, eta: eta, elapsed: now.timeIntervalSince(start)))
+                                       detail: detail, speed: rate, eta: eta, elapsed: now.timeIntervalSince(start)))
                 try? await Task.sleep(nanoseconds: 600_000_000)
             }
         }
     }
 
-    /// true when a source holds no files at all (empty folders don't count). Cheap:
-    /// stops at the first regular file rather than walking the whole tree.
-    static func isEmptyTree(_ url: URL) -> Bool {
-        guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey]) else { return true }
-        for case let u as URL in e {
-            if (try? u.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true { return false }
+    /// what one walk of a source tells the run: allocated bytes, how many things
+    /// worth backing up it holds (regular files and symlinks — a folder of links is
+    /// not nothing), and whether the walk could see the tree at all.
+    struct DirectoryStats { var bytes: UInt64 = 0; var entries = 0; var readable = true }
+
+    static func directoryStats(_ url: URL) -> DirectoryStats {
+        var out = DirectoryStats()
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
+        guard FileManager.default.isReadableFile(atPath: url.path),
+              let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys), options: [],
+                                                     errorHandler: { _, _ in out.readable = false; return true }) else {
+            out.readable = false; return out
         }
-        return true
+        for case let u as URL in e {
+            guard let v = try? u.resourceValues(forKeys: keys) else { continue }
+            if v.isSymbolicLink == true { out.entries += 1; continue }
+            guard v.isRegularFile == true else { continue }
+            out.entries += 1
+            out.bytes += UInt64(v.totalFileAllocatedSize ?? v.fileAllocatedSize ?? 0)
+        }
+        return out
     }
 
-    public static func directorySize(_ url: URL) -> UInt64 {
-        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey]
-        guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) else { return 0 }
-        var total: UInt64 = 0
-        for case let u as URL in e {
-            guard let v = try? u.resourceValues(forKeys: keys), v.isRegularFile == true else { continue }
-            total += UInt64(v.totalFileAllocatedSize ?? v.fileAllocatedSize ?? 0)
-        }
-        return total
+    /// true when a readable source holds nothing to back up (empty folders don't
+    /// count). An unreadable one is NOT empty — it is unreadable, and says so elsewhere.
+    static func isEmptyTree(_ url: URL) -> Bool {
+        let s = directoryStats(url)
+        return s.readable && s.entries == 0
     }
+
+    public static func directorySize(_ url: URL) -> UInt64 { directoryStats(url).bytes }
 
     static func human(_ bytes: UInt64) -> String {
         let f = ByteCountFormatter(); f.countStyle = .file

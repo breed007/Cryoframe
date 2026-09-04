@@ -170,6 +170,50 @@ private func storage(_ archives: [ArchiveSize], free: UInt64, job: String = "j")
     // folders alone are still nothing to back up
     #expect(JobExecutor.isEmptyTree(base.appendingPathComponent("hollow")))
     #expect(!JobExecutor.isEmptyTree(real))
-    // and a source that doesn't exist at all reads as empty rather than crashing
-    #expect(JobExecutor.isEmptyTree(base.appendingPathComponent("nope")))
+    // a source that doesn't exist is not "empty" — it is unreadable, and calling it
+    // empty is the mis-diagnosis 1.5.4 removed. It must not crash either.
+    let gone = base.appendingPathComponent("nope")
+    #expect(!JobExecutor.directoryStats(gone).readable)
+    #expect(!JobExecutor.isEmptyTree(gone))
+}
+
+// MARK: - 1.5.4: an unreadable source is not an empty one
+
+@Test func anUnreadableSourceIsNotCalledEmpty() throws {
+    try #require(geteuid() != 0, "mode bits do not bind root")
+    let fm = FileManager.default
+    let base = fm.temporaryDirectory.appendingPathComponent("cf-unread-\(UUID().uuidString)")
+    let root = base.appendingPathComponent("root", isDirectory: true)
+    defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path); try? fm.removeItem(at: base) }
+    try fm.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("thousands of files, allegedly".utf8).write(to: root.appendingPathComponent("f.txt"))
+    try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: root.path)
+
+    let stats = JobExecutor.directoryStats(root)
+    #expect(!stats.readable)
+    #expect(!JobExecutor.isEmptyTree(root), "mis-diagnosed a permissions problem as an empty folder")
+}
+
+@Test func aFolderOfSymlinksIsSomethingToBackUp() throws {
+    let fm = FileManager.default
+    let base = fm.temporaryDirectory.appendingPathComponent("cf-links-\(UUID().uuidString)")
+    defer { try? fm.removeItem(at: base) }
+    try fm.createDirectory(at: base, withIntermediateDirectories: true)
+    try fm.createSymbolicLink(at: base.appendingPathComponent("link"), withDestinationURL: URL(fileURLWithPath: "/etc/hosts"))
+    #expect(!JobExecutor.isEmptyTree(base))
+}
+
+// one walk answers both questions the run asks
+@Test func directoryStatsCountsBytesAndEntriesInOnePass() throws {
+    let fm = FileManager.default
+    let base = fm.temporaryDirectory.appendingPathComponent("cf-stats-\(UUID().uuidString)")
+    defer { try? fm.removeItem(at: base) }
+    try fm.createDirectory(at: base.appendingPathComponent("sub"), withIntermediateDirectories: true)
+    try Data(count: 5000).write(to: base.appendingPathComponent("a.bin"))
+    try Data(count: 3000).write(to: base.appendingPathComponent("sub/b.bin"))
+    let s = JobExecutor.directoryStats(base)
+    #expect(s.readable)
+    #expect(s.entries == 2)
+    #expect(s.bytes >= 8000)
+    #expect(JobExecutor.directorySize(base) == s.bytes)
 }
