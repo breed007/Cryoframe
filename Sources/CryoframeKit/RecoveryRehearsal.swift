@@ -149,6 +149,7 @@ public struct RecoveryRehearsal: Sendable {
             case .destinationExists:         return "something is already in the way"
             }
         }
+        if let copy = RestoreFailureText.copyFailure(e) { return copy }
         return "wouldn't open — \((e as NSError).localizedDescription)"
     }
 }

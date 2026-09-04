@@ -21,22 +21,25 @@ extension ArchiveError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .toolFailed(let tool, _, let stderr):
-            let line = stderr.split(separator: "\n").last.map(String.init)?
-                .trimmingCharacters(in: .whitespaces) ?? ""
-            // hdiutil refuses to build a sealed DMG when any file inside carries a
+            let lines = stderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            // hdiutil refuses to BUILD a sealed DMG when any file inside carries a
             // deny-delete ACL, and says only "Permission denied" — which reads as a
             // Cryoframe permissions problem. It is not: ditto handles the same file,
             // so the sealed zip format is the way out. Every standard home folder
             // carries that ACL by default and inheriting ones propagate, so this is
             // worth naming rather than leaving as a bare errno.
-            if tool == "hdiutil", stderr.localizedCaseInsensitiveContains("permission denied") {
-                let which = stderr.split(separator: "\n")
-                    .first { $0.localizedCaseInsensitiveContains("could not access") }
-                    .map { String($0).trimmingCharacters(in: .whitespaces) }
+            //
+            // Keyed on the CREATE failure specifically. The same tool also reports an
+            // attach that was refused, at verify or drill time, and telling someone
+            // whose archive won't mount to switch source formats is wrong on both the
+            // cause and the remedy.
+            if tool == "hdiutil", Self.isCreateRefusedByACL(lines) {
+                let which = lines.first { $0.localizedCaseInsensitiveContains("could not access") }
                 return "a file in this library can't be read into a sealed DMG"
                     + (which.map { " — \($0)" } ?? "")
                     + ". A permission or ACL on it blocks hdiutil; the sealed zip format can archive it."
             }
+            let line = lines.last ?? ""
             return line.isEmpty ? "\(tool) failed" : "\(tool) failed — \(line)"
         case .noArtifactProduced:
             return "the archive came out empty"
@@ -47,6 +50,47 @@ extension ArchiveError: LocalizedError {
             // encrypted and the key is not here, so nothing will run until it is.
             return "this job is encrypted, but its passphrase isn't on this Mac — open the job and enter it again"
         }
+    }
+}
+
+extension ArchiveError {
+    /// hdiutil's stderr for a `create -srcfolder` that hit a file it may not read:
+    /// a "could not access <path> - Permission denied" line, and/or "create failed -
+    /// Permission denied". An attach refusal says "attach failed" and must not match.
+    static func isCreateRefusedByACL(_ lines: [String]) -> Bool {
+        lines.contains { l in
+            let lc = l.lowercased()
+            return lc.contains("permission denied")
+                && (lc.contains("could not access") || lc.contains("create failed"))
+        }
+    }
+}
+
+/// What a person reads when a restore's copy fails.
+///
+/// Foundation reports a failed copy as an NSCocoaError whose description names the
+/// path it was reading from — inside /private/var/folders, in a scratch directory
+/// that exists only while the archive is mounted — and whose underlying POSIX error
+/// renders as "The operation couldn't be completed. Permission denied". Three
+/// renderers (the restore sheet, the recovery wizard, the scheduled rehearsal whose
+/// text reaches notifications and alerts) all receive that same error from the same
+/// RestoreEngine copy, so the sentence is made in one place.
+public enum RestoreFailureText {
+    /// the file and the plain reason, or nil when this isn't a file-level failure.
+    public static func copyFailure(_ e: Error) -> String? {
+        let ns = e as NSError
+        guard let path = ns.userInfo[NSFilePathErrorKey] as? String else { return nil }
+        let file = (path as NSString).lastPathComponent
+        let reason: String
+        if let u = ns.userInfo[NSUnderlyingErrorKey] as? NSError, u.domain == NSPOSIXErrorDomain {
+            reason = String(cString: strerror(Int32(u.code)))          // "Permission denied", not the boilerplate around it
+        } else if let u = ns.userInfo[NSUnderlyingErrorKey] as? NSError, let r = u.localizedFailureReason {
+            reason = r
+        } else {
+            reason = ns.localizedFailureReason ?? "it couldn't be copied"
+        }
+        let plain = reason.prefix(1).lowercased() + reason.dropFirst()
+        return "couldn't restore \(file) — \(plain)"
     }
 }
 

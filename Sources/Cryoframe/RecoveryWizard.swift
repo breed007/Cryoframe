@@ -149,6 +149,7 @@ final class RecoveryModel: ObservableObject {
             case .passphraseUnavailable: return "encrypted, and no passphrase was recovered"
             }
         }
+        if let copy = RestoreFailureText.copyFailure(e) { return copy }
         return (e as NSError).localizedDescription
     }
 }
