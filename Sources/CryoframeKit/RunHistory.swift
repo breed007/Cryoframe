@@ -74,9 +74,11 @@ public struct LibraryOutcome: Codable, Sendable, Equatable, Identifiable {
         case .completed(let lib, let dest, let parts, let bytes, let v):
             library = lib; destination = dest; self.parts = parts; self.bytes = bytes
             switch v {
-            case true:  status = "verified";      error = nil
-            case false: status = "verify failed"; error = "verification did not pass"
-            case nil:   status = "archived";      error = nil
+            // spelled as .some/.none: the Swift 6.1 compiler (Xcode 16, macOS 15)
+            // does not count true/false/nil as covering a Bool?
+            case .some(true):  status = "verified";      error = nil
+            case .some(false): status = "verify failed"; error = "verification did not pass"
+            case .none:        status = "archived";      error = nil
             }
         case .notFound(let lib):
             library = lib; parts = 0; bytes = 0; status = "not found"; error = nil
