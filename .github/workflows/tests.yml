@@ -1,0 +1,39 @@
+# Builds CryoframeKit and runs its test suite on macOS. Cloud agent sessions run
+# on Linux and can't build this app, so this is the only place their pull
+# requests get compiled and tested before a merge.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    # the oldest macOS Cryoframe supports, so a newer-only API shows up here
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Run the test suite
+        # unsigned: the Developer ID certificate lives on the release Mac, and the
+        # Kit tests are fake-backed, so they need neither signing nor root
+        run: |
+          set -o pipefail
+          xcodebuild -version
+          xcodebuild test -scheme Cryoframe-Core -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
+            | grep -vE '^(CompileSwift|SwiftCompile|SwiftDriver|Ld|CodeSign|ProcessInfoPlistFile|WriteAuxiliaryFile|CreateBuildDirectory|MkDir|Copy|Touch|RegisterExecutionPolicyException|GenerateAssetSymbols|note:|    cd |    export |    /Applications/Xcode)'

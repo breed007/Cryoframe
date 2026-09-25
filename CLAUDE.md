@@ -35,8 +35,10 @@ On the Mac, push to `main` and cut releases only when Brian says to.
 
 Cloud sessions run on Linux. This is a macOS-only app (Xcode, AppKit/SwiftUI,
 APFS snapshots, a root helper), so a cloud session can't build it or run its
-tests. Say so plainly in the pull request: "not built or tested." Never claim
-tests pass unless you ran them.
+tests. The `tests` check (`.github/workflows/tests.yml`) builds and tests every
+pull request on a macOS runner; it is the only verification a cloud change gets,
+so read its result and fix what it reports. Never claim tests pass on the strength
+of anything else.
 
 ## Never commit
 
