@@ -12,8 +12,10 @@ xcuserdata/
 spike/fs_snapshot_spike
 spike/*.dSYM
 
-# Claude Code local session settings — never publish
-.claude/
+# Claude Code local session settings — never publish. The one exception is the
+# shared settings.json, which turns off agent attribution for cloud sessions.
+.claude/*
+!.claude/settings.json
 
 # release artifacts — attach to GitHub Releases, not the repo
 dist/
