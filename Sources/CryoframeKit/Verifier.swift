@@ -78,7 +78,8 @@ public struct StrongVerifier: Sendable {
             // every entry to do it; opening each extracted file afterwards proves
             // nothing the extraction didn't. The open probe is for the mounted
             // formats, where a mount can hide a file the copy will then trip on.
-            return staticReport(libRoot, fm: fm, probeReadability: result.format != .sealedZip)
+            return try staticReport(libRoot, fm: fm, probeReadability: result.format != .sealedZip,
+                                    control: runner.control)
         }
     }
 
@@ -92,7 +93,15 @@ public struct StrongVerifier: Sendable {
     /// how many unreadable files get named before the sentence stops listing them.
     static let namedUnreadableLimit = 5
 
-    func staticReport(_ libRoot: URL, fm: FileManager, probeReadability: Bool = true) -> VerificationReport {
+    /// how often the walk stops to look at Stop and Pause. A check is a lock, which
+    /// is cheap, but the walk can run to hundreds of thousands of files.
+    static let controlCheckInterval = 256
+
+    /// Runs inside a backup's verify stage, with the source snapshot held, and is
+    /// O(files) — so it honors the run's Stop and Pause itself. No tool is in flight
+    /// while it walks, so neither reaches it any other way.
+    func staticReport(_ libRoot: URL, fm: FileManager, probeReadability: Bool = true,
+                      control: RunControl? = nil) throws -> VerificationReport {
         var files = 0, dirs = 0
         var unreadableCount = 0
         var named: [String] = []
@@ -114,7 +123,13 @@ public struct StrongVerifier: Sendable {
         }) else {
             return report(.mountAndOpen, false, "couldn't read the library inside the archive", ["unreadable root"])
         }
+        var seen = 0
         for case let url as URL in walker {
+            if let control, seen % Self.controlCheckInterval == 0 {
+                control.waitWhilePaused()
+                if control.isCancelled { throw CancelledError() }
+            }
+            seen += 1
             let v = try? url.resourceValues(forKeys: keys)
             if v?.isDirectory == true { dirs += 1; continue }
             if v?.isSymbolicLink == true { continue }        // the target is checked on its own

@@ -283,7 +283,7 @@ private func staticFixture() throws -> URL {
     try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: sealed.path)
     defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: sealed.path) }
 
-    let rep = StrongVerifier().staticReport(dir, fm: .default)
+    let rep = try StrongVerifier().staticReport(dir, fm: .default)
     #expect(!rep.passed, "passed a tree with a folder the restore cannot enter")
     #expect(rep.details.contains("sealed/"), "should name the folder: \(rep.details)")
 }
@@ -302,7 +302,7 @@ private func staticFixture() throws -> URL {
     }
     defer { for f in locked { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: f.path) } }
 
-    let rep = StrongVerifier().staticReport(dir, fm: .default)
+    let rep = try StrongVerifier().staticReport(dir, fm: .default)
     #expect(!rep.passed)
     #expect(!rep.details.contains("more"), "claimed more failures than there were: \(rep.details)")
 }
@@ -312,7 +312,7 @@ private func staticFixture() throws -> URL {
 @Test func aFolderOnlyArchiveIsEmptyToTheDrillToo() throws {
     let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
     try FileManager.default.createDirectory(at: dir.appendingPathComponent("a/b/c"), withIntermediateDirectories: true)
-    let rep = StrongVerifier().staticReport(dir, fm: .default)
+    let rep = try StrongVerifier().staticReport(dir, fm: .default)
     #expect(!rep.passed)
     #expect(rep.details.contains("no files"), "\(rep.details)")
     #expect(JobExecutor.isEmptyTree(dir), "the executor disagrees with the drill about this tree")
@@ -322,7 +322,43 @@ private func staticFixture() throws -> URL {
 @Test func aSealedZipDrillCountsWithoutProbing() throws {
     let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
     try Data("x".utf8).write(to: dir.appendingPathComponent("f.txt"))
-    let rep = StrongVerifier().staticReport(dir, fm: .default, probeReadability: false)
+    let rep = try StrongVerifier().staticReport(dir, fm: .default, probeReadability: false)
     #expect(rep.passed)
     #expect(rep.details.hasPrefix("found"), "\(rep.details)")
+}
+
+// The walk opens every file with the source snapshot held, and no tool is in flight
+// while it runs, so a Stop pressed during "verifying" reaches it only if it looks.
+@Test func aStoppedRunStopsTheDrillWalk() throws {
+    let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
+    try Data("x".utf8).write(to: dir.appendingPathComponent("f.txt"))
+    let control = RunControl()
+    control.cancel()
+    #expect(throws: CancelledError.self) {
+        _ = try StrongVerifier().staticReport(dir, fm: .default, control: control)
+    }
+}
+
+// the verifier finds the run's control through its runner, so the executor's two
+// verify call sites need no extra plumbing to get Stop and Pause into the walk
+@Test func theVerifierHearsTheRunItsRunnerBelongsTo() {
+    let control = RunControl()
+    #expect(ProcessCommandRunner(control: control).control === control)
+    #expect(ScriptedCommandRunner { _, _ in CommandResult(status: 0, stdout: "", stderr: "") }.control == nil)
+}
+
+@Test func aPausedRunHoldsTheDrillWalkUntilResumed() throws {
+    let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
+    try Data("x".utf8).write(to: dir.appendingPathComponent("f.txt"))
+    let control = RunControl()
+    #expect(control.pause())              // nothing in flight: a cooperative pause
+    let done = DispatchSemaphore(value: 0)
+    let url = dir
+    DispatchQueue.global().async {
+        _ = try? StrongVerifier().staticReport(url, fm: .default, control: control)
+        done.signal()
+    }
+    #expect(done.wait(timeout: .now() + 1) == .timedOut, "the walk ran while paused")
+    control.resume()
+    #expect(done.wait(timeout: .now() + 10) == .success, "the walk never resumed")
 }

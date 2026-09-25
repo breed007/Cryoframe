@@ -46,6 +46,13 @@ public protocol CommandRunner: Sendable {
     /// to feed `hdiutil -stdinpass` an encryption passphrase without exposing it in
     /// argv or on disk.
     func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult
+    /// the run this runner belongs to, for work done in-process between commands
+    /// (a file walk, say) that must honor Stop and Pause the way a command does.
+    var control: RunControl? { get }
+}
+
+extension CommandRunner {
+    public var control: RunControl? { nil }
 }
 
 public extension CommandRunner {
@@ -92,7 +99,7 @@ public extension CommandRunner {
 /// Real runner over Foundation `Process`. Used by the helper at runtime. When a
 /// `RunControl` is attached, a cancel terminates the in-flight process.
 public struct ProcessCommandRunner: CommandRunner {
-    let control: RunControl?
+    public let control: RunControl?
     public init(control: RunControl? = nil) { self.control = control }
 
     public func run(_ launchPath: String, _ args: [String], stdin: Data? = nil) throws -> CommandResult {
