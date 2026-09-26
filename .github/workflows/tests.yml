@@ -25,7 +25,7 @@ jobs:
       matrix:
         os: [macos-15, macos-26]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -38,8 +38,21 @@ jobs:
         # unsigned: the Developer ID certificate lives on the release Mac, and the
         # Kit tests are fake-backed, so they need neither signing nor root
         run: |
-          set -o pipefail
+          set +e                  # collect the log and the verdict ourselves
           xcodebuild -version
           xcodebuild test -scheme Cryoframe-Core -destination 'platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
-            | grep -vE '^(CompileSwift|SwiftCompile|SwiftDriver|Ld|CodeSign|ProcessInfoPlistFile|WriteAuxiliaryFile|CreateBuildDirectory|MkDir|Copy|Touch|RegisterExecutionPolicyException|GenerateAssetSymbols|note:|    cd |    export |    /Applications/Xcode)'
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" > test.log 2>&1 &
+          pid=$!
+          # The suite takes about three minutes on a Mac. If it is still going after
+          # fifteen, something is wedged: record what every process under the test
+          # runner is doing before giving up, so the log says why.
+          for _ in $(seq 1 180); do kill -0 $pid 2>/dev/null || break; sleep 5; done
+          if kill -0 $pid 2>/dev/null; then
+            echo "::error::the test suite stalled; process state follows"
+            ps -axo pid,ppid,etime,stat,command | grep -Ei 'xctest|CryoframeKitTests|hdiutil|diskimages|ditto|rsync|tmutil|sqlite3|split' | grep -v grep
+            for p in $(pgrep -f 'CryoframeKitTests|xctest'); do sample "$p" 3 -mayDie 2>/dev/null | head -400; done
+            kill $pid; sleep 5
+          fi
+          wait $pid; status=$?
+          grep -vE '^(CompileSwift|SwiftCompile|SwiftDriver|Ld|CodeSign|ProcessInfoPlistFile|WriteAuxiliaryFile|CreateBuildDirectory|MkDir|Copy|Touch|RegisterExecutionPolicyException|GenerateAssetSymbols|note:|    cd |    export |    /Applications/Xcode)' test.log
+          exit $status
