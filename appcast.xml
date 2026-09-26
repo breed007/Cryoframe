@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.5.5</title>
+      <description><![CDATA[A backup could hang for good when a tool reported many errors; fixed, with five smaller fixes.]]></description>
+      <pubDate>Sat, 26 Sep 2026 01:14:39 +0000</pubDate>
+      <sparkle:version>20260925.2113</sparkle:version>
+      <sparkle:shortVersionString>1.5.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.5.5/Cryoframe-1.5.5.dmg" type="application/octet-stream" sparkle:edSignature="ABvsxEgJaeJcTSvx//q4ULsAt4jFCNwxwmmRP70B1axyIuq9m/JiMF0nLeggIL/RIf3DUzrbeQSk4E+NuqVQCw==" length="3961855" />
+    </item>
+    <item>
       <title>1.5.4</title>
       <description><![CDATA[A code review of 1.5.3: the restore drill and the empty-source check, tightened.]]></description>
       <pubDate>Fri, 04 Sep 2026 05:42:05 +0000</pubDate>
