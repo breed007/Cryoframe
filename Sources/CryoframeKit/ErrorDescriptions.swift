@@ -29,12 +29,18 @@ extension ArchiveError: LocalizedError {
             // carries that ACL by default and inheriting ones propagate, so this is
             // worth naming rather than leaving as a bare errno.
             //
-            // Keyed on the CREATE failure specifically. The same tool also reports an
-            // attach that was refused, at verify or drill time, and telling someone
-            // whose archive won't mount to switch source formats is wrong on both the
+            // Keyed on hdiutil failing to READ a source file specifically. The same
+            // tool also reports an attach that was refused, at verify or drill time,
+            // and a live mirror's first `create` into a folder it may not write; telling
+            // either of those people to switch source formats is wrong on both the
             // cause and the remedy.
             if tool == "hdiutil", Self.isCreateRefusedByACL(lines) {
                 let which = lines.first { $0.localizedCaseInsensitiveContains("could not access") }
+                    .map { l in
+                        // hdiutil prints this line with no newline before its own
+                        // "hdiutil: create failed", so cut the two apart
+                        l.range(of: "hdiutil:").map { String(l[..<$0.lowerBound]) } ?? l
+                    }
                 return "a file in this library can't be read into a sealed DMG"
                     + (which.map { " — \($0)" } ?? "")
                     + ". A permission or ACL on it blocks hdiutil; the sealed zip format can archive it."
@@ -54,14 +60,16 @@ extension ArchiveError: LocalizedError {
 }
 
 extension ArchiveError {
-    /// hdiutil's stderr for a `create -srcfolder` that hit a file it may not read:
-    /// a "could not access <path> - Permission denied" line, and/or "create failed -
-    /// Permission denied". An attach refusal says "attach failed" and must not match.
+    /// hdiutil's stderr for a `create -srcfolder` that hit a file it may not read.
+    /// Measured: "could not access <path> - Permission denied", glued to the
+    /// "hdiutil: create failed - Permission denied" that follows it. A bare "create
+    /// failed - Permission denied" is NOT this: it is also what a live mirror's
+    /// sparsebundle create says when the destination folder refuses the write. An
+    /// attach refusal says "attach failed" and must not match either.
     static func isCreateRefusedByACL(_ lines: [String]) -> Bool {
         lines.contains { l in
             let lc = l.lowercased()
-            return lc.contains("permission denied")
-                && (lc.contains("could not access") || lc.contains("create failed"))
+            return lc.contains("could not access") && lc.contains("permission denied")
         }
     }
 }

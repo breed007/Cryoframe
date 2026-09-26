@@ -113,3 +113,38 @@ import Foundation
     #expect(RestoreFailureText.copyFailure(RestoreError.libraryNotFound) == nil)
     #expect(RestoreFailureText.copyFailure(NSError(domain: "x", code: 1)) == nil)
 }
+
+// MARK: - the ACL explanation must not fire on a mirror's destination either
+
+// Measured: a live mirror's first sparsebundle `create` into a folder that refuses
+// the write says exactly "hdiutil: create failed - Permission denied". Nothing in
+// the library is at fault, and a mirror has no "sealed zip" to switch to.
+@Test func aMirrorDestinationThatRefusesTheWriteIsNotASourceACL() {
+    let e = ArchiveError.toolFailed(tool: "hdiutil", status: 1,
+                                    stderr: "hdiutil: create failed - Permission denied\n")
+    let text = e.localizedDescription
+    #expect(!text.contains("sealed zip"), "blamed the library for the destination: \(text)")
+    #expect(text.contains("create failed - Permission denied"), "\(text)")
+}
+
+// Measured on macOS 26: hdiutil prints the source-read line with no newline before
+// its own "hdiutil: create failed". The file must still be named cleanly.
+@Test func theACLExplanationNamesTheFileFromHdiutilsRealOutput() {
+    let e = ArchiveError.toolFailed(tool: "hdiutil", status: 1,
+        stderr: "could not access /Volumes/Lib/a.txt - Permission deniedhdiutil: create failed - Permission denied\n")
+    let text = e.localizedDescription
+    #expect(text.contains("sealed zip"), "\(text)")
+    #expect(text.contains("a.txt - Permission denied"), "\(text)")
+    #expect(!text.contains("deniedhdiutil"), "carried hdiutil's glued line through: \(text)")
+}
+
+// A failed library's text is what the job row, History, and alerts show. It used to
+// be String(describing:), which printed the enum case and skipped every sentence above.
+@Test func aFailedLibraryIsDescribedInWordsNotAsAnEnumCase() {
+    let e = ArchiveError.toolFailed(tool: "hdiutil", status: 1,
+        stderr: "could not access /Volumes/Lib/a.txt - Permission denied\nhdiutil: create failed - Permission denied")
+    let text = JobExecutor.failureText(e)
+    #expect(!text.contains("toolFailed("), "\(text)")
+    #expect(text.contains("sealed zip"), "\(text)")
+    #expect(JobExecutor.failureText(ArchiveError.passphraseUnavailable).contains("passphrase"))
+}

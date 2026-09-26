@@ -239,7 +239,7 @@ public struct JobExecutor: Sendable {
                     } catch is CancelledError { poller.cancel(); cancelled = true; break }
                     catch {
                         poller.cancel()
-                        for t in live { results.append(.failed(library: library.displayName, destination: t.displayName, error: String(describing: error))) }
+                        for t in live { results.append(.failed(library: library.displayName, destination: t.displayName, error: Self.failureText(error))) }
                     }
                 } else {
                     // LIVE MIRROR: an in-place incremental rsync per destination, from
@@ -272,7 +272,7 @@ public struct JobExecutor: Sendable {
                             poller.cancel(); cancelled = true; break libraryLoop
                         } catch {
                             poller.cancel()
-                            results.append(.failed(library: library.displayName, destination: t.displayName, error: String(describing: error)))
+                            results.append(.failed(library: library.displayName, destination: t.displayName, error: Self.failureText(error)))
                         }
                     }
                 }
@@ -363,7 +363,7 @@ public struct JobExecutor: Sendable {
                     pass.builds.forEach(cleanupBuild); return .cancelled
                 } catch {
                     if dest.constraints.resumableTransfer { keepBuild = true }     // pending saved → resume later
-                    results.append(.failed(library: build.library.displayName, destination: dest.displayName, error: String(describing: error)))
+                    results.append(.failed(library: build.library.displayName, destination: dest.displayName, error: Self.failureText(error)))
                 }
             }
             if !keepBuild { cleanupBuild(build) }
@@ -549,6 +549,12 @@ public struct JobExecutor: Sendable {
     }
 
     public static func directorySize(_ url: URL) -> UInt64 { directoryStats(url).bytes }
+
+    /// what a failed library says on the job row, in History, and in alerts. Every
+    /// Kit error is a LocalizedError with a sentence written for this; String(describing:)
+    /// printed the enum case instead ("toolFailed(tool: \"hdiutil\", status: 1, …)"),
+    /// and none of those sentences ever reached a per-library failure.
+    static func failureText(_ error: Error) -> String { error.localizedDescription }
 
     static func human(_ bytes: UInt64) -> String {
         let f = ByteCountFormatter(); f.countStyle = .file
