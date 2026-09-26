@@ -2,6 +2,19 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.5.5] — 2026-09-26
+
+The review angles that never ran on 1.5.3, plus what the first automated macOS test
+runs turned up. One fix matters more than the rest: a backup could hang for good.
+
+### Fixed
+- **A backup could hang forever when a tool reported a lot of errors.** Cryoframe read everything a tool printed as output before it read anything the tool printed as errors. When a tool filled its error channel first, both sides waited on each other indefinitely. A live mirror of a library with a few hundred files it couldn't read was enough to do it, and the run then sat with the source snapshot held until someone pressed Stop. Both channels are now read at once.
+- **A failed library showed internal error text in History.** The job row, History, and alerts showed things like `toolFailed(tool: "hdiutil", status: 1, …)` for a library that failed, so none of the plain explanations written in 1.5.0 and 1.5.4 ever appeared there. Failures now read as sentences.
+- **A live mirror to a folder it couldn't write to was told to switch to sealed zip.** The disk-image tool reports that problem with the same words it uses for a library file it can't read. The advice now needs the tool to name a file in the library, which it only does for the second case.
+- **Stop and Pause didn't reach the restore check at the end of a backup.** Since 1.5.3 that check opens every file in the archive, and nothing in it listened for Stop or Pause, so stopping a large library during "verifying" meant waiting for the whole check. It now stops or pauses within a few hundred files.
+- **A library made only of links failed every restore drill.** The backup counted the links as something to back up; the drill counted only files and failed the archive for having none. Both now count links.
+- **Restoring from an encrypted archive blamed the passphrase when one file couldn't be copied.** A file that fails to copy fails after the archive has already opened, which means the passphrase was right. The restore window now names the file and the reason instead.
+
 ## [1.5.4] — 2026-09-04
 
 A code review of 1.5.3. Most of it tightens things that release introduced; two
