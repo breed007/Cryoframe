@@ -182,3 +182,17 @@ private func tempOutDir() -> URL {
     let second = try engine.archive(ArchiveSource(name: "Mirror", root: src), to: out)
     #expect(second.artifacts == first.artifacts)
 }
+
+// A tool that writes more than a pipe buffer to stderr before it closes stdout
+// (rsync, one line per file it could not read) must not wedge the runner.
+@Test func aToolThatFloodsStderrDoesNotWedgeTheRunner() {
+    let done = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var result: CommandResult?
+    DispatchQueue.global().async {
+        result = try? ProcessCommandRunner().run("/bin/sh", ["-c", "head -c 300000 /dev/zero | tr '\\0' x >&2; echo out"], stdin: nil)
+        done.signal()
+    }
+    #expect(done.wait(timeout: .now() + 20) == .success, "the runner deadlocked on a full stderr pipe")
+    #expect(result?.stderr.count == 300_000)
+    #expect(result?.stdout == "out\n")
+}

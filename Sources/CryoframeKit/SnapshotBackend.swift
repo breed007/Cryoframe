@@ -118,9 +118,20 @@ public struct ProcessCommandRunner: CommandRunner {
             inPipe.fileHandleForWriting.write(stdin)
             try? inPipe.fileHandleForWriting.close()
         }
-        // read before waitUntilExit to avoid pipe-buffer deadlock on large output
+        // Drain both pipes at once, and before waitUntilExit. Reading stdout to EOF
+        // and only then stderr deadlocks as soon as a tool fills stderr's 64 KB
+        // buffer first: it blocks writing, we block reading, forever. rsync writes a
+        // line per file it could not read, so a library with a few hundred of them
+        // hung a mirror run with the snapshot held.
+        nonisolated(unsafe) var errData = Data()
+        let errDrained = DispatchSemaphore(value: 0)
+        let errHandle = err.fileHandleForReading
+        DispatchQueue.global(qos: .utility).async {
+            errData = errHandle.readDataToEndOfFile()
+            errDrained.signal()
+        }
         let outData = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        errDrained.wait()
         p.waitUntilExit()
         control?.detach()
         if control?.isCancelled == true { throw CancelledError() }

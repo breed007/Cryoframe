@@ -88,7 +88,7 @@ public final class RunControl: @unchecked Sendable {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/ps")
         p.arguments = ["-axo", "pid=,ppid=,comm="]
-        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = Pipe()
+        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = FileHandle.nullDevice   // never read, so never a pipe to fill
         guard (try? p.run()) != nil else { return [(root, "")] }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
