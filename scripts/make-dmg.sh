@@ -1,13 +1,15 @@
 #!/bin/bash
 #
-# make-dmg.sh — wrap the notarized app in a distribution DMG, then notarize and
-# staple the DMG itself so the download passes Gatekeeper with no warnings.
+# make-dmg.sh — wrap the notarized app in a distribution DMG, sign it with the
+# Developer ID, then notarize and staple the DMG itself so the download passes
+# Gatekeeper with no warnings.
 #
 # run ./scripts/notarize.sh first (it builds + signs + notarizes + staples the app).
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PROFILE="${NOTARY_PROFILE:-cryoframe-notary}"
+ID="Developer ID Application: Brian Reed (YA83Q8FTH3)"
 
 APP="build/Build/Products/Release/Cryoframe.app"
 [ -d "$APP" ] || { echo "No notarized app at $APP — run ./scripts/notarize.sh first."; exit 1; }
@@ -25,6 +27,14 @@ ln -s /Applications "$STAGE/Applications"          # drag-to-install target
 echo "== building dmg =="
 hdiutil create -volname "Cryoframe $VERSION" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
 rm -rf "$STAGE"
+
+# Releases through 1.5.5 shipped a notarized but unsigned image: Gatekeeper
+# accepted it, but `codesign -dv` said "not signed at all" and the download
+# carried no verifiable publisher. Sign before notarizing, so the ticket covers
+# the signed image.
+echo "== signing dmg =="
+codesign --sign "$ID" --timestamp "$DMG"
+codesign --verify --strict "$DMG"
 
 echo "== notarizing dmg =="
 xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait

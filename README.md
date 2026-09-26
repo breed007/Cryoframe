@@ -225,7 +225,7 @@ Maintainer steps to cut a notarized release:
 xcrun notarytool store-credentials cryoframe-notary \
     --apple-id <your-apple-id> --team-id <your-team-id> --password <app-specific-password>   # once
 ./scripts/notarize.sh        # signed Release build, notarize, staple the app
-./scripts/make-dmg.sh        # wrap in a DMG, notarize and staple the DMG
+./scripts/make-dmg.sh        # wrap in a DMG, sign, notarize and staple the DMG
 ```
 
 The build number is stamped with the build time as `YYYYMMDD.HHMM` on every build. The marketing version is set by hand in `project.yml` (`MARKETING_VERSION`).
