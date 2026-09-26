@@ -362,3 +362,14 @@ private func staticFixture() throws -> URL {
     control.resume()
     #expect(done.wait(timeout: .now() + 10) == .success, "the walk never resumed")
 }
+
+// the executor backs up a folder of symlinks (it is not empty), so the drill must
+// not then fail that same archive for having "no files in it"
+@Test func aFolderOfSymlinksPassesTheDrillAsItPassesTheExecutor() throws {
+    let dir = try staticFixture(); defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("link"),
+                                               withDestinationURL: URL(fileURLWithPath: "/etc/hosts"))
+    #expect(!JobExecutor.isEmptyTree(dir))
+    let rep = try StrongVerifier().staticReport(dir, fm: .default)
+    #expect(rep.passed, "the drill and the executor disagree about a folder of links: \(rep.details)")
+}

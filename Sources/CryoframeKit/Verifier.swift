@@ -102,7 +102,7 @@ public struct StrongVerifier: Sendable {
     /// while it walks, so neither reaches it any other way.
     func staticReport(_ libRoot: URL, fm: FileManager, probeReadability: Bool = true,
                       control: RunControl? = nil) throws -> VerificationReport {
-        var files = 0, dirs = 0
+        var files = 0, dirs = 0, links = 0
         var unreadableCount = 0
         var named: [String] = []
         // A directory the walk cannot enter is exactly as fatal to a restore as a file
@@ -132,7 +132,7 @@ public struct StrongVerifier: Sendable {
             seen += 1
             let v = try? url.resourceValues(forKeys: keys)
             if v?.isDirectory == true { dirs += 1; continue }
-            if v?.isSymbolicLink == true { continue }        // the target is checked on its own
+            if v?.isSymbolicLink == true { links += 1; continue }   // the target is checked on its own
             guard v?.isRegularFile == true else { continue }
             files += 1
             // once enough failures are recorded the verdict cannot change; keep counting
@@ -148,10 +148,11 @@ public struct StrongVerifier: Sendable {
                 close(fd)
             }
         }
-        // "empty" means what JobExecutor.isEmptyTree means: no files. Folders alone are
-        // not a backup, and a folder-only archive is one the executor now refuses to
-        // make — so the drill must not bless the ones that predate that.
-        if files == 0 {
+        // "empty" means what JobExecutor.isEmptyTree means: no files and no symlinks.
+        // Folders alone are not a backup, and a folder-only archive is one the executor
+        // now refuses to make — so the drill must not bless the ones that predate that.
+        // A folder of links is something, to both of them.
+        if files == 0 && links == 0 {
             return report(.mountAndOpen, false, "the library inside the archive has no files in it", ["empty root"])
         }
         guard unreadableCount == 0 else {
