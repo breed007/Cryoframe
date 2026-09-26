@@ -119,7 +119,12 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
 // the root and stop. That passed an archive holding a file nobody can read — and the
 // version then wore a "Restore-tested" badge while the actual restore failed on
 // exactly that file. The drill has to fail wherever the restore would.
-@Test func aDrillFailsOnAFileTheRestoreCouldNotRead() throws {
+// Skipped on CI: `hdiutil create -srcfolder` prompts for authentication when it meets
+// an unreadable file (hdiutil(1)), and on a headless runner nobody can answer, so it
+// waits for good. Measured on GitHub's macos-15 and macos-26 runners. It runs on a Mac.
+@Test(.disabled(if: ProcessInfo.processInfo.environment["CRYOFRAME_CI"] != nil,
+                "hdiutil's authentication prompt for an unreadable file can't be answered on a headless runner"))
+func aDrillFailsOnAFileTheRestoreCouldNotRead() throws {
     try #require(geteuid() != 0, "mode bits do not bind root; this test proves nothing there")
     let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
     try Data("readable".utf8).write(to: dir.appendingPathComponent("fine.txt"))

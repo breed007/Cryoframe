@@ -44,6 +44,9 @@ jobs:
           for _ in $(seq 1 10); do pgrep XProtect >/dev/null || break; sleep 3; done
 
       - name: Run the test suite
+        env:
+          # xcodebuild hands TEST_RUNNER_-prefixed variables to the tests, prefix removed
+          TEST_RUNNER_CRYOFRAME_CI: "1"
         # unsigned: the Developer ID certificate lives on the release Mac, and the
         # Kit tests are fake-backed, so they need neither signing nor root
         run: |
@@ -59,7 +62,7 @@ jobs:
           if kill -0 $pid 2>/dev/null; then
             echo "::error::the test suite stalled; process state follows"
             ps -axo pid,ppid,etime,stat,command | grep -Ei 'xctest|CryoframeKitTests|hdiutil|diskimages|ditto|rsync|tmutil|sqlite3|split' | grep -v grep
-            for p in $(pgrep -f 'CryoframeKitTests|xctest'); do sample "$p" 3 -mayDie 2>/dev/null | head -400; done
+            for p in $(pgrep -f 'CryoframeKitTests|xctest|hdiutil'); do sample "$p" 3 -mayDie 2>/dev/null | head -400; done
             kill $pid; sleep 5
           fi
           wait $pid; status=$?
