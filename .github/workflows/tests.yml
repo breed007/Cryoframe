@@ -34,6 +34,15 @@ jobs:
           brew install xcodegen
           xcodegen generate
 
+      - name: Keep XProtect off the disk images
+        # A known hazard on GitHub's macOS runners: XProtect scans each new disk
+        # image, and hdiutil create/attach can hang behind it for good. The first
+        # runs here stalled on exactly that (a `hdiutil create -srcfolder` twelve
+        # minutes old). The release Mac is not affected.
+        run: |
+          sudo pkill -9 XProtect >/dev/null 2>&1 || true
+          for _ in $(seq 1 10); do pgrep XProtect >/dev/null || break; sleep 3; done
+
       - name: Run the test suite
         # unsigned: the Developer ID certificate lives on the release Mac, and the
         # Kit tests are fake-backed, so they need neither signing nor root
