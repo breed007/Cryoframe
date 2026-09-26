@@ -207,8 +207,10 @@ final class RestoreModel: ObservableObject {
             case .passphraseUnavailable: return "this archive is encrypted and no passphrase was found"
             }
         }
-        if encrypted { return "couldn't open the archive — check the passphrase" }
+        // before the encrypted fallback: a copy that failed on one file happened after
+        // the archive opened, so the passphrase was fine
         if let copy = RestoreFailureText.copyFailure(e) { return copy }
+        if encrypted { return "couldn't open the archive — check the passphrase" }
         return (e as NSError).localizedDescription
     }
 }
