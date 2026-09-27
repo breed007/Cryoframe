@@ -52,6 +52,7 @@ final class JobDraft: ObservableObject {
     // edit context
     let editingID: String?
     private let editingEncrypted: Bool
+    private let editingMirrorGB: Int?     // the size the existing mirror image was made at
     private let editingEnabled: Bool
     private let editingCreatedAt: Date?
     var isEditing: Bool { editingID != nil }
@@ -60,6 +61,7 @@ final class JobDraft: ObservableObject {
         self.model = model
         editingID = editing?.id
         editingEncrypted = editing?.encrypted ?? false
+        if case .liveMirror(let g)? = editing?.format { editingMirrorGB = g } else { editingMirrorGB = nil }
         editingEnabled = editing?.enabled ?? true
         editingCreatedAt = editing?.createdAt
         libraries = model.registry.types
@@ -111,12 +113,26 @@ final class JobDraft: ObservableObject {
         }
     }
 
-    /// when encrypting, a new passphrase must be entered and confirmed — unless editing an
-    /// already-encrypted job and leaving the fields blank to keep the stored one.
+    /// Encryption and the passphrase are fixed once a job exists. Turning encryption on
+    /// left an existing mirror image in plaintext while the manifest said encrypted; a
+    /// new passphrase replaced the only stored key, so the mirror and every earlier
+    /// version stopped opening; turning it off deleted that key. Changing keys needs a
+    /// key history, which is 1.6 work. Until then: create a new job.
+    var encryptionLocked: Bool { isEditing }
+
+    /// A mirror image can be grown in place on its next run but not shrunk.
+    var mirrorShrinkRequested: Bool {
+        guard isEditing, formatKind == "mirror", let was = editingMirrorGB else { return false }
+        return mirrorGB < was
+    }
+    var editingMirrorSizeText: String? {
+        editingMirrorGB.map { $0 >= 1000 && $0 % 1000 == 0 ? "\($0 / 1000) TB" : "\($0) GB" }
+    }
+
+    /// a new encrypted job needs a passphrase, entered twice and matching.
     var encryptionValid: Bool {
+        if encryptionLocked { return true }
         guard encrypt else { return true }
-        if passphrase.isEmpty, passphraseConfirm.isEmpty,
-           let id = editingID, editingEncrypted, KeychainArchiveKey.exists(jobID: id) { return true }
         return !passphrase.isEmpty && passphrase == passphraseConfirm
     }
 
@@ -154,7 +170,7 @@ final class JobDraft: ObservableObject {
 
     var isValid: Bool {
         !selectedLibraries.isEmpty && !dedupedTargets.isEmpty && encryptionValid && destinationConflicts.isEmpty
-            && libraryNameClashes.isEmpty
+            && libraryNameClashes.isEmpty && !mirrorShrinkRequested
     }
 
     var defaultName: String {
@@ -200,15 +216,14 @@ final class JobDraft: ObservableObject {
     func commit() -> Bool {
         guard isValid else { return false }
         let id = editingID ?? UUID().uuidString
-        if encrypt {
-            if !passphrase.isEmpty { KeychainArchiveKey.save(passphrase, jobID: id) }   // else keep existing
-        } else if editingEncrypted {
-            KeychainArchiveKey.delete(jobID: id)                                        // encryption turned off
-        }
+        // an existing job keeps its encryption and its key exactly as they are (see
+        // encryptionLocked); only a new job sets them
+        let encrypted = encryptionLocked ? editingEncrypted : encrypt
+        if !encryptionLocked, encrypt, !passphrase.isEmpty { KeychainArchiveKey.save(passphrase, jobID: id) }
         model.addJob(BackupJob(id: id, name: name.isEmpty ? defaultName : name,
                                libraries: selectedLibraries, targets: dedupedTargets, format: format,
                                frequency: frequency, verification: verification, runPolicy: runPolicy,
-                               enabled: editingEnabled, encrypted: encrypt,
+                               enabled: editingEnabled, encrypted: encrypted,
                                retention: isSealed ? retentionPolicy : .keepAll,
                                createdAt: editingCreatedAt ?? Date()))
         return true

@@ -89,6 +89,17 @@ public enum ArchivePlan {
         return Command("/usr/bin/hdiutil", args)
     }
 
+    /// the image's size limits, in 512-byte sectors: "min<TAB>current<TAB>max".
+    public static func resizeLimits(image: URL, encrypted: Bool = false) -> Command {
+        Command("/usr/bin/hdiutil", ["resize", "-limits"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
+    }
+
+    /// grow an image (and the APFS volume inside it) to `sizeGB`. Measured on APFS
+    /// sparsebundles, plain and encrypted: the mounted volume reports the new size.
+    public static func resize(image: URL, sizeGB: Int, encrypted: Bool = false) -> Command {
+        Command("/usr/bin/hdiutil", ["resize", "-size", "\(sizeGB)g"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
+    }
+
     /// attach a sparsebundle or dmg at a known mountpoint. `readonly` for
     /// verification mounts; read-write for the live-mirror rsync. `encrypted` adds
     /// `-stdinpass` so the passphrase is read from stdin.

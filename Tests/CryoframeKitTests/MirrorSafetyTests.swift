@@ -112,3 +112,24 @@ private struct StopBefore: CommandRunner {
     let stray = out.appendingPathComponent(".Lib.mirror-mnt/Lib")
     #expect(!FileManager.default.fileExists(atPath: stray.path), "rsync wrote the library into the destination folder, outside the image")
 }
+
+// The mirror's size was fixed when it was created; editing it did nothing. A larger
+// size is now applied to the existing image on its next run.
+@Test func aLargerMirrorSizeGrowsTheExistingImage() throws {
+    let src = try library(files: 3)
+    let out = tempDir("grow")
+    defer { try? FileManager.default.removeItem(at: out); try? FileManager.default.removeItem(at: src.deletingLastPathComponent()) }
+    let bundle = try SparseBundleMirrorEngine(sizeGB: 1).archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+    _ = try SparseBundleMirrorEngine(sizeGB: 3).archive(ArchiveSource(name: "Lib", root: src), to: out)
+
+    let limits = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["resize", "-limits", bundle.path])
+    let current = try #require(SparseBundleMirrorEngine.currentSectors(limits.stdout))
+    #expect(current >= SparseBundleMirrorEngine.sectors(gb: 3) * 99 / 100, "still \(current) sectors")
+    #expect(try filesInMirror(bundle) == 3)
+}
+
+@Test func resizeLimitsParseTheCurrentSize() {
+    #expect(SparseBundleMirrorEngine.currentSectors("45056\t2097072\t18014398509481903\n") == 2_097_072)
+    #expect(SparseBundleMirrorEngine.currentSectors("hdiutil: resize failed") == nil)
+    #expect(SparseBundleMirrorEngine.sectors(gb: 1) == 2_097_152)
+}

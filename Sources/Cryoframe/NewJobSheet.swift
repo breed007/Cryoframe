@@ -175,6 +175,12 @@ struct NewJobSheet: View {
                     Picker("", selection: $draft.mirrorUnit) { Text("GB").tag("GB"); Text("TB").tag("TB") }.labelsHidden().frame(width: 72)
                         .accessibilityLabel("Mirror size unit")
                 }
+                if let was = draft.editingMirrorSizeText {
+                    Text(draft.mirrorShrinkRequested
+                         ? "The mirror was made at \(was) and can't be made smaller. Keep \(was) or more."
+                         : "A larger size is applied to the existing mirror on its next run.")
+                        .font(.caption).foregroundStyle(draft.mirrorShrinkRequested ? .cryoWarn : .secondary)
+                }
             }
         }
     }
@@ -183,16 +189,24 @@ struct NewJobSheet: View {
         Section {
             Toggle("Encrypt with AES-256", isOn: $draft.encrypt)
                 .onChange(of: draft.encrypt) { _, on in if on, draft.formatKind == "zip" { draft.formatKind = "dmg" } }
+                .disabled(draft.encryptionLocked)
+            if draft.encryptionLocked {
+                Text(draft.encrypt
+                     ? "The passphrase can't be changed on an existing job yet: a new one would lock you out of the backups already made with this one. To use a different passphrase, create a new job."
+                     : "Encryption can't be turned on for an existing job yet: the backups already made would stay unencrypted. To encrypt, create a new job.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if draft.encrypt {
-                SecureField("Passphrase", text: $draft.passphrase)
-                SecureField("Confirm passphrase", text: $draft.passphraseConfirm)
+                if !draft.encryptionLocked {
+                    SecureField("Passphrase", text: $draft.passphrase)
+                    SecureField("Confirm passphrase", text: $draft.passphraseConfirm)
+                }
                 if draft.isEditing {
                     if let saved = revealedPassphrase {
                         HStack {
                             Text(saved).font(.system(.body, design: .monospaced)).textSelection(.enabled)
                             Spacer(); Button("Copy") { copyToClipboard(saved) }
                         }
-                        Text("Leave the fields above blank to keep this passphrase.").font(.caption2).foregroundStyle(.secondary)
                     } else {
                         Button("Reveal saved passphrase…") { revealedPassphrase = KeychainArchiveKey.load(jobID: draft.editingID ?? "") }
                     }
