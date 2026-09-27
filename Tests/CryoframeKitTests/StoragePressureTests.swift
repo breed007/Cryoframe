@@ -217,3 +217,15 @@ private func storage(_ archives: [ArchiveSize], free: UInt64, job: String = "j")
     #expect(s.bytes >= 8000)
     #expect(JobExecutor.directorySize(base) == s.bytes)
 }
+
+// MARK: - 1.5.6: one archive folder per library name
+
+@Test func libraryNamesCompareTheWayTheDiskDoes() {
+    #expect(LibraryNames.same("Projects", "projects"))
+    #expect(LibraryNames.same("Caf\u{00E9}", "Cafe\u{0301}"))          // precomposed vs decomposed é
+    #expect(!LibraryNames.same("Projects", "Projects 2"))
+    let a = ContentType.genericFolder(id: "a", displayName: "Photos", path: .home("Stuff/Photos"))
+    #expect(LibraryNames.clashing([.photos, a]).count == 2, "a custom folder named Photos shares the built-in library's folder")
+    #expect(LibraryNames.clashMessages([.photos, a]).count == 1)
+    #expect(LibraryNames.clashing([.photos, .appleMusic]).isEmpty)
+}

@@ -133,20 +133,29 @@ final class JobDraft: ObservableObject {
                      options: .caseInsensitive) == .orderedSame
     }
 
+    /// Two mirror jobs writing the same library to the same folder share one image the
+    /// same way, and each run's --delete erases the other's copy, so mirrors are held
+    /// to the same rule. A sealed job and a mirror job may share a folder: their files
+    /// don't overlap.
     var destinationConflicts: [String] {
-        guard isSealed else { return [] }
         var out = Set<String>()
-        for job in model.jobs where job.id != editingID && job.format.isSealed {
+        for job in model.jobs where job.id != editingID && job.format.isSealed == isSealed {
             for t in selectedTargets where job.targets.contains(where: { Self.samePlace($0.destinationDir, t.destinationDir) }) {
-                for lib in selectedLibraries where job.libraries.contains(where: { $0.displayName == lib.displayName }) {
-                    out.insert("“\(job.name)” already archives \(lib.displayName) to \(t.displayName)")
+                for lib in selectedLibraries where job.libraries.contains(where: { LibraryNames.same($0.displayName, lib.displayName) }) {
+                    out.insert("“\(job.name)” already \(isSealed ? "archives" : "mirrors") \(lib.displayName) to \(t.displayName)")
                 }
             }
         }
         return out.sorted()
     }
 
-    var isValid: Bool { !selectedLibraries.isEmpty && !dedupedTargets.isEmpty && encryptionValid && destinationConflicts.isEmpty }
+    /// libraries in THIS job that would share an archive folder (see LibraryNames).
+    var libraryNameClashes: [String] { LibraryNames.clashMessages(selectedLibraries) }
+
+    var isValid: Bool {
+        !selectedLibraries.isEmpty && !dedupedTargets.isEmpty && encryptionValid && destinationConflicts.isEmpty
+            && libraryNameClashes.isEmpty
+    }
 
     var defaultName: String {
         let names = selectedLibraries.map(\.displayName)

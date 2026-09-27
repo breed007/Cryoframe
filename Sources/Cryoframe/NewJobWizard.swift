@@ -131,6 +131,9 @@ struct NewJobWizard: View {
             VStack(spacing: 2) { ForEach(draft.libraries) { lib in libraryRow(lib) } }
             Button { addFolderLibrary() } label: { Label("Back up another folder…", systemImage: "folder.badge.plus") }
                 .buttonStyle(.link).font(.callout)
+            ForEach(draft.libraryNameClashes, id: \.self) { c in
+                Label(c, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.cryoWarn)
+            }
         }
     }
     private func templateCard(_ t: JobTemplate) -> some View {
@@ -380,6 +383,10 @@ struct NewJobWizard: View {
             if !draft.encryptionValid {
                 Label(passphraseHint, systemImage: "lock.trianglebadge.exclamationmark").font(.caption).foregroundStyle(.cryoWarn)
             }
+            // the format is chosen here, and it decides which other jobs this one conflicts with
+            ForEach(draft.destinationConflicts, id: \.self) { c in
+                Label(c, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.cryoWarn)
+            }
         }
     }
     private func reviewRow(_ k: String, _ v: String, first: Bool = false) -> some View {
@@ -428,7 +435,7 @@ struct NewJobWizard: View {
 
     private var canContinue: Bool {
         switch step {
-        case 0: return !draft.selectedLibraries.isEmpty
+        case 0: return !draft.selectedLibraries.isEmpty && draft.libraryNameClashes.isEmpty
         case 1: return !draft.dedupedTargets.isEmpty && draft.destinationConflicts.isEmpty
         case 3: return draft.isValid
         default: return true

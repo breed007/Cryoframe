@@ -141,3 +141,28 @@ private func job(_ freq: BackupFrequency, policy: RunPolicy = .proceed,
     #expect(results.count == 2)                              // both libraries processed in the run
     #expect(await helper.calls == ["create", "mount", "unmount", "delete"])  // exactly one snapshot for the job
 }
+
+// Two folders called "Projects" in one job wrote into one archive folder, each run
+// overwriting the other, and the run said "1 library archived". A job saved like that
+// before the editor refused it now fails both, loudly, and leaves the rest alone.
+@Test func aJobWithTwoLibrariesOfOneNameRefusesBoth() async throws {
+    let helper = FakePrivilegedHelper()
+    let out = FileManager.default.temporaryDirectory.appendingPathComponent("cf-clash-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: out) }
+    let exec = JobExecutor(helper: helper, detector: FakeProcessDetector(),
+                           probe: FakeTargetProbe(TargetAvailability(reachable: true, writable: true)))
+    let work = ContentType.genericFolder(id: "w", displayName: "Projects", path: .home("Work/Projects"))
+    let personal = ContentType.genericFolder(id: "p", displayName: "projects", path: .home("Personal/Projects"))
+    let j = BackupJob(name: "clash", libraries: [work, personal, .photos],
+                      target: .localVolume(id: "t", name: "Disk", dir: out),
+                      format: .sealedZip, frequency: .manual, createdAt: at(2026,1,1,0,0))
+
+    guard case .finished(let results, _) = try await exec.run(j, ownerUID: 501, now: at(2026,1,1,0,0)) else {
+        Issue.record("expected finished"); return
+    }
+    let refused = results.compactMap { r -> String? in
+        if case .failed(let lib, _, let e) = r, e.contains("overwrite each other") { return lib }; return nil
+    }
+    #expect(Set(refused) == ["Projects", "projects"])
+    #expect(!results.contains { if case .completed = $0 { return true }; return false }, "a clashing library was archived")
+}

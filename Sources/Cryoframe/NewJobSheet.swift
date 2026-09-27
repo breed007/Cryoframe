@@ -101,6 +101,9 @@ struct NewJobSheet: View {
                 Spacer()
                 Button("Edit locations…") { showLocations = true }
             }
+            ForEach(draft.libraryNameClashes, id: \.self) { c in
+                Label(c, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.cryoWarn).font(.caption)
+            }
         } header: { Text("Libraries") }
         footer: { Text("Pick one or more. All selected libraries are frozen in one snapshot and archived together to the destination, each in its own folder.").font(.caption).foregroundStyle(.secondary) }
     }
