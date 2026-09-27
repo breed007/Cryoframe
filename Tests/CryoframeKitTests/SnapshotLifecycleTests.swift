@@ -78,10 +78,34 @@ private let vol = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: "/dev
             == "com.apple.TimeMachine.2026-06-24-142308.local")
 }
 
-@Test func coalescedSnapshotFallsBackToNewest() {
+// tmutil folds a same-second request into the snapshot that already has that name.
+// That snapshot is another job's, or Time Machine's; adopting it let one job's cleanup
+// delete the snapshot the other still had mounted.
+@Test func aCoalescedSnapshotIsNeverAdopted() {
     let names = ["com.apple.TimeMachine.2026-06-24-142308.local"]
-    // no delta (tmutil coalesced) => adopt newest rather than failing
-    #expect(TMUtilSnapshotBackend.identifyNewSnapshot(before: names, after: names) == names[0])
+    #expect(TMUtilSnapshotBackend.identifyNewSnapshot(before: names, after: names) == nil)
+}
+
+@Test func twoJobsInTheSameSecondEachGetTheirOwnSnapshot() throws {
+    let a = "com.apple.TimeMachine.2026-06-24-020000.local"
+    let b = "com.apple.TimeMachine.2026-06-24-020001.local"
+    let head = "Snapshots for disk /:\n"
+    // first attempt: tmutil coalesces into the other job's A; second attempt, a second
+    // later, produces B
+    let seq = ListSequencer(outputs: [head + a, head + a, head + a, head + a + "\n" + b])
+    let backend = TMUtilSnapshotBackend(runner: ScriptedCommandRunner { _, args in
+        if args.first == "listlocalsnapshots" { return CommandResult(status: 0, stdout: seq.next(), stderr: "") }
+        return CommandResult(status: 0, stdout: "", stderr: "")
+    }, sameSecondDelay: 0)
+    #expect(try backend.create(on: vol).name == b)
+}
+
+@Test func aSnapshotThatNeverAppearsFailsRatherThanBorrowingOne() {
+    let a = "Snapshots for disk /:\ncom.apple.TimeMachine.2026-06-24-020000.local"
+    let backend = TMUtilSnapshotBackend(runner: ScriptedCommandRunner { _, args in
+        CommandResult(status: 0, stdout: args.first == "listlocalsnapshots" ? a : "", stderr: "")
+    }, sameSecondDelay: 0)
+    #expect(throws: SnapshotBackendError.couldNotIdentifyNewSnapshot) { try backend.create(on: vol) }
 }
 
 @Test func extractsDateAndRejectsForeignNames() {

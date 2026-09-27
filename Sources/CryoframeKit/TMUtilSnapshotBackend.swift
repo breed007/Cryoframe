@@ -47,7 +47,10 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
     }
 
     let runner: CommandRunner
-    public init(runner: CommandRunner = ProcessCommandRunner()) { self.runner = runner }
+    let sameSecondDelay: TimeInterval
+    public init(runner: CommandRunner = ProcessCommandRunner(), sameSecondDelay: TimeInterval = 1.1) {
+        self.runner = runner; self.sameSecondDelay = sameSecondDelay
+    }
 
     // MARK: SnapshotBackend
 
@@ -56,13 +59,22 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
         // snapshot of an external drive silently froze the boot disk instead and the
         // library was nowhere to be found inside it.
         let target = Self.tmutilPath(for: volume)
-        let before = Self.parseSnapshotNames(try listOutput(target))
-        try sh("/usr/bin/tmutil", ["localsnapshot", target])
-        let after = Self.parseSnapshotNames(try listOutput(target))
-        guard let name = Self.identifyNewSnapshot(before: before, after: after) else {
-            throw SnapshotBackendError.couldNotIdentifyNewSnapshot
+        // tmutil names snapshots to the second and folds a second request made in
+        // the same second into the snapshot that already has that name. Two jobs
+        // scheduled for the same minute do exactly that. Adopting the existing one
+        // meant sharing it with the other job (whose cleanup then deletes it out
+        // from under this one) or even with Time Machine. Wait out the second and
+        // take a snapshot of our own instead.
+        for attempt in 0..<3 {
+            let before = Self.parseSnapshotNames(try listOutput(target))
+            try sh("/usr/bin/tmutil", ["localsnapshot", target])
+            let after = Self.parseSnapshotNames(try listOutput(target))
+            if let name = Self.identifyNewSnapshot(before: before, after: after) {
+                return SnapshotRef(name: name, volume: volume, createdAt: Date())
+            }
+            if attempt < 2 { Thread.sleep(forTimeInterval: sameSecondDelay) }
         }
-        return SnapshotRef(name: name, volume: volume, createdAt: Date())
+        throw SnapshotBackendError.couldNotIdentifyNewSnapshot
     }
 
     public func mount(_ snapshot: SnapshotRef, ownerUID: uid_t) throws -> MountRef {
@@ -125,12 +137,10 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
             .filter { $0.hasPrefix(tmName) }
     }
 
-    /// the snapshot present in `after` but not `before`. nil if none (tmutil can
-    /// coalesce a same-second snapshot) — caller falls back to newest.
+    /// the snapshot present in `after` but not `before`. nil when tmutil folded the
+    /// request into a snapshot that already existed: that one belongs to someone else.
     public static func identifyNewSnapshot(before: [String], after: [String]) -> String? {
-        let added = Set(after).subtracting(before)
-        if let only = added.sorted().last { return only }
-        return after.sorted().last       // coalesced: adopt newest
+        Set(after).subtracting(before).sorted().last
     }
 
     /// "com.apple.TimeMachine.2026-06-24-142308.local" -> "2026-06-24-142308".
