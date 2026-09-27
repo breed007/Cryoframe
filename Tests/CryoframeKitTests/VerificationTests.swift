@@ -119,24 +119,30 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
 // the root and stop. That passed an archive holding a file nobody can read — and the
 // version then wore a "Restore-tested" badge while the actual restore failed on
 // exactly that file. The drill has to fail wherever the restore would.
-// Skipped on CI: `hdiutil create -srcfolder` prompts for authentication when it meets
-// an unreadable file (hdiutil(1)), and on a headless runner nobody can answer, so it
-// waits for good. Measured on GitHub's macos-15 and macos-26 runners. It runs on a Mac.
-@Test(.disabled(if: ProcessInfo.processInfo.environment["CRYOFRAME_CI"] != nil,
-                "hdiutil's authentication prompt for an unreadable file can't be answered on a headless runner"))
-func aDrillFailsOnAFileTheRestoreCouldNotRead() throws {
+//
+// The unreadable file is made unreadable INSIDE a writable image, after it was
+// built. Asking hdiutil to build an image from an already-unreadable file makes it
+// prompt for an admin password (hdiutil(1)), which hangs a headless CI runner and,
+// on a Mac, passes or fails depending on whether authorization happens to be cached.
+@Test func aDrillFailsOnAFileTheRestoreCouldNotRead() throws {
     try #require(geteuid() != 0, "mode bits do not bind root; this test proves nothing there")
     let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
     try Data("readable".utf8).write(to: dir.appendingPathComponent("fine.txt"))
-    let locked = dir.appendingPathComponent("locked.txt")
-    try Data("secret".utf8).write(to: locked)
-    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
-    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked.path) }
+    try Data("secret".utf8).write(to: dir.appendingPathComponent("locked.txt"))
 
     let out = tempDir(); defer { try? FileManager.default.removeItem(at: out) }
-    let result = try SealedArchiveEngine(.dmg).archive(ArchiveSource(name: "Docs", root: dir), to: out)
+    let dmg = out.appendingPathComponent("Docs.dmg")
+    let runner = ProcessCommandRunner()
+    let made = try runner.run("/usr/bin/hdiutil", ["create", "-srcfolder", dir.path, "-format", "UDRW", "-ov", dmg.path])
+    try #require(made.ok, "\(made.stderr)")
+    let rw = tempDir()
+    let attached = try runner.run("/usr/bin/hdiutil", ["attach", dmg.path, "-mountpoint", rw.path, "-nobrowse", "-owners", "on"])
+    try #require(attached.ok, "\(attached.stderr)")
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: rw.appendingPathComponent("locked.txt").path)
+    MountPoint.detach(rw, runner: runner)
+
     let staticType = ContentType.genericFolder(id: "d", displayName: "Docs", path: .home("Docs"))
-    let rep = try StrongVerifier().verify(result, type: staticType)
+    let rep = try StrongVerifier().verify(ArchiveResult(artifacts: [dmg], format: .sealedDMG), type: staticType)
 
     #expect(!rep.passed, "the drill passed an archive that cannot be restored")
     #expect(rep.details.contains("locked.txt"), "it should name the file: \(rep.details)")

@@ -44,9 +44,6 @@ jobs:
           for _ in $(seq 1 10); do pgrep XProtect >/dev/null || break; sleep 3; done
 
       - name: Run the test suite
-        env:
-          # xcodebuild hands TEST_RUNNER_-prefixed variables to the tests, prefix removed
-          TEST_RUNNER_CRYOFRAME_CI: "1"
         # unsigned: the Developer ID certificate lives on the release Mac, and the
         # Kit tests are fake-backed, so they need neither signing nor root
         run: |
