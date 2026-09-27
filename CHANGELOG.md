@@ -2,6 +2,18 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.5.6] — 2026-09-27
+
+A full code review of 1.5.5 found three ways to lose a backup without any warning. If you use the live mirror format, which is the default, this update matters most to you.
+
+### Fixed
+- **Pressing Stop during a live-mirror backup could delete the mirror.** Once a run was stopped, the step that closes the mirror's disk image was refused along with everything else, and the cleanup that followed deleted the image's folder while the image was still open, emptying it. A mirror of 30 files went to 0 in testing, and History recorded the run as "stopped". The same cleanup ran before every backup, so a mirror left open by a crash was emptied and rebuilt from scratch. Cleanup now closes the image first and never deletes into an open one.
+- **Two libraries with the same name overwrote each other.** A library's backups go in a folder named after it, so `Work/Projects` and `Personal/Projects` in one job, or a folder named "Photos" beside the Photos library, shared one folder. Each run replaced the other, and the run reported one library backed up. The job editor now refuses the pair, and an existing job that already has one fails both with a message saying why, rather than keeping only one.
+- **Restoring a sealed DMG could bring back only part of a folder.** For a folder that contains a subfolder with the same name, such as `~/Music` with `~/Music/Music` inside it, the restore brought back only the inner folder and reported success. The restore drill and the recovery rehearsal both passed it. The whole folder is now restored.
+- **Editing a job's encryption didn't do what the editor said.** Turning encryption on for an existing mirror left the mirror unencrypted while the app said it was encrypted. A new passphrase replaced the only saved key, so earlier backups stopped opening with it, and turning encryption off deleted that key. Encryption and the passphrase now stay as they are once a job exists; to change them, create a new job. Proper passphrase rotation is planned for 1.6.
+- **Changing a mirror's size had no effect.** A larger size now grows the existing mirror on its next run. That's also the way out for a library that has outgrown the 500 GB default. A mirror can't be made smaller.
+- Two jobs that started in the same second could end up sharing one snapshot, and one job's cleanup could then remove it while the other was still reading it. Each job now gets its own.
+
 ## [1.5.5] — 2026-09-26
 
 The review angles that never ran on 1.5.3, plus what the first automated macOS test
