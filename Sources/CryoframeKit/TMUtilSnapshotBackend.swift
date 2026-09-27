@@ -81,7 +81,7 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
         // returns "Resource busy". Retry briefly, then force with diskutil.
         for attempt in 0..<6 {
             if let r = try? runner.run("/sbin/umount", [mount.mountPoint]), r.ok {
-                try? FileManager.default.removeItem(atPath: mount.mountPoint); return
+                MountPoint.removeDirectory(URL(fileURLWithPath: mount.mountPoint)); return
             }
             if attempt < 5 { Thread.sleep(forTimeInterval: 0.5) }
         }
@@ -89,7 +89,7 @@ public struct TMUtilSnapshotBackend: SnapshotBackend {
         guard forced.ok else {
             throw SnapshotBackendError.commandFailed(tool: "diskutil", status: forced.status, stderr: forced.stderr)
         }
-        try? FileManager.default.removeItem(atPath: mount.mountPoint)
+        MountPoint.removeDirectory(URL(fileURLWithPath: mount.mountPoint))   // never recursive: see MountPoint
     }
 
     public func delete(_ snapshot: SnapshotRef) throws {

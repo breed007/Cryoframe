@@ -17,6 +17,15 @@ public struct OpenedArchive: Sendable {
     /// detach the mount (if any) and remove the scratch dir. Always call this.
     public func close() {
         teardownFn()
+        Self.removeWork(work)
+    }
+
+    /// the scratch dir holds the mount directory. If the volume would not detach,
+    /// removing the scratch dir recursively walks into the mounted archive, so it
+    /// stays for the launch sweep instead (see MountPoint).
+    static func removeWork(_ work: URL) {
+        let mnt = work.appendingPathComponent("mnt")
+        guard !MountPoint.isMounted(mnt) else { return }
         try? FileManager.default.removeItem(at: work)
     }
 }
@@ -33,6 +42,7 @@ public struct ArchiveReader: Sendable {
         let work = fm.temporaryDirectory.appendingPathComponent("cf-open-\(UUID().uuidString)")
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         let runner = self.runner
+        let teardown = runner.forTeardown      // still works after Stop, when cleanup matters most
         let enc = passphrase != nil
         let stdin = passphrase.map { Data($0.utf8) }
 
@@ -48,13 +58,13 @@ public struct ArchiveReader: Sendable {
                 let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
                 mountPoint = mnt; attemptedImage = dmg
                 try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: dmg, mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
-                return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
+                return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: teardown) }
 
             case .liveMirror:
                 let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
                 mountPoint = mnt; attemptedImage = result.artifacts[0]
                 try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: result.artifacts[0], mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
-                return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: runner) }
+                return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: teardown) }
 
             case .sealedZip:
                 let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
@@ -63,9 +73,9 @@ public struct ArchiveReader: Sendable {
                 return OpenedArchive(root: ex, work: work) {}
             }
         } catch {
-            if let mnt = mountPoint { Self.detach(mnt, runner: runner) }   // may be a no-op; cheap either way
-            if let image = attemptedImage { Self.detachDevices(forImage: image, runner: runner) }
-            try? fm.removeItem(at: work)
+            if let mnt = mountPoint { Self.detach(mnt, runner: teardown) }   // may be a no-op; cheap either way
+            if let image = attemptedImage { Self.detachDevices(forImage: image, runner: teardown) }
+            OpenedArchive.removeWork(work)
             throw error
         }
     }
@@ -141,8 +151,8 @@ public struct ArchiveReader: Sendable {
         let runner = ProcessCommandRunner()
         for e in entries where e.lastPathComponent.hasPrefix("cf-open-") {
             let mnt = e.appendingPathComponent("mnt")
-            if fm.fileExists(atPath: mnt.path) { _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path]) }
-            try? fm.removeItem(at: e)
+            if MountPoint.isMounted(mnt) { _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path]) }
+            OpenedArchive.removeWork(e)
         }
     }
 }

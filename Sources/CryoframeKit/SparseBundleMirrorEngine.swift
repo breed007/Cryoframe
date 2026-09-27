@@ -33,23 +33,35 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let stdin = passphrase.map { Data($0.utf8) }
         let encrypted = passphrase != nil
         let bundle = destinationDir.appendingPathComponent(source.name + ".sparsebundle", isDirectory: true)
+
+        // attach at a private mountpoint, mirror, detach — no namespace parsing.
+        //
+        // The mountpoint is where the only copy of the mirror appears, so it is never
+        // removed recursively (see MountPoint). A leftover from a crashed or stopped
+        // run may still have the image attached there; that is detached, not deleted
+        // through. Teardown uses a runner that still works after Stop.
+        let mountpoint = destinationDir.appendingPathComponent(".\(source.name).mirror-mnt")
+        let teardown = runner.forTeardown
+        try MountPoint.clear(mountpoint, runner: teardown)
+
         if !fm.fileExists(atPath: bundle.path) {
             try execute(ArchivePlan.sparseBundleCreate(output: bundle, name: source.name,
                                                        sizeGB: sizeGB, bandSectors: bandSectors,
                                                        encrypted: encrypted), stdin: stdin)
         }
 
-        // attach at a private mountpoint, mirror, detach — no namespace parsing.
-        let mountpoint = destinationDir.appendingPathComponent(".\(source.name).mirror-mnt")
-        try? fm.removeItem(at: mountpoint)
         try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
-        defer {
-            _ = try? runner.run(ArchivePlan.detach(mountpoint: mountpoint).tool,
-                                ArchivePlan.detach(mountpoint: mountpoint).args)
-            try? fm.removeItem(at: mountpoint)
-        }
+        defer { MountPoint.detach(mountpoint, runner: teardown) }
 
         try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
+        // hdiutil answers 0 when the image is already attached somewhere else (the
+        // restore window browsing it, say), and then nothing is mounted here: rsync
+        // would write into the destination disk beside the image instead of into it.
+        // Refuse rather than detach someone else's open copy.
+        guard MountPoint.isMounted(mountpoint) else {
+            throw ArchiveError.toolFailed(tool: "hdiutil", status: 0,
+                                          stderr: "the mirror is already open somewhere else (the restore window, or another run of this job), so it did not mount at \(mountpoint.path)")
+        }
         let dest = mountpoint.appendingPathComponent(source.root.lastPathComponent)
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
         try execute(ArchivePlan.rsync(root: source.root, into: dest))

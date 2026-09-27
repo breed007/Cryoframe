@@ -49,10 +49,15 @@ public protocol CommandRunner: Sendable {
     /// the run this runner belongs to, for work done in-process between commands
     /// (a file walk, say) that must honor Stop and Pause the way a command does.
     var control: RunControl? { get }
+    /// a runner for cleanup after the run: detaching, unmounting. It must still work
+    /// once the run is stopped, which is exactly when cleanup matters most; the run's
+    /// own runner refuses to launch anything after Stop.
+    var forTeardown: CommandRunner { get }
 }
 
 extension CommandRunner {
     public var control: RunControl? { nil }
+    public var forTeardown: CommandRunner { self }
 }
 
 public extension CommandRunner {
@@ -101,6 +106,7 @@ public extension CommandRunner {
 public struct ProcessCommandRunner: CommandRunner {
     public let control: RunControl?
     public init(control: RunControl? = nil) { self.control = control }
+    public var forTeardown: CommandRunner { ProcessCommandRunner() }
 
     public func run(_ launchPath: String, _ args: [String], stdin: Data? = nil) throws -> CommandResult {
         let p = Process()
