@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.5.6</title>
+      <description><![CDATA[Stopping a live-mirror backup could delete the mirror; fixed, with four more fixes that prevent silent backup loss.]]></description>
+      <pubDate>Sun, 27 Sep 2026 22:56:12 +0000</pubDate>
+      <sparkle:version>20260927.1855</sparkle:version>
+      <sparkle:shortVersionString>1.5.6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.5.6/Cryoframe-1.5.6.dmg" type="application/octet-stream" sparkle:edSignature="eye8VZIKcRRbhDK9ljR41ymtnn0/3ma+hAcvSJ3K0L2LYVFMwzApjWB0uCUQGpx/PcwGfhP+77XeGSBngkP6CQ==" length="3999169" />
+    </item>
+    <item>
       <title>1.5.5</title>
       <description><![CDATA[A backup could hang for good when a tool reported many errors; fixed, with five smaller fixes.]]></description>
       <pubDate>Sat, 26 Sep 2026 01:14:39 +0000</pubDate>
