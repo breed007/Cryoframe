@@ -141,17 +141,33 @@ public struct RestoreEngine: Sendable {
         guard !fm.fileExists(atPath: target.path) else { throw RestoreError.destinationExists(target.path) }
         try fm.createDirectory(at: destinationDir, withIntermediateDirectories: true)
 
-        // zip / live mirror keep the bundle intact one level down; dmg flattens the
-        // bundle's contents to the volume root, so rebuild the wrapper.
-        let bundle = opened.root.appendingPathComponent(bundleName)
-        var isDir: ObjCBool = false
-        if fm.fileExists(atPath: bundle.path, isDirectory: &isDir), isDir.boolValue {
-            try fm.copyItem(at: bundle, to: target)
-        } else {
+        // zip / live mirror keep the bundle intact one level down. A sealed DMG does
+        // one of two things, measured: `hdiutil create -srcfolder` puts a PACKAGE
+        // (.photoslibrary, .musiclibrary, .app, …) on the volume root as one item, and
+        // spreads a plain folder's CONTENTS over the root (even "Plain.stuff").
+        //
+        // So the library-named item on a DMG's root is the library only when it is a
+        // package. Taking any directory of that name, as this used to, meant a plain
+        // "Projects" folder holding its own "Projects" subfolder restored only the
+        // subfolder, and reported success.
+        switch archive.format {
+        case .sealedDMG:
+            let packaged = opened.root.appendingPathComponent(bundleName)
+            if (try? packaged.resourceValues(forKeys: [.isPackageKey]))?.isPackage == true {
+                try fm.copyItem(at: packaged, to: target)
+                break
+            }
             let children = try fm.contentsOfDirectory(at: opened.root, includingPropertiesForKeys: nil)
             guard !children.isEmpty else { throw RestoreError.libraryNotFound }
             try fm.createDirectory(at: target, withIntermediateDirectories: true)
             for child in children { try fm.copyItem(at: child, to: target.appendingPathComponent(child.lastPathComponent)) }
+        case .sealedZip, .liveMirror:
+            let bundle = opened.root.appendingPathComponent(bundleName)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: bundle.path, isDirectory: &isDir), isDir.boolValue else {
+                throw RestoreError.libraryNotFound
+            }
+            try fm.copyItem(at: bundle, to: target)
         }
 
         onStage(.completed)

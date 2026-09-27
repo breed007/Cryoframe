@@ -379,3 +379,23 @@ private let d22 = VersionStamp.date("2026-07-22-020000")!
     #expect(!RestoreDiscovery.isSingleCurrent("Photos", in: scan))
     #expect(RestoreDiscovery.isSingleCurrent("Apple Music", in: scan))
 }
+
+// A sealed DMG puts the library's contents at the volume root. The restore used to
+// look for a folder named after the library there first, so a "Projects" folder that
+// itself held a "Projects" subfolder restored only the subfolder, and said it worked.
+@Test func aDMGOfAFolderHoldingItsOwnNamesakeRestoresAllOfIt() throws {
+    let base = tmp(); defer { try? FileManager.default.removeItem(at: base) }
+    let lib = base.appendingPathComponent("Projects")
+    try FileManager.default.createDirectory(at: lib.appendingPathComponent("Projects"), withIntermediateDirectories: true)
+    try Data("a".utf8).write(to: lib.appendingPathComponent("a.txt"))
+    try Data("b".utf8).write(to: lib.appendingPathComponent("b.txt"))
+    try Data("c".utf8).write(to: lib.appendingPathComponent("Projects/c.txt"))
+    try Data("d".utf8).write(to: lib.appendingPathComponent("Projects/d.txt"))
+
+    let a = try archive(.dmg, lib, to: base.appendingPathComponent("out"))
+    let restored = try RestoreEngine().restore(a, to: base.appendingPathComponent("restored"))
+    #expect(restored.lastPathComponent == "Projects")
+    for f in ["a.txt", "b.txt", "Projects/c.txt", "Projects/d.txt"] {
+        #expect(FileManager.default.fileExists(atPath: restored.appendingPathComponent(f).path), "missing \(f)")
+    }
+}
