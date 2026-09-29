@@ -85,7 +85,9 @@ private var deadOwner: ProcessIdentity {
         let result = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: dest)
         #expect(try filesInMirror(result.artifacts[0]) == 10)
         #expect(MirrorMounts.mountPoints(of: result.artifacts[0], runner: ProcessCommandRunner()).isEmpty)
-        #expect((try FileManager.default.contentsOfDirectory(atPath: base.path)).isEmpty, "the run left its mount directory behind")
+        // the drive's lock file stays by design (see VolumeLock); nothing else should
+        let left = try FileManager.default.contentsOfDirectory(atPath: base.path).filter { !$0.hasPrefix("cf-volume-lock-") }
+        #expect(left.isEmpty, "the run left its mount directory behind: \(left)")
         let beside = try FileManager.default.contentsOfDirectory(atPath: dest.path)
             .filter { $0 != "Lib.sparsebundle" && $0 != ArchiveManifest.sidecarName }
         #expect(beside.isEmpty, "the run wrote into the destination beside the mirror: \(beside)")

@@ -114,9 +114,35 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let wasSealed = fm.fileExists(atPath: destinationDir.appendingPathComponent(ArchiveManifest.sidecarName).path)
         let markedHere = try MirrorSeal.markOpen(destinationDir)
         var touched = false
+        let watch = RunWatch()
+        var failure: Error?
         do {
-            try update(source, in: destinationDir, bundle: bundle, stdin: stdin, touched: &touched)
+            try update(source, in: destinationDir, bundle: bundle, stdin: stdin, touched: &touched, watch: watch)
         } catch {
+            failure = error
+        }
+        watch.drive?.stop()
+
+        // The drive came close to full while the image was attached: some write may
+        // have been lost, which rsync can't see and the file system inside may not
+        // show. The run never counts as a success then, whatever else happened.
+        if touched, let drive = watch.drive, drive.dipped {
+            guard MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty else {
+                throw MirrorCopyError.driveFilledByAnother(swapped: watch.swapped)   // still attached: stays marked
+            }
+            switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown) {
+            case .damaged(let why):
+                throw MirrorCopyError.imageDamaged(why)          // stays marked; not compacted, not sealed
+            case .unknown:
+                throw MirrorCopyError.driveFilledByAnother(swapped: watch.swapped)   // unchecked: stays marked
+            case .sound:
+                compact(bundle, stdin: stdin)
+                if wasSealed || watch.swapped { try? MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted) }
+                throw MirrorCopyError.driveFilledByAnother(swapped: watch.swapped)
+            }
+        }
+
+        if let error = failure {
             if !touched {
                 if markedHere { MirrorSeal.clearOpen(destinationDir) }   // never changed: the manifest still holds
             } else if MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty {
@@ -158,7 +184,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 
     /// create or grow the image, attach it, bring the library copy up to date, detach.
     private func update(_ source: ArchiveSource, in destinationDir: URL, bundle: URL, stdin: Data?,
-                        touched: inout Bool) throws {
+                        touched: inout Bool, watch: RunWatch) throws {
         let fm = FileManager.default
         let encrypted = passphrase != nil
         // The image is attached at a directory of this run's own on the boot volume,
@@ -187,6 +213,11 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 
         // `touched` is set at each step that changes the image, so a run that fails
         // before any of them leaves the manifest standing
+        // one mirror run per drive at a time (see MirrorWriteGuard); after the in-use
+        // check, so a second run of this same image fails at once rather than waits
+        let volumeLock = try VolumeLock.acquire(for: destinationDir, in: mountBase, control: runner.control)
+        defer { volumeLock?.release() }
+
         let capacity = StorageReporter.volume(of: destinationDir).total
         let ceiling = Self.sectors(gb: sizing.imageGB(destinationCapacity: capacity)) * 512
         let free = JobExecutor.freeSpace(for: destinationDir)
@@ -208,6 +239,11 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         if let needs = source.sizeHint {
             try Self.checkRoom(for: needs, image: bundle, imageBytes: imageBytes, destination: destinationDir)
         }
+
+        // watch the drive for as long as the image is attached (see MirrorWriteGuard)
+        let drive = DriveWatch(watching: destinationDir, floor: reserve / 4 * 3)
+        drive.start()
+        watch.drive = drive
 
         let work = try MirrorMounts.makeWork(in: mountBase)
         let mountpoint = work.appendingPathComponent("mnt", isDirectory: true)
@@ -233,13 +269,20 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         touched = true          // attached read-write: the image changes from here
         // rsync into a clone and swap, so the copy restore reads is never half-updated
         try MirrorCopy.update(volume: mountpoint, name: source.root.lastPathComponent, source: source.root,
-                              runner: runner, execute: { try execute($0) })
+                              runner: runner, execute: { try execute($0) }, beforeSwap: {
+            // the new copy goes in place only once it is on the drive, and only if the
+            // drive never came close to full while it was being written
+            MirrorCopy.flush(volume: mountpoint)
+            drive.sample()
+            if drive.dipped { throw MirrorCopyError.driveFilledByAnother(swapped: false) }
+        })
+        watch.swapped = true
         // The new copy is in place. A detach that comes back busy (Spotlight or
         // fseventsd still looking) used to fail the run here while the mirror already
         // held the new library, so the history and the restore disagreed. Flush, then
         // detach patiently and by force if need be; only a volume that still won't go
         // fails the run.
-        sync()
+        MirrorCopy.flush(volume: mountpoint)
         MountPoint.detach(mountpoint, runner: teardown)
         guard !MountPoint.isMounted(mountpoint) else { throw MountPointError.stillMounted(mountpoint.path) }
     }

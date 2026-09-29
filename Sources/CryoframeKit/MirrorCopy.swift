@@ -34,8 +34,10 @@ enum MirrorCopy {
 
     /// bring `<volume>/<name>` up to date with `source`. `execute` runs a tool as the
     /// run does (honoring Stop, throwing on failure).
+    /// `beforeSwap` runs once the new copy is complete and before it goes in place; if
+    /// it throws, the staging copy is removed and the previous copy stays.
     static func update(volume: URL, name: String, source: URL, runner: CommandRunner,
-                       execute: (Command) throws -> Void) throws {
+                       execute: (Command) throws -> Void, beforeSwap: () throws -> Void = {}) throws {
         let fm = FileManager.default
         let current = volume.appendingPathComponent(name, isDirectory: true)
         let staging = volume.appendingPathComponent(stagingName, isDirectory: true)
@@ -59,6 +61,13 @@ enum MirrorCopy {
             // once the library had shrunk. The previous copy is untouched.
             removeStaging(staging, runner: runner.forTeardown)
             throw MirrorCopyError.driveFilled
+        }
+
+        do {
+            try beforeSwap()
+        } catch {
+            removeStaging(staging, runner: runner.forTeardown)
+            throw error
         }
 
         // Never swap anywhere but inside the image. If it went away under the run,
@@ -165,6 +174,15 @@ enum MirrorCopy {
         }
     }
 
+    /// push everything written to the image down to its bands on the drive: rsync's
+    /// data sits in memory until then, and a drive that fills afterwards loses it
+    static func flush(volume: URL) {
+        Darwin.sync()
+        let fd = open(volume.path, O_RDONLY)
+        if fd >= 0 { _ = fcntl(fd, F_FULLFSYNC); close(fd) }
+        Darwin.sync()
+    }
+
     /// An APFS clone of the whole tree. clonefile(2) on a directory is atomic (all of
     /// it or none) and, measured on 30,000 files, took 0.2 s where cloning file by file
     /// took 8 s. Apple steers directory copies to copyfile(3) instead; the reasons
@@ -237,6 +255,11 @@ public enum MirrorCopyError: Error, Equatable {
     case imageWentAway(String)
     case swapFailed(String)
     case driveFilled
+    /// the drive came close to full while the image was being written: another program
+    /// was writing to it too. `swapped`: the new copy had already gone in place.
+    case driveFilledByAnother(swapped: Bool)
+    /// fsck_apfs found the file system inside the image damaged
+    case imageDamaged(String)
 }
 
 extension MirrorCopyError: LocalizedError {
@@ -246,6 +269,13 @@ extension MirrorCopyError: LocalizedError {
             return "the mirror's disk image was detached from \(path) during the run; the previous copy is untouched — run again"
         case .driveFilled:
             return "the mirror ran out of room during the run. A mirror is updated beside the previous copy, so it needs room for everything that changed as well as the library. The previous copy is intact; free up space on the drive, or use a bigger one, and run again."
+        case .driveFilledByAnother(let swapped):
+            let copy = swapped
+                ? "The mirror holds the previous copy or the updated one, whichever the drive kept; its file system checked out."
+                : "Nothing was updated, and the mirror's file system checked out."
+            return "the drive nearly filled while the mirror was being written, because something else was writing to it at the same time. A disk image loses writes when its drive fills, so this run doesn't count. \(copy) Make room on the drive and run again."
+        case .imageDamaged(let why):
+            return "the drive filled while the mirror was being written, and the mirror's disk image is damaged (\(why)). Don't rely on this copy: run a restore drill, and consider starting this mirror afresh on a drive with room to spare."
         case .swapFailed(let why):
             return "couldn't put the updated copy in place (\(why)); the previous copy is untouched — run again"
         }

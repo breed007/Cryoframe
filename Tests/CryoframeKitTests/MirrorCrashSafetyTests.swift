@@ -537,3 +537,92 @@ extension ReadOnlyFilesInAMirror {
         #expect(ls.stdout.contains("deny delete"), "the library folder lost its ACL:\n\(ls.stdout)")
     }
 }
+
+/// Something else filling the drive while a run writes: the image's band writes are
+/// lost, silently, whatever the run itself does. A run that saw the drive come close
+/// to full must not count as a success, and must not swap in a copy it can't vouch for.
+@Suite(.serialized) struct AnotherWriterOnTheDrive {
+
+    /// fills the drive (as another program would) just before the run's rsync starts,
+    /// holds it full a moment, and frees it again, so only the watch can tell.
+    private final class FillsTheDriveBeforeRsync: CommandRunner, @unchecked Sendable {
+        let inner = ProcessCommandRunner()
+        let drive: URL
+        private(set) var filled = false
+        init(drive: URL) { self.drive = drive }
+        var forTeardown: CommandRunner { inner }
+        func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+            if (launchPath as NSString).lastPathComponent == "rsync", !filled {
+                filled = true
+                let f = drive.appendingPathComponent("other-writer.bin")
+                FileManager.default.createFile(atPath: f.path, contents: nil)
+                if let h = FileHandle(forWritingAtPath: f.path) {
+                    let chunk = Data(repeating: 0xA5, count: 4 << 20)
+                    while (try? h.write(contentsOf: chunk)) != nil, (try? h.synchronize()) != nil {}
+                    try? h.close()
+                }
+                Thread.sleep(forTimeInterval: 0.4)
+                try? FileManager.default.removeItem(at: f)
+            }
+            return try inner.run(launchPath, args, stdin: stdin)
+        }
+    }
+
+    @Test func aDriveFilledBySomethingElseMidRunFailsTheRunAndKeepsThePreviousCopy() throws {
+        let scratch = tempDir("other"), base = tempDir("base"), back = tempDir("back")
+        let src = try library(files: 10)
+        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "300m", "-fs", "APFS", "-volname", "Drive",
+                                                            "-type", "SPARSE", scratch.appendingPathComponent("drive").path])
+        try #require(made.ok, "\(made.stderr)")
+        let drive = scratch.appendingPathComponent("mnt")
+        try FileManager.default.createDirectory(at: drive, withIntermediateDirectories: true)
+        let a = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", scratch.appendingPathComponent("drive.sparseimage").path, "-mountpoint", drive.path, "-nobrowse"]) }
+        try #require(a.ok, "\(a.stderr)")
+        defer {
+            MountPoint.detach(drive, runner: ProcessCommandRunner())
+            for d in [scratch, base, back, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) }
+        }
+        let out = drive.appendingPathComponent("Lib")
+        _ = try SparseBundleMirrorEngine(mountBase: base).archive(ArchiveSource(name: "Lib", root: src, sizeHint: JobExecutor.directorySize(src)), to: out)
+        let before = tree(src)
+        try editEverything(src, files: 10)
+
+        let filler = FillsTheDriveBeforeRsync(drive: drive)
+        #expect(throws: MirrorCopyError.driveFilledByAnother(swapped: false)) {
+            try SparseBundleMirrorEngine(runner: filler, mountBase: base)
+                .archive(ArchiveSource(name: "Lib", root: src, sizeHint: JobExecutor.directorySize(src)), to: out)
+        }
+        #expect(filler.filled)
+        let archive = try #require(RestoreDiscovery.archive(at: out))
+        let restored = try RestoreEngine().restore(archive, to: back, verify: true)
+        #expect(tree(restored) == before, "the previous copy didn't come through a drive filled by something else")
+    }
+
+    // Two of our own jobs mirroring to one drive would each size their image to the
+    // room the other is about to use. They take turns instead.
+    @Test func mirrorRunsToTheSameDriveTakeTurns() throws {
+        let dir = tempDir("turns"), base = tempDir("base")
+        defer { for d in [dir, base] { try? FileManager.default.removeItem(at: d) } }
+        let first = try #require(try VolumeLock.acquire(for: dir, in: base, control: nil))
+        let got = NSLock(); var secondHeld = false
+        let t = Thread {
+            let second = try? VolumeLock.acquire(for: dir, in: base, control: nil)
+            got.lock(); secondHeld = second != nil; got.unlock()
+            second?.release()
+        }
+        t.start()
+        Thread.sleep(forTimeInterval: 1.2)
+        got.lock(); let early = secondHeld; got.unlock()
+        #expect(!early, "a second run got the drive while the first held it")
+        first.release()
+        let start = ProcessInfo.processInfo.systemUptime
+        while ProcessInfo.processInfo.systemUptime - start < 5 { got.lock(); let done = secondHeld; got.unlock(); if done { break }; Thread.sleep(forTimeInterval: 0.1) }
+        got.lock(); #expect(secondHeld, "the second run never got its turn"); got.unlock()
+
+        // Stop ends the wait
+        let held = try #require(try VolumeLock.acquire(for: dir, in: base, control: nil))
+        defer { held.release() }
+        let control = RunControl(); control.cancel()
+        #expect(throws: CancelledError.self) { _ = try VolumeLock.acquire(for: dir, in: base, control: control) }
+    }
+}
