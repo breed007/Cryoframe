@@ -41,10 +41,19 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
 
     /// the original library/bundle name, recovered from the first artifact filename
     /// (e.g. "Photos Library.photoslibrary.dmg" → "Photos Library.photoslibrary";
-    /// "…dmg.part.000" → strip the split suffix first).
+    /// "…dmg.part.000" or "…zip.part.aa" → strip the part suffix first).
+    ///
+    /// Only a trailing part suffix, and never a mirror's (mirrors aren't split): this
+    /// used to cut at the first ".part." anywhere, so a library called "Thesis.part.2"
+    /// mirrored, drilled and rehearsed clean, and then wouldn't restore.
     public var bundleName: String {
         guard var n = artifactNames.first, !n.isEmpty else { return libraryName }
-        if let r = n.range(of: ".part.") { n = String(n[..<r.lowerBound]) }
+        if format != .liveMirror, let r = n.range(of: ".part.", options: .backwards) {
+            let suffix = n[r.upperBound...]
+            if !suffix.isEmpty, suffix.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) {
+                n = String(n[..<r.lowerBound])
+            }
+        }
         return (n as NSString).deletingPathExtension
     }
 

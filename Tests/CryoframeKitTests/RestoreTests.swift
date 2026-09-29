@@ -43,6 +43,19 @@ private func archive(_ kind: SealedArchiveEngine.Sealed, _ lib: URL, to dir: URL
     #expect(name(["Music.sparsebundle"]) == "Music")
 }
 
+// Only a trailing part suffix is one: a library can have ".part." in its own name,
+// and a mirror is never split.
+@Test func aNameWithPartInItIsNotMistakenForASplitArchive() {
+    func name(_ format: ArchiveFormat, _ artifacts: [String]) -> String {
+        RestorableArchive(dir: URL(fileURLWithPath: "/x"), libraryName: "L", format: format, bytes: 0, artifactNames: artifacts).bundleName
+    }
+    #expect(name(.liveMirror, ["Thesis.part.2.sparsebundle"]) == "Thesis.part.2")
+    #expect(name(.sealedDMG, ["Thesis.part.2.dmg"]) == "Thesis.part.2")
+    #expect(name(.sealedDMG, ["Thesis.part.2.dmg.part.000", "Thesis.part.2.dmg.part.001"]) == "Thesis.part.2")
+    #expect(name(.sealedZip, ["Thesis.part.2.zip.part.aa", "Thesis.part.2.zip.part.ab"]) == "Thesis.part.2")
+    #expect(name(.liveMirror, ["My.part.x.sparsebundle"]) == "My.part.x")
+}
+
 // MARK: - directory (sparsebundle) checksums — the mirror manifest fix
 
 @Test func directoryDigestIsStableAndCatchesChanges() throws {
