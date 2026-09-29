@@ -252,6 +252,30 @@ private struct DiesMidRsync: CommandRunner {
         #expect(check.passed, "\(check.details)")
     }
 
+    // While a crash mark stands the checksum isn't compared, but a band the mirror had
+    // when it was last sealed is still required: losing one is damage, and said so.
+    @Test func aBandLostUnderACrashMarkIsReportedByTheChecksAndHealth() throws {
+        let src = try library(files: 4)
+        for i in 0..<3 { try Data(repeating: UInt8(i + 1), count: 9 << 20).write(to: src.appendingPathComponent("big\(i).bin")) }
+        let dest = tempDir("lostband"), base = tempDir("base")
+        let out = dest.appendingPathComponent("Lib")
+        defer { for d in [dest, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let bundle = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        try MirrorSeal.markOpen(out)                      // as a crashed run leaves it
+        #expect(try ChecksumVerifier().reverify(archiveDir: out).passed, "an intact mirror under a mark should pass")
+
+        let band = MirrorSeal.bands(of: bundle).filter { $0 != 0 }.last!
+        try FileManager.default.removeItem(at: bundle.appendingPathComponent("bands/\(String(band, radix: 16))"))
+        let check = try ChecksumVerifier().reverify(archiveDir: out)
+        #expect(!check.passed)
+        #expect(check.details.contains("missing"), "\(check.details)")
+        let job = BackupJob(id: "j", name: "j", libraries: [.genericFolder(id: "l", displayName: "Lib", path: .home("Lib"))],
+                            target: .localVolume(id: "t", name: "Disk", dir: dest),
+                            format: .liveMirror(sizeGB: 1), frequency: .manual, createdAt: Date())
+        let health = HealthChecker().check(job: job)
+        #expect(health.checks.first.map { !$0.passed && !$0.skipped } == true, "\(health.checks)")
+    }
+
     // A run killed outright leaves the image attached and nothing re-sealed. The
     // launch sweep detaches it; the restore then opens the previous copy, and the
     // checksum pass says it didn't check rather than calling the mirror corrupt.
@@ -294,6 +318,16 @@ private struct DiesMidRsync: CommandRunner {
         let health = HealthChecker().check(job: job)
         #expect(health.checks.first?.skipped == true, "\(health.checks)")
     }
+}
+
+@Test func sealedBandsAreRecordedAsRanges() throws {
+    #expect(MirrorSeal.bandRanges([]) == "")
+    #expect(MirrorSeal.bandRanges([0, 1, 2, 5, 16, 17]) == "0-2,5,10-11")
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cf-bands-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir.appendingPathComponent("bands"), withIntermediateDirectories: true)
+    for n in [0, 1, 2, 5, 16] { try Data().write(to: dir.appendingPathComponent("bands/\(String(n, radix: 16))")) }
+    #expect(MirrorSeal.missingBands("0-2,5,10-11", in: dir) == [17])
 }
 
 /// presses Stop once rsync has written a new file into the staging copy.

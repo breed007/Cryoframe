@@ -84,13 +84,15 @@ public struct HealthChecker: Sendable {
                     }
                     // a checksum that wasn't compared isn't a verified archive: say so,
                     // and don't count it either way (see MirrorSeal)
-                    if archive.format == .liveMirror, MirrorSeal.isOpen(archive.dir) {
+                    let report = try? verifier.reverify(archiveDir: archive.dir)
+                    // an open mirror whose checksum couldn't be compared: not verified,
+                    // and not failed either, unless it has lost a band (see MirrorSeal)
+                    if archive.format == .liveMirror, MirrorSeal.isOpen(archive.dir), report?.passed == true {
                         checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
                                                    detail: MirrorSeal.uncheckedDetail,
                                                    destination: multiDest ? t.displayName : nil, skipped: true))
                         continue
                     }
-                    let report = try? verifier.reverify(archiveDir: archive.dir)
                     checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
                                                passed: report?.passed ?? false,
                                                detail: report?.details ?? "could not read manifest",

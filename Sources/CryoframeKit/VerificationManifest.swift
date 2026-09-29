@@ -18,9 +18,12 @@ public struct VerificationManifest: Codable, Sendable, Equatable {
     public let format: ArchiveFormat
     public let artifacts: [ArtifactDigest]
     public var encrypted: Bool?      // nil/false = plaintext; true = AES-256 (needs a passphrase to open)
+    /// a mirror's bands when it was sealed, as hex ranges ("0-1f,22"); see MirrorSeal.
+    /// nil for sealed archives and for mirrors sealed before 1.6.
+    public var sealedBands: String?
 
-    public init(format: ArchiveFormat, artifacts: [ArtifactDigest], encrypted: Bool? = nil) {
-        self.format = format; self.artifacts = artifacts; self.encrypted = encrypted
+    public init(format: ArchiveFormat, artifacts: [ArtifactDigest], encrypted: Bool? = nil, sealedBands: String? = nil) {
+        self.format = format; self.artifacts = artifacts; self.encrypted = encrypted; self.sealedBands = sealedBands
     }
 }
 

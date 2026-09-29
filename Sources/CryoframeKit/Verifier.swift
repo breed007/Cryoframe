@@ -38,7 +38,17 @@ public struct ChecksumVerifier: Sendable {
         for a in manifest.artifacts {
             let url = dir.appendingPathComponent(a.name)
             guard FileManager.default.fileExists(atPath: url.path) else { failures.append("missing: \(a.name)"); continue }
-            if unsealed { continue }
+            if unsealed {
+                // the checksum no longer applies, but every band the mirror had when it
+                // was sealed must still be there (see MirrorSeal)
+                if let ranges = manifest.sealedBands {
+                    let missing = MirrorSeal.missingBands(ranges, in: url)
+                    if !missing.isEmpty {
+                        failures.append("part of \(a.name) is missing (\(missing.count) of the data bands it had when last completed); it can't be restored as it stands")
+                    }
+                }
+                continue
+            }
             if try Checksum.digest(of: url) != a.sha256,
                !Self.matchesLegacyDirectoryDigest(url, a.sha256) { failures.append("checksum mismatch: \(a.name)") }
         }

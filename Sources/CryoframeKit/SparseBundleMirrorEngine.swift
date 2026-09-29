@@ -365,8 +365,52 @@ public enum MirrorSeal {
     }
 
     static func seal(_ result: ArchiveResult, in dir: URL, encrypted: Bool) throws {
-        try ArchiveManifest.write(try ArchiveManifest.build(for: result, encrypted: encrypted), toDir: dir)
+        var manifest = try ArchiveManifest.build(for: result, encrypted: encrypted)
+        manifest.sealedBands = result.artifacts.first.map { bandRanges(bands(of: $0)) }
+        try ArchiveManifest.write(manifest, toDir: dir)
         clearOpen(dir)
+    }
+
+    // MARK: the bands a sealed mirror had
+    //
+    // While a mark stands the structural checksum can't be compared: the image has
+    // changed since. The previous copy is still inside it, but with nothing compared
+    // at all, a mirror that had lost a band (a failing drive) restored "successfully"
+    // with zeros where the band's data had been. A sparse image never deletes a band
+    // by itself (measured: freeing 200 MB inside left all 30 bands), and a run only
+    // adds them, so every band the image had when it was sealed must still be there.
+    // Content isn't compared; a missing band is caught.
+
+    /// the band numbers present in a sparsebundle
+    static func bands(of bundle: URL) -> [Int] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: bundle.appendingPathComponent("bands").path)) ?? []
+        return names.compactMap { Int($0, radix: 16) }.sorted()
+    }
+
+    /// sorted band numbers as hex ranges: [0, 1, 2, 5] → "0-2,5"
+    static func bandRanges(_ bands: [Int]) -> String {
+        var parts: [String] = []
+        var i = 0
+        while i < bands.count {
+            var j = i
+            while j + 1 < bands.count, bands[j + 1] == bands[j] + 1 { j += 1 }
+            let a = String(bands[i], radix: 16), b = String(bands[j], radix: 16)
+            parts.append(i == j ? a : "\(a)-\(b)")
+            i = j + 1
+        }
+        return parts.joined(separator: ",")
+    }
+
+    /// bands recorded in `ranges` that `bundle` no longer has
+    static func missingBands(_ ranges: String, in bundle: URL) -> [Int] {
+        let present = Set(bands(of: bundle))
+        var missing: [Int] = []
+        for part in ranges.split(separator: ",") {
+            let ends = part.split(separator: "-").compactMap { Int($0, radix: 16) }
+            guard let lo = ends.first, let hi = ends.last, lo <= hi else { continue }
+            for n in lo...hi where !present.contains(n) { missing.append(n) }
+        }
+        return missing
     }
 
     static func clearOpen(_ dir: URL) {
