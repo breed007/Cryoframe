@@ -20,13 +20,14 @@ public enum LeftoverCleanup {
         case cleaned(ReconcileReport)
         case skippedRunInProgress(String)     // a job id whose run lock is held
         case skippedOldHelper(String)         // the helper's reported version
+        case skippedLocksUnreadable(String)   // can't tell whether anything is running
         case failed(String)
     }
 
     /// - Parameter jobIDs: every job this user has; if any is running, in this
     ///   process or another, cleanup waits for a later launch.
     public static func run(helper: PrivilegedHelper, locks: RunLocks, jobIDs: [String]) async -> Outcome {
-        if let busy = jobIDs.first(where: { locks.holder(of: $0) != nil }) { return .skippedRunInProgress(busy) }
+        if let skip = gate(locks: locks, jobIDs: jobIDs) { return skip }
         do {
             let info = try await helper.handshake()
             guard isAtLeast(info.version, minimumHelperVersion) else { return .skippedOldHelper(info.version) }
@@ -34,6 +35,19 @@ public enum LeftoverCleanup {
         } catch {
             return .failed(error.localizedDescription)
         }
+    }
+
+    /// nil when cleanup may go ahead. Fails closed: a lock it can't read might be a
+    /// run's, and this check exists so one mistake elsewhere can't tear a run down.
+    static func gate(locks: RunLocks, jobIDs: [String]) -> Outcome? {
+        for id in jobIDs {
+            switch locks.look(id) {
+            case .free: continue
+            case .held: return .skippedRunInProgress(id)
+            case .unreadable(let why): return .skippedLocksUnreadable(why)
+            }
+        }
+        return nil
     }
 
     /// dotted-number comparison; anything that isn't one counts as older.

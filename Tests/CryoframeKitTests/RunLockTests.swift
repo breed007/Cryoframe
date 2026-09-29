@@ -243,3 +243,27 @@ private final class OtherProcessHolding {
     JobExecutor.sweepOrphanedScratch(scratchBase: scratch, pendingStore: store, locks: locks)
     #expect(!FileManager.default.fileExists(atPath: running.path))
 }
+
+// MARK: - a lock folder it can't read
+
+@Test func aLockFolderThatCantBeReadIsNeitherFreeNorHeld() throws {
+    let dir = tempDir(); defer { chmod(dir.path, 0o755); try? FileManager.default.removeItem(at: dir) }
+    let locks = RunLocks(directory: dir)
+    chmod(dir.path, 0o000)
+    guard case .unreadable = locks.look("job") else {
+        Issue.record("an unreadable lock folder read as \(locks.look("job"))"); return
+    }
+    // the job list still shows it as idle rather than painting every job as running
+    #expect(locks.holder(of: "job") == nil)
+}
+
+@Test func cleanupDoesNotGoAheadWhenTheLockFolderCantBeRead() async throws {
+    let helper = FakePrivilegedHelper(version: SnapshotReconciler.helperVersion)
+    let dir = tempDir(); defer { chmod(dir.path, 0o755); try? FileManager.default.removeItem(at: dir) }
+    let locks = RunLocks(directory: dir)
+    chmod(dir.path, 0o000)
+    let outcome = await LeftoverCleanup.run(helper: helper, locks: locks, jobIDs: ["a"])
+    if case .cleaned = outcome { Issue.record("reconciled without being able to see the run locks") }
+    #expect(await helper.calls.isEmpty)
+}
+

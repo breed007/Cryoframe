@@ -134,12 +134,21 @@ public final class RunLocks: @unchecked Sendable {
 
     // MARK: looking without taking
 
-    /// the job's current holder, or nil when nobody is running it. Only looks: a
-    /// probe that briefly took the lock would make a run starting at that instant
-    /// think the job was busy.
-    public func holder(of jobID: String) -> RunHolder? {
+    public enum Look: Equatable, Sendable {
+        case free
+        case held(RunHolder)
+        case unreadable(String)       // the lock can't be read, so nobody can say
+    }
+
+    /// what is known about the job's lock, without taking it: a probe that briefly
+    /// took the lock would make a run starting at that instant think the job was busy.
+    public func look(_ jobID: String) -> Look {
         let fd = open(lockURL(jobID).path, O_RDONLY | O_CLOEXEC)
-        guard fd >= 0 else { return nil }                    // never locked: nobody holds it
+        guard fd >= 0 else {
+            let err = errno
+            // no lock file (or no folder yet): never locked, so nobody holds it
+            return err == ENOENT ? .free : .unreadable(String(cString: strerror(err)))
+        }
         defer { close(fd) }
         var probe = flock()
         probe.l_type = Int16(F_WRLCK)
@@ -147,8 +156,17 @@ public final class RunLocks: @unchecked Sendable {
         probe.l_start = 0
         probe.l_len = 0
         // On Darwin, F_GETLK reports a conflicting flock(2) lock as well as record locks.
-        guard fcntl(fd, F_GETLK, &probe) == 0, probe.l_type != Int16(F_UNLCK) else { return nil }
-        return readHolder(jobID) ?? .unknown
+        guard fcntl(fd, F_GETLK, &probe) == 0 else { return .unreadable(String(cString: strerror(errno))) }
+        guard probe.l_type != Int16(F_UNLCK) else { return .free }
+        return .held(readHolder(jobID) ?? .unknown)
+    }
+
+    /// the job's current holder, or nil when nobody is running it or the lock can't
+    /// be read. For showing runs; anything that must not act while a run might be
+    /// going (cleanup) uses look(_:) and treats unreadable as busy.
+    public func holder(of jobID: String) -> RunHolder? {
+        if case .held(let h) = look(jobID) { return h }
+        return nil
     }
 
     /// holders for the jobs that are running now, by job id.
