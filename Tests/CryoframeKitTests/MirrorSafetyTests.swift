@@ -23,14 +23,15 @@ private func library(files n: Int) throws -> URL {
     return lib
 }
 
-/// regular files inside the mirror image, read through a read-only attach.
+/// regular files in the mirror's library copy, the one a restore reads, through a
+/// read-only attach. (A stopped run can leave a copy in staging beside it.)
 private func filesInMirror(_ bundle: URL) throws -> Int {
     let mnt = tempDir("count")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
     let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
     try #require(r.ok, "couldn't attach the mirror to count it: \(r.stderr)")
     var n = 0
-    let walker = FileManager.default.enumerator(at: mnt, includingPropertiesForKeys: [.isRegularFileKey])
+    let walker = FileManager.default.enumerator(at: mnt.appendingPathComponent("Lib"), includingPropertiesForKeys: [.isRegularFileKey])
     while let u = walker?.nextObject() as? URL {
         if u.path.contains("/.fseventsd") || u.lastPathComponent.hasPrefix(".") { continue }
         if (try? u.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true { n += 1 }

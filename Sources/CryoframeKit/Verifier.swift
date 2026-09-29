@@ -60,7 +60,8 @@ public struct StrongVerifier: Sendable {
         let opened = try ArchiveReader(runner: runner).open(result, passphrase: passphrase)
         defer { opened.close() }
 
-        guard let libRoot = locateLibraryRoot(under: opened.root, probe: type.integrityProbe, fm: fm) else {
+        guard let libRoot = locateLibraryRoot(under: Self.searchRoot(opened.root, result, fm: fm),
+                                              probe: type.integrityProbe, fm: fm) else {
             return report(.mountAndOpen, false, "library not found inside archive", ["root/probe missing"])
         }
 
@@ -164,6 +165,16 @@ public struct StrongVerifier: Sendable {
         }
         let how = probeReadability ? "opened all" : "found"
         return report(.mountAndOpen, true, "\(how) \(files) file(s) in \(dirs) folder(s)", [])
+    }
+
+    /// where to look for the library. A mirror holds it at <volume>/<name>, which is
+    /// what a restore copies, and may also hold a copy being updated (MirrorCopy); the
+    /// check looks at exactly what a restore would copy.
+    static func searchRoot(_ root: URL, _ result: ArchiveResult, fm: FileManager) -> URL {
+        guard result.format == .liveMirror, let bundle = result.artifacts.first else { return root }
+        let library = root.appendingPathComponent(bundle.deletingPathExtension().lastPathComponent, isDirectory: true)
+        var isDir: ObjCBool = false
+        return fm.fileExists(atPath: library.path, isDirectory: &isDir) && isDir.boolValue ? library : root
     }
 
     /// the library may be at the archive root (dmg) or one level down (zip

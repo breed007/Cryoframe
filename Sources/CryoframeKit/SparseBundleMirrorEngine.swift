@@ -5,7 +5,8 @@
 //  Live mirror: an APFS sparsebundle with ~8MB bands. First run creates it;
 //  subsequent runs rsync --delete into the attached volume, so only the bands
 //  that changed are rewritten. Same incremental mechanism Time Machine uses for
-//  network targets.
+//  network targets. The rsync goes into a clone that replaces the library copy
+//  only once it is complete (see MirrorCopy).
 //
 
 import Foundation
@@ -76,9 +77,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             throw ArchiveError.toolFailed(tool: "hdiutil", status: 0,
                                           stderr: "the mirror is already open somewhere else (the restore window, or another run of this job), so it did not mount at \(mountpoint.path)")
         }
-        let dest = mountpoint.appendingPathComponent(source.root.lastPathComponent)
-        try fm.createDirectory(at: dest, withIntermediateDirectories: true)
-        try execute(ArchivePlan.rsync(root: source.root, into: dest))
+        // rsync into a clone and swap, so the copy restore reads is never half-updated
+        try MirrorCopy.update(volume: mountpoint, name: source.root.lastPathComponent, source: source.root,
+                              runner: runner, execute: { try execute($0) })
         try execute(ArchivePlan.detach(mountpoint: mountpoint))
 
         return ArchiveResult(artifacts: [bundle], format: .liveMirror)
