@@ -8,6 +8,7 @@
 
 import Foundation
 import CryoframeShared
+import CryoframeKit
 
 final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
     func listener(_ listener: NSXPCListener,
@@ -16,7 +17,7 @@ final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
         // call time. (setCodeSigningRequirement is non-throwing on this SDK.)
         newConnection.setCodeSigningRequirement(CryoframeHelper.clientRequirement)
         newConnection.exportedInterface = NSXPCInterface(with: CryoframeHelperXPC.self)
-        newConnection.exportedObject = HelperService()
+        newConnection.exportedObject = HelperService(client: ProcessIdentity.of(pid: newConnection.processIdentifier))
         newConnection.resume()
         return true
     }

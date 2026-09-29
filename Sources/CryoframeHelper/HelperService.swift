@@ -14,16 +14,26 @@ import CryoframeKit
 final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     private let backend: SnapshotBackend
     private let ledger: SnapshotLedger
+    private let owners: SnapshotOwners
     private let runner: CommandRunner
+    /// the process on the other end of this connection: whoever asks for a snapshot
+    /// owns it, and reconcile keeps it for as long as that process lives.
+    private let client: ProcessIdentity?
     private let dataVolume = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: "")
     private static let mountBase = TMUtilSnapshotBackend.mountBase   // one source of truth
     private static let wakeStatePath = "/private/var/db/app.cryoframe/wake.txt"
+    /// one instance for every connection, so its lock covers them all.
+    private static let sharedOwners = SnapshotOwners(path: "/private/var/db/app.cryoframe/owners.json")
 
-    init(backend: SnapshotBackend = TMUtilSnapshotBackend(),
+    init(client: ProcessIdentity?,
+         backend: SnapshotBackend = TMUtilSnapshotBackend(),
          ledger: SnapshotLedger = SnapshotLedger(path: "/private/var/db/app.cryoframe/ledger.json"),
+         owners: SnapshotOwners = HelperService.sharedOwners,
          runner: CommandRunner = ProcessCommandRunner()) {
+        self.client = client
         self.backend = backend
         self.ledger = ledger
+        self.owners = owners
         self.runner = runner
     }
 
@@ -35,9 +45,10 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
         }
     }
 
-    // serialize snapshot create/delete/reconcile across all XPC connections: the
-    // tmutil set-diff identification and the ledger file must not race when two
-    // concurrent jobs snapshot at once.
+    // serialize snapshot create/mount/delete/reconcile across all XPC connections:
+    // the tmutil set-diff identification and the ledger file must not race when two
+    // concurrent jobs snapshot at once, and reconcile must never see a mount or
+    // snapshot before its owner is on the books.
     private static let snapshotLock = NSLock()
 
     func createSnapshot(volume: Data, reply: @escaping (Data?, Error?) -> Void) {
@@ -46,6 +57,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
             Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
             let snap = try self.backend.create(on: vol)
             self.ledger.record(snap.name)         // own it before anything can fail
+            if let client = self.client { self.owners.recordSnapshot(snap.name, owner: client) }
             return snap
         }
     }
@@ -53,7 +65,10 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     func mountSnapshot(snapshot: Data, ownerUID: uid_t, reply: @escaping (Data?, Error?) -> Void) {
         respond(reply) {
             let snap = try Wire.decode(SnapshotRef.self, from: snapshot)
-            return try self.backend.mount(snap, ownerUID: ownerUID)
+            Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
+            let mount = try self.backend.mount(snap, ownerUID: ownerUID)
+            if let client = self.client { self.owners.recordMount(mount.mountPoint, owner: client) }
+            return mount
         }
     }
 
@@ -69,6 +84,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
                 throw HelperError.refusedForeignMount(path: m.mountPoint)
             }
             try self.backend.unmount(m)
+            self.owners.forgetMount(m.mountPoint)
         }
     }
 
@@ -82,6 +98,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
             }
             try self.backend.delete(snap)
             self.ledger.forget(snap.name)
+            self.owners.forgetSnapshot(snap.name)
         }
     }
 
@@ -147,38 +164,18 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
 
     // MARK: reconcile-on-launch
 
+    /// clean up after crashed runs, keeping whatever a live process still owns.
     private func runReconcile() throws -> ReconcileReport {
-        var unmounted: [String] = []
-        let fm = FileManager.default
-
-        // 1. tear down stale mounts left by a crashed run.
-        if let entries = try? fm.contentsOfDirectory(atPath: Self.mountBase) {
-            for e in entries {
-                let mp = "\(Self.mountBase)/\(e)"
-                let stale = MountRef(mountPoint: mp,
-                                     snapshot: SnapshotRef(name: "", volume: dataVolume, createdAt: Date()))
-                try? backend.unmount(stale)
-                unmounted.append(mp)
-            }
-        }
-
-        // 2. delete orphan snapshots WE created (ledger ∩ still-live). never TM's.
-        var deleted: [String] = []
-        let live = Set((try? backend.list(on: dataVolume))?.map(\.name) ?? [])
-        for name in ledger.all() where live.contains(name) {
-            let ref = SnapshotRef(name: name, volume: dataVolume, createdAt: Date())
-            try? backend.delete(ref)
-            ledger.forget(name)
-            deleted.append(name)
-        }
-        return ReconcileReport(unmounted: unmounted, deletedSnapshots: deleted)
+        SnapshotReconciler(backend: backend, ledger: ledger, owners: owners,
+                           mountBase: Self.mountBase, dataVolume: dataVolume).run()
     }
 
     // MARK: reply plumbing
 
     /// build string reported by handshake(); see HelperInfo.version for what it is
-    /// and is not. Bumped when the wire protocol changes shape.
-    static let version = "1.5.2"
+    /// and is not. Bumped when the wire protocol changes shape, or when a call's
+    /// contract does: the app only asks for reconcile at or above 1.6.0.
+    static let version = SnapshotReconciler.helperVersion
 
     private func respond<T: Encodable>(_ reply: (Data?, Error?) -> Void, _ work: () throws -> T) {
         do { reply(try Wire.encode(try work()), nil) }

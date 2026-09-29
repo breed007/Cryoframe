@@ -1,0 +1,52 @@
+//
+//  LeftoverCleanup.swift
+//  CryoframeKit
+//
+//  When the app launches and when the scheduled agent starts, ask the helper to
+//  clean up snapshot mounts and snapshots a crashed run left behind. The helper
+//  itself keeps anything whose owning process is still alive; this adds two checks
+//  on the calling side, so a mistake in either layer alone can't tear down a run.
+//
+
+import Foundation
+import CryoframeShared
+
+public enum LeftoverCleanup {
+    /// the first helper whose reconcile keeps what live processes own. An older one
+    /// unmounts and deletes everything, running or not, so it is never asked.
+    public static let minimumHelperVersion = "1.6.0"
+
+    public enum Outcome: Equatable, Sendable {
+        case cleaned(ReconcileReport)
+        case skippedRunInProgress(String)     // a job id whose run lock is held
+        case skippedOldHelper(String)         // the helper's reported version
+        case failed(String)
+    }
+
+    /// - Parameter jobIDs: every job this user has; if any is running, in this
+    ///   process or another, cleanup waits for a later launch.
+    public static func run(helper: PrivilegedHelper, locks: RunLocks, jobIDs: [String]) async -> Outcome {
+        if let busy = jobIDs.first(where: { locks.holder(of: $0) != nil }) { return .skippedRunInProgress(busy) }
+        do {
+            let info = try await helper.handshake()
+            guard isAtLeast(info.version, minimumHelperVersion) else { return .skippedOldHelper(info.version) }
+            return .cleaned(try await helper.reconcile())
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// dotted-number comparison; anything that isn't one counts as older.
+    static func isAtLeast(_ version: String, _ minimum: String) -> Bool {
+        func parts(_ s: String) -> [Int]? {
+            let p = s.split(separator: ".").map { Int($0) }
+            return p.isEmpty || p.contains(nil) ? nil : p.compactMap { $0 }
+        }
+        guard let v = parts(version), let m = parts(minimum) else { return false }
+        for i in 0..<max(v.count, m.count) {
+            let a = i < v.count ? v[i] : 0, b = i < m.count ? m[i] : 0
+            if a != b { return a > b }
+        }
+        return true
+    }
+}

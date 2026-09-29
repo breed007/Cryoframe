@@ -53,21 +53,26 @@ public struct MountRef: Codable, Sendable, Equatable {
 
 public struct HelperInfo: Codable, Sendable {
     /// the helper's own build string, for logging and for telling an old resident
-    /// daemon from a freshly-respawned one. NOT a compatibility gate: nothing
-    /// compares it, and the reload-on-update path keys off the app's build number
-    /// in Prefs instead (see HelperManager). Said "must match GUI's expectation"
-    /// for four releases while no such check existed.
+    /// daemon from a freshly-respawned one. The reload-on-update path keys off the
+    /// app's build number in Prefs instead (see HelperManager). One thing compares
+    /// it: the app asks for reconcile only from a helper at or above
+    /// LeftoverCleanup.minimumHelperVersion, because an older helper's reconcile
+    /// tears down every snapshot, including a running job's.
     public var version: String
     public var pid: Int32
     public init(version: String, pid: Int32) { self.version = version; self.pid = pid }
 }
 
 /// What reconcile-on-launch cleaned up after a crashed run.
-public struct ReconcileReport: Codable, Sendable {
+public struct ReconcileReport: Codable, Sendable, Equatable {
     public var unmounted: [String]   // stale mountpoints torn down
     public var deletedSnapshots: [String]
-    public init(unmounted: [String], deletedSnapshots: [String]) {
-        self.unmounted = unmounted; self.deletedSnapshots = deletedSnapshots
+    /// mounts and snapshots left in place because a live process still owns them, or
+    /// because they can't yet be told apart from one that does. nil from a helper
+    /// older than 1.6, which never kept anything.
+    public var kept: [String]?
+    public init(unmounted: [String], deletedSnapshots: [String], kept: [String]? = nil) {
+        self.unmounted = unmounted; self.deletedSnapshots = deletedSnapshots; self.kept = kept
     }
 }
 
@@ -114,7 +119,8 @@ public protocol PrivilegedHelper: Sendable {
     /// reconcile: list our snapshots (for the GUI), used to detect orphans.
     func listSnapshots(on volume: VolumeRef) async throws -> [SnapshotRef]
 
-    /// 6. reconcile-on-launch: sweep stale mounts + orphan app.cryoframe.snap.* snapshots.
+    /// 6. reconcile-on-launch: sweep stale mounts + orphan snapshots whose owning
+    ///    process has exited. Anything a live process owns is kept (1.6.0 helpers on).
     func reconcile() async throws -> ReconcileReport
 
     /// M5: mount a network target as root. Declared now to freeze the contract.

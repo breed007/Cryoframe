@@ -18,16 +18,17 @@ public actor FakePrivilegedHelper: PrivilegedHelper {
     public private(set) var liveSnapshots: Set<String> = []
     public private(set) var liveMounts: Set<String> = []
     private let failAt: Stage?
+    private let version: String
     private var counter = 0
 
-    public init(failAt: Stage? = nil) { self.failAt = failAt }
+    public init(failAt: Stage? = nil, version: String = "fake") { self.failAt = failAt; self.version = version }
 
     struct Boom: Error {}
 
     private func record(_ s: String) { calls.append(s) }
     private func maybeFail(_ stage: Stage) throws { if failAt == stage { throw Boom() } }
 
-    public func handshake() async throws -> HelperInfo { HelperInfo(version: "fake", pid: 0) }
+    public func handshake() async throws -> HelperInfo { HelperInfo(version: version, pid: 0) }
 
     public func createSnapshot(on volume: VolumeRef) async throws -> SnapshotRef {
         record("create"); try maybeFail(.create)
@@ -59,6 +60,7 @@ public actor FakePrivilegedHelper: PrivilegedHelper {
     }
 
     public func reconcile() async throws -> ReconcileReport {
+        record("reconcile")
         let unmounted = Array(liveMounts); let deleted = Array(liveSnapshots)
         liveMounts.removeAll(); liveSnapshots.removeAll()
         return ReconcileReport(unmounted: unmounted, deletedSnapshots: deleted)
