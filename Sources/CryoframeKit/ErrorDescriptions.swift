@@ -100,6 +100,63 @@ public enum RestoreFailureText {
         let plain = reason.prefix(1).lowercased() + reason.dropFirst()
         return "couldn't restore \(file) — \(plain)"
     }
+
+    /// why one archive failed to restore, for the Restore window's result list.
+    public static func restoreMessage(_ e: Error, encrypted: Bool) -> String {
+        switch e as? RestoreError {
+        case .verificationFailed(let d): return "verification failed — \(d)"
+        case .destinationExists:         return "already exists in the destination — rename or move it, then try again"
+        case .libraryNotFound:           return "library not found inside the archive"
+        case .noManifest:                return "no checksum manifest beside the archive"
+        case .none: break
+        }
+        // an ArchiveError surfaces when the archive itself won't open. Its raw
+        // description is Swift internals ("ArchiveError error 0"), so say what
+        // actually happened and what to do about it.
+        if let a = e as? ArchiveError {
+            switch a {
+            case .toolFailed(let tool, _, let stderr):
+                if encrypted { return "couldn't open the archive — check the passphrase" }
+                let detail = stderr.split(separator: "\n").last.map(String.init) ?? ""
+                return detail.isEmpty ? "couldn't open the archive (\(tool) failed)"
+                                      : "couldn't open the archive — \(detail)"
+            case .noArtifactProduced:   return "the archive is missing its files"
+            case .sourceMissing(let s): return "missing part of the archive — \(s)"
+            case .passphraseUnavailable: return "this archive is encrypted and no passphrase was found"
+            }
+        }
+        // before the encrypted fallback: a copy that failed on one file happened after
+        // the archive opened, so the passphrase was fine
+        if let copy = copyFailure(e) { return copy }
+        if encrypted { return "couldn't open the archive — check the passphrase" }
+        return (e as NSError).localizedDescription
+    }
+
+    /// why one library failed to come back, for the recovery wizard. Worded for
+    /// someone rebuilding a Mac: it speaks of the recovery key, and never suggests
+    /// moving what is already in place.
+    public static func recoveryMessage(_ e: Error, encrypted: Bool) -> String {
+        if let r = e as? RestoreError {
+            switch r {
+            case .verificationFailed(let d): return "verification failed — \(d)"
+            case .destinationExists(let p):  return "something is already at \((p as NSString).lastPathComponent) — it was left alone"
+            case .libraryNotFound:           return "the archive didn't contain the library"
+            case .noManifest:                return "no checksum manifest beside the archive"
+            }
+        }
+        if let a = e as? ArchiveError {
+            switch a {
+            case .toolFailed(_, _, let stderr):
+                if encrypted { return "couldn't open — check the recovery key" }
+                return "couldn't open the archive — \(stderr.split(separator: "\n").last.map(String.init) ?? "unreadable")"
+            case .noArtifactProduced:    return "the archive is missing its files"
+            case .sourceMissing(let s):  return "missing part of the archive — \(s)"
+            case .passphraseUnavailable: return "encrypted, and no passphrase was recovered"
+            }
+        }
+        if let copy = copyFailure(e) { return copy }
+        return (e as NSError).localizedDescription
+    }
 }
 
 extension TargetError: LocalizedError {
