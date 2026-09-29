@@ -5,7 +5,9 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    # release branches are tested on every push, so each milestone of a release is
+    # checked on both macOS versions before it reaches main
+    branches: [main, 'release/**']
   pull_request:
 
 permissions:
