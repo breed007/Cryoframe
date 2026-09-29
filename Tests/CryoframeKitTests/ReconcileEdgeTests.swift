@@ -230,3 +230,72 @@ private let madeAt = Date(timeIntervalSince1970: 1_782_907_200)
     #expect(!LeftoverCleanup.isAtLeast("1.6.0\n", "1.6.0"))
     #expect(!LeftoverCleanup.isAtLeast("-1.6.0", "1.6.0"))
 }
+
+// MARK: - a run that starts while reconcile is unmounting
+
+/// unmount blocks until the test lets it go; everything else is recorded.
+private final class StuckBackend: SnapshotBackend, @unchecked Sendable {
+    let entered = DispatchSemaphore(value: 0)
+    let letGo = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var live: Set<String>
+    private(set) var unmounted: [String] = []
+    private(set) var deleted: [String] = []
+    init(live: Set<String>) { self.live = live }
+
+    func add(_ name: String) { lock.lock(); live.insert(name); lock.unlock() }
+    func create(on volume: VolumeRef) throws -> SnapshotRef { throw SnapshotBackendError.dataVolumeNotFound }
+    func mount(_ snapshot: SnapshotRef, ownerUID: uid_t) throws -> MountRef { throw SnapshotBackendError.dataVolumeNotFound }
+    func unmount(_ mount: MountRef) throws {
+        entered.signal()
+        letGo.wait()
+        lock.lock(); unmounted.append(mount.mountPoint); lock.unlock()
+        MountPoint.removeDirectory(URL(fileURLWithPath: mount.mountPoint))
+    }
+    func delete(_ snapshot: SnapshotRef) throws {
+        lock.lock(); deleted.append(snapshot.name); live.remove(snapshot.name); lock.unlock()
+    }
+    func list(on volume: VolumeRef) throws -> [SnapshotRef] {
+        lock.lock(); defer { lock.unlock() }
+        return live.map { SnapshotRef(name: $0, volume: volume, createdAt: Date(timeIntervalSince1970: 0)) }
+    }
+}
+
+private final class Outcome: @unchecked Sendable {
+    let reconciler: SnapshotReconciler
+    var report: ReconcileReport?
+    init(_ reconciler: SnapshotReconciler) { self.reconciler = reconciler }
+}
+
+// Reconcile now unmounts outside the helper's snapshot lock, so a live run can make
+// its snapshot and mount in that gap. Reconcile planned before they existed and
+// deletes from that plan afterwards: the new ones must come through untouched,
+// whichever order the helper records them in.
+@Test func aRunThatStartsWhileReconcileUnmountsIsLeftAlone() throws {
+    let b = Books(); defer { b.cleanUp() }
+    let crashed = try b.run(at: Date().addingTimeInterval(-3_600), owner: ProcessIdentity(pid: 1, startedAt: 1))
+    let backend = StuckBackend(live: [crashed.snapshot])
+    let snapshotLock = NSLock()
+    let reconciler = SnapshotReconciler(backend: backend, ledger: b.ledger, owners: b.owners,
+                                        mountBase: b.mountBase, dataVolume: dataVolume)
+    let out = Outcome(reconciler), done = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async { out.report = out.reconciler.run(snapshotLock: snapshotLock); done.signal() }
+    #expect(backend.entered.wait(timeout: .now() + 5) == .success)
+
+    // a live run, doing what createSnapshot and mountSnapshot do, under the same lock
+    let me = try #require(ProcessIdentity.current)
+    snapshotLock.lock()
+    let fresh = try b.run(at: Date(), owner: me)
+    backend.add(fresh.snapshot)
+    snapshotLock.unlock()
+
+    backend.letGo.signal()
+    #expect(done.wait(timeout: .now() + 10) == .success)
+
+    #expect(backend.unmounted == [crashed.mount])
+    #expect(backend.deleted == [crashed.snapshot])
+    #expect(FileManager.default.fileExists(atPath: fresh.mount))
+    #expect(b.ledger.all().contains(fresh.snapshot))
+    #expect(b.owners.snapshotOwner(fresh.snapshot) == me && b.owners.mountOwner(fresh.mount) == me)
+    #expect(out.report?.deletedSnapshots == [crashed.snapshot])
+}
