@@ -52,6 +52,7 @@ private final class OtherProcessHolding {
 
 @Test func aSecondRunOfTheSameJobIsRefusedAndToldWhoHasIt() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     let first = try locks.acquire(jobID: "job", trigger: .scheduled)
     #expect(throws: RunLockError.alreadyRunning(first.holder)) {
         _ = try locks.acquire(jobID: "job", trigger: .manual)
@@ -67,6 +68,7 @@ private final class OtherProcessHolding {
 
 @Test func differentJobsDoNotBlockEachOther() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     let a = try locks.acquire(jobID: "a", trigger: .manual)
     let b = try locks.acquire(jobID: "b", trigger: .scheduled)
     #expect(a.isHeld && b.isHeld)
@@ -75,6 +77,7 @@ private final class OtherProcessHolding {
 
 @Test func lookingAtTheLockNeverTakesIt() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     #expect(locks.holder(of: "job") == nil)                    // never locked
     let lease = try locks.acquire(jobID: "job", trigger: .scheduled)
     let seen = try #require(locks.holder(of: "job"))
@@ -89,6 +92,7 @@ private final class OtherProcessHolding {
 
 @Test func aJobLockedByAnotherProcessIsRefusedUntilThatProcessEnds() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     try FileManager.default.createDirectory(at: locks.directory, withIntermediateDirectories: true)
     let other = try OtherProcessHolding(locks.lockURL("job"))
     #expect(other.waitUntilHeld(locks, jobID: "job"))
@@ -101,6 +105,7 @@ private final class OtherProcessHolding {
 
 @Test func aHolderThatIsKilledReleasesTheLock() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     try FileManager.default.createDirectory(at: locks.directory, withIntermediateDirectories: true)
     let other = try OtherProcessHolding(locks.lockURL("job"))
     #expect(other.waitUntilHeld(locks, jobID: "job"))
@@ -113,6 +118,7 @@ private final class OtherProcessHolding {
 
 @Test func aToolTheRunLaunchesDoesNotInheritTheLock() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     let lease = try locks.acquire(jobID: "job", trigger: .manual)
     let tool = Process()
     tool.executableURL = URL(fileURLWithPath: "/bin/sleep")
@@ -127,6 +133,7 @@ private final class OtherProcessHolding {
 
 @Test func aShortWaitRidesOutAMomentaryHolder() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     let brief = try locks.acquire(jobID: "job", trigger: .cleanup)
     DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { brief.release() }
     let lease = try locks.acquire(jobID: "job", trigger: .scheduled, wait: 3)
@@ -136,6 +143,7 @@ private final class OtherProcessHolding {
 
 @Test func withLockDoesNotRunTheBodyWhenBusy() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     let held = try locks.acquire(jobID: "job", trigger: .scheduled)
     var ran = false
     #expect(throws: RunLockError.self) { try locks.withLock(jobID: "job", trigger: .resume) { _ in ran = true } }
@@ -167,6 +175,7 @@ private final class OtherProcessHolding {
 
 @Test func stopReachesTheRunThatHoldsTheLock() async throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     let lease = try locks.acquire(jobID: "job", trigger: .scheduled)
     let control = RunControl()
     lease.onStopRequest(every: 0.1) { control.cancel() }
@@ -180,6 +189,7 @@ private final class OtherProcessHolding {
 
 @Test func aStopMeantForAnEarlierRunDoesNotStopTheNextOne() throws {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     let first = try locks.acquire(jobID: "job", trigger: .scheduled)
     #expect(locks.requestStop(jobID: "job"))
     first.release()                                   // ended on its own before it saw the request
@@ -190,6 +200,7 @@ private final class OtherProcessHolding {
 
 @Test func stopWithNobodyRunningDoesNothing() {
     let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     #expect(!locks.requestStop(jobID: "job"))
     #expect(!FileManager.default.fileExists(atPath: locks.stopURL("job").path))
 }

@@ -71,6 +71,8 @@ private struct World {
         return (name, mount)
     }
 
+    func cleanUp() { try? FileManager.default.removeItem(at: base) }
+
     func reconcile(_ backend: RecordingBackend, alive: Set<Int32>) -> ReconcileReport {
         SnapshotReconciler(backend: backend, ledger: ledger, owners: owners, mountBase: mountBase,
                            dataVolume: data, isAlive: { alive.contains($0.pid) }, now: now).run()
@@ -81,7 +83,7 @@ private let appRun = ProcessIdentity(pid: 101, startedAt: 1_000)
 private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
 
 @Test func reconcileLeavesARunInProgressAlone() throws {
-    let w = World()
+    let w = World(); defer { w.cleanUp() }
     let r = try w.run(at: now.addingTimeInterval(-60), owner: agentRun)
     let backend = RecordingBackend(live: [r.snapshot])
 
@@ -96,7 +98,7 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
 }
 
 @Test func reconcileCleansUpAfterARunWhoseProcessIsGone() throws {
-    let w = World()
+    let w = World(); defer { w.cleanUp() }
     let r = try w.run(at: now.addingTimeInterval(-60), owner: agentRun)
     let backend = RecordingBackend(live: [r.snapshot])
 
@@ -109,7 +111,7 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
 }
 
 @Test func reconcileSortsTwoRunsByWhetherTheirProcessLives() throws {
-    let w = World()
+    let w = World(); defer { w.cleanUp() }
     let crashed = try w.run(at: now.addingTimeInterval(-3_600), owner: appRun)
     let running = try w.run(at: now.addingTimeInterval(-30), owner: agentRun)
     let backend = RecordingBackend(live: [crashed.snapshot, running.snapshot])
@@ -125,7 +127,7 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
 // may belong to an old agent still mid-run across the update, so it's only cleaned
 // once it is older than any run could be.
 @Test func unownedLeftoversAreCleanedOnlyOnceTheyAreOld() throws {
-    let w = World()
+    let w = World(); defer { w.cleanUp() }
     let recent = try w.run(at: now.addingTimeInterval(-2 * 3_600), owner: nil)
     let ancient = try w.run(at: now.addingTimeInterval(-5 * 24 * 3_600), owner: nil)
     let backend = RecordingBackend(live: [recent.snapshot, ancient.snapshot])
@@ -138,7 +140,7 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
 }
 
 @Test func aMountWhoseNameCantBeDatedIsLeftAlone() throws {
-    let w = World()
+    let w = World(); defer { w.cleanUp() }
     let odd = "\(w.mountBase)/not-ours"
     try FileManager.default.createDirectory(atPath: odd, withIntermediateDirectories: true)
     let backend = RecordingBackend(live: [])
@@ -147,7 +149,7 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
 }
 
 @Test func reconcileNeverTouchesASnapshotItDidNotMake() throws {
-    let w = World()
+    let w = World(); defer { w.cleanUp() }
     let timeMachine = snapName(now.addingTimeInterval(-10 * 24 * 3_600))
     let backend = RecordingBackend(live: [timeMachine])
     _ = w.reconcile(backend, alive: [])
@@ -182,6 +184,7 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
 @Test func cleanupWaitsWhileAnyJobIsRunning() async throws {
     let helper = FakePrivilegedHelper(version: SnapshotReconciler.helperVersion)
     let locks = RunLocks(directory: tempDir("gate"))
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
     let run = try locks.acquire(jobID: "b", trigger: .scheduled)
     let outcome = await LeftoverCleanup.run(helper: helper, locks: locks, jobIDs: ["a", "b"])
     #expect(outcome == .skippedRunInProgress("b"))
@@ -195,7 +198,8 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
 
 @Test func cleanupRefusesAHelperThatPredatesOwnership() async throws {
     let helper = FakePrivilegedHelper(version: "1.5.2")
-    let outcome = await LeftoverCleanup.run(helper: helper, locks: RunLocks(directory: tempDir("gate")), jobIDs: [])
+    let dir = tempDir("gate"); defer { try? FileManager.default.removeItem(at: dir) }
+    let outcome = await LeftoverCleanup.run(helper: helper, locks: RunLocks(directory: dir), jobIDs: [])
     #expect(outcome == .skippedOldHelper("1.5.2"))
     #expect(await helper.calls.isEmpty)
 }
