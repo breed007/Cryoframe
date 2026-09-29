@@ -65,30 +65,26 @@ public extension CommandRunner {
         try run(launchPath, args, stdin: nil)
     }
 
-    /// run, retrying briefly on the transient "Resource busy" the disk-image
-    /// subsystem returns when concurrent jobs hit hdiutil at once.
-    /// Transient contention, not real failure. `hdiutil attach` reports saturation of
-    /// `diskimages-helper` as EAGAIN — "Resource temporarily unavailable" — which is a
-    /// different string from "resource busy" and so used to fall straight through with
-    /// zero retries. That surfaced as a *verification failure* on a perfectly good
-    /// archive, which is the worst possible false alarm for a backup tool.
-    static var transientToolErrors: [String] {
-        [
-            "resource busy",
-            "resource temporarily unavailable",
-            "device busy",
-            "operation not permitted",      // brief TCC/mount races during attach
-        ]
-    }
-
-    /// Retries transient contention with capped linear backoff (~18s worst case).
-    /// That's deliberately patient: an archive check competing with Time Machine or
-    /// Spotlight for `diskimages-helper` should wait it out, not declare the archive
-    /// bad. Genuine errors still fail on the first attempt.
+    /// run, retrying briefly while the disk-image system says it is busy.
+    ///
+    /// `hdiutil attach` reports saturation of `diskimages-helper` as EAGAIN —
+    /// "Resource temporarily unavailable" — and a busy volume on detach as EBUSY.
+    /// Waiting those out matters: a verification that gave up on the first one called
+    /// a perfectly good archive bad, the worst false alarm a backup tool can raise.
+    ///
+    /// Only those are retried. Anything that says something about the image, the
+    /// passphrase or the permissions fails at once: retrying a refusal took up to 13
+    /// seconds to report the same refusal, and made a real problem look like a slow
+    /// one. See `isTransient` for which is which.
     func runRetryingBusy(_ launchPath: String, _ args: [String], stdin: Data? = nil, attempts: Int = 8) throws -> CommandResult {
         var result = try run(launchPath, args, stdin: stdin)
         var tries = 1
         while !result.ok, tries < attempts, Self.isTransient(result.stderr) {
+            // On current macOS, attaching an image that is already attached fails
+            // "Resource busy", every time: it is open elsewhere, and waiting won't
+            // change that. Retrying it held the caller up and then reported busy.
+            if Self.isAttach(launchPath, args), !Self.isWaitable(result.stderr),
+               Self.attachedImagePaths(runner: self).contains(where: { args.contains($0) }) { break }
             Thread.sleep(forTimeInterval: min(0.5 * Double(tries), 3.0))
             result = try run(launchPath, args, stdin: stdin)
             tries += 1
@@ -96,8 +92,58 @@ public extension CommandRunner {
         return result
     }
 
+    /// What a failed tool's stderr says about trying again: true only when the disk-
+    /// image system (or a volume) was momentarily busy.
+    ///
+    ///   - EAGAIN, "Resource temporarily unavailable": diskimages-helper saturated
+    ///     (Time Machine, another job, Spotlight). Transient.
+    ///   - EBUSY, "Resource busy": a volume still in use on detach; or, on attach, an
+    ///     image attached elsewhere (runRetryingBusy tells that apart and stops).
+    ///   - Never: a refused permission (EACCES, EPERM), something missing (ENOENT),
+    ///     a wrong passphrase or failed authentication, a full or read-only volume, an
+    ///     image that isn't one. These win when both kinds appear in the output.
+    /// "Operation not permitted" used to count as transient, for brief races with
+    /// privacy controls during an attach; it is also how a missing Full Disk Access
+    /// grant reads, which no wait fixes.
     static func isTransient(_ stderr: String) -> Bool {
-        transientToolErrors.contains { stderr.localizedCaseInsensitiveContains($0) }
+        guard !permanentToolErrors.contains(where: { stderr.localizedCaseInsensitiveContains($0) }) else { return false }
+        return transientToolErrors.contains { stderr.localizedCaseInsensitiveContains($0) }
+    }
+
+    static var transientToolErrors: [String] {
+        ["resource temporarily unavailable", "resource busy", "device busy"]
+    }
+
+    /// failures that say something true about the image, the key or the permissions
+    static var permanentToolErrors: [String] {
+        ["permission denied", "operation not permitted", "no such file", "not found", "authentication error",
+         "incorrect passphrase", "no space left", "read-only file system", "image not recognized",
+         "not recognized", "file exists", "corrupt"]
+    }
+
+    /// EAGAIN: the disk-image system itself is saturated, whatever is attached
+    static func isWaitable(_ stderr: String) -> Bool {
+        stderr.localizedCaseInsensitiveContains("resource temporarily unavailable")
+    }
+
+    static func isAttach(_ launchPath: String, _ args: [String]) -> Bool {
+        (launchPath as NSString).lastPathComponent == "hdiutil" && args.first == "attach"
+    }
+
+    /// every image attached right now, by the path it was attached from (as given
+    /// and with symlinks resolved), from `hdiutil info`
+    static func attachedImagePaths(runner: CommandRunner) -> Set<String> {
+        guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"], stdin: nil), r.ok,
+              let data = r.stdout.data(using: .utf8),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let images = root["images"] as? [[String: Any]] else { return [] }
+        var out = Set<String>()
+        for img in images {
+            guard let path = img["image-path"] as? String else { continue }
+            let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+            out.formUnion([path, resolved, path.hasPrefix("/private/") ? String(path.dropFirst(8)) : "/private" + path])
+        }
+        return out
     }
 }
 

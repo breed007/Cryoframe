@@ -100,11 +100,12 @@ public struct ArchiveReader: Sendable {
         }
     }
 
-    /// a tool failure the disk-image system reports while it is saturated, as opposed
-    /// to one that says something about the archive.
+    /// a tool failure the disk-image system reports while it is saturated (EAGAIN), as
+    /// opposed to one that says something about the archive. Not "Resource busy": an
+    /// attach says that when the image is open elsewhere, which a fresh try won't change.
     static func isTransient(_ error: ArchiveError) -> Bool {
         guard case .toolFailed(_, _, let stderr) = error else { return false }
-        return ProcessCommandRunner.isTransient(stderr)
+        return ProcessCommandRunner.isTransient(stderr) && ProcessCommandRunner.isWaitable(stderr)
     }
 
     private func openOnce(_ result: ArchiveResult, passphrase: String?) throws -> OpenedArchive {
