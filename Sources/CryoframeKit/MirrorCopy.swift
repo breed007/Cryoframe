@@ -106,16 +106,30 @@ enum MirrorCopy {
     ///   - every file this run wrote (its size or date differs from the previous copy,
     ///     or it is new, which is exactly what rsync copies) matches the library byte
     ///     for byte. Files carried over from the previous copy share its blocks.
-    /// A run with nothing changed reads no data. The library is a frozen snapshot, so
-    /// it can't have moved meanwhile (a volume that can't be frozen is read live with
-    /// its app closed).
+    ///   - every file and folder carries the library's extended attributes (a resource
+    ///     fork, Finder tags) and access list. rsync -E writes those for every item on
+    ///     every run, changed or not, and copyAttributes rewrites them on read-only
+    ///     files, so they travel through the image the same way and are lost the same
+    ///     way. Most items have none, which costs a listing on each side.
+    /// A run with nothing changed reads no file data. The library is a frozen snapshot,
+    /// so it can't have moved meanwhile (a volume that can't be frozen is read live
+    /// with its app closed).
     static func verify(_ s: Staged, against source: URL, control: RunControl?) throws {
         var found = try structure(of: s.next, against: source, previous: s.current, control: control)
         // the bytes of everything this run wrote, several files at a time (opening a
         // file is most of the cost for small ones)
-        let mismatched = compare(found.written, source: source, next: s.next, control: control)
+        let mismatched = inParallel(found.written, control: control) { rel, x, y, size in
+            sameBytes(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path, x, y, size)
+                ? nil : "doesn't match the library"
+        }
+        let attributes = inParallel(found.present, control: control) { rel, _, _, _ in
+            differentAttributes(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path)
+        }
         if control?.isCancelled == true { throw CancelledError() }
-        for rel in mismatched { found.note(rel, "doesn't match the library") }
+        var noted = Set<String>()
+        for (rel, what) in mismatched + attributes where noted.insert(rel).inserted {
+            found.note(rel.isEmpty ? "the library folder" : rel, what)
+        }
         guard found.count == 0 else { throw MirrorCopyError.readBackMismatch(count: found.count, examples: found.examples) }
     }
 
@@ -125,6 +139,9 @@ enum MirrorCopy {
         var count = 0
         var examples: [String] = []
         var written: [String] = []
+        /// the library folder ("") and every file and folder that is in the copy as
+        /// the same kind of item (links aside): whose attributes can be compared
+        var present: [String] = [""]
         mutating func note(_ rel: String, _ what: String) {
             count += 1
             if examples.count < 3 { examples.append("\(rel) \(what)") }
@@ -154,10 +171,12 @@ enum MirrorCopy {
                 if t1 != t2 { found.note(rel, "points somewhere else") }
                 continue
             }
+            if type == S_IFDIR { found.present.append(rel) }
             guard type == S_IFREG else { continue }
             guard a.st_size == b.st_size, a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec else {
                 found.note(rel, "has the wrong size or date"); continue
             }
+            found.present.append(rel)
             let carried = previous.map { lstat($0.appendingPathComponent(rel).path, &c) == 0 } == true
                 && c.st_size == a.st_size && c.st_mtimespec.tv_sec == a.st_mtimespec.tv_sec
             if !carried { found.written.append(rel) }
@@ -170,11 +189,13 @@ enum MirrorCopy {
         return found
     }
 
-    /// the files among `rels` whose bytes differ between `source` and `next`
-    static func compare(_ rels: [String], source: URL, next: URL, control: RunControl?) -> [String] {
+    /// `check` for each of `rels`, eight at a time; what it found wrong, by item. Each
+    /// worker gets two buffers of `size` bytes to read into.
+    static func inParallel(_ rels: [String], control: RunControl?,
+                           _ check: @Sendable (String, UnsafeMutableRawPointer, UnsafeMutableRawPointer, Int) -> String?) -> [(String, String)] {
         guard !rels.isEmpty else { return [] }
         let workers = min(8, rels.count)
-        let bad = OSAllocatedUnfairLock(initialState: [String]())
+        let bad = OSAllocatedUnfairLock(initialState: [(String, String)]())
         DispatchQueue.concurrentPerform(iterations: workers) { w in
             let size = 1 << 20
             let x = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
@@ -183,14 +204,66 @@ enum MirrorCopy {
             var i = w
             while i < rels.count {
                 if control?.isCancelled == true { return }
-                let rel = rels[i]
-                if !sameBytes(source.appendingPathComponent(rel).path, next.appendingPathComponent(rel).path, x, y, size) {
-                    bad.withLock { $0.append(rel) }
+                if let what = check(rels[i], x, y, size) {
+                    let item = (rels[i], what)
+                    bad.withLock { $0.append(item) }
                 }
                 i += workers
             }
         }
-        return bad.withLock { $0 }.sorted()
+        return bad.withLock { $0 }.sorted { $0.0 < $1.0 }
+    }
+
+    /// Extended attributes a copy isn't expected to carry: macOS keeps them itself and
+    /// won't let a copier write them (the app that wrote the file, privacy grants,
+    /// System Integrity Protection, Spotlight's private labels), or, for compression,
+    /// doesn't list them at all.
+    static func managedBySystem(_ name: String) -> Bool {
+        ["com.apple.provenance", "com.apple.macl", "com.apple.rootless", "com.apple.decmpfs"].contains(name)
+            || name.hasPrefix("com.apple.system.") || name.hasPrefix("com.apple.metadata:kMDLabel_")
+    }
+
+    /// what differs between the extended attributes (names and values) and access
+    /// lists of `a` in the library and `b` in the copy, or nil if nothing does. An
+    /// item whose attributes can't be read in the library isn't judged on them.
+    static func differentAttributes(_ a: String, _ b: String) -> String? {
+        guard let names = attributeNames(a) else { return nil }
+        guard let copied = attributeNames(b) else { return "has extended attributes that can't be read back" }
+        guard names == copied else { return "has different extended attributes" }
+        for name in names where attributeValue(a, name) != attributeValue(b, name) {
+            return "has a different \(name == "com.apple.ResourceFork" ? "resource fork" : "extended attribute (\(name))")"
+        }
+        guard accessList(a) == accessList(b) else { return "has a different access list" }
+        return nil
+    }
+
+    /// the item's extended attribute names, sorted, less those the system manages
+    static func attributeNames(_ path: String) -> [String]? {
+        let size = listxattr(path, nil, 0, XATTR_NOFOLLOW)
+        guard size >= 0 else { return nil }
+        guard size > 0 else { return [] }
+        var buffer = [CChar](repeating: 0, count: size)
+        let got = listxattr(path, &buffer, size, XATTR_NOFOLLOW)
+        guard got >= 0 else { return nil }
+        return buffer[..<got].split(separator: 0).map { String(decoding: $0.map { UInt8(bitPattern: $0) }, as: UTF8.self) }
+            .filter { !managedBySystem($0) }.sorted()
+    }
+
+    static func attributeValue(_ path: String, _ name: String) -> [UInt8]? {
+        let size = getxattr(path, name, nil, 0, 0, XATTR_NOFOLLOW)
+        guard size >= 0 else { return nil }
+        var value = [UInt8](repeating: 0, count: size)
+        let got = getxattr(path, name, &value, size, 0, XATTR_NOFOLLOW)
+        return got >= 0 ? Array(value[..<got]) : nil
+    }
+
+    /// the item's access list as text, or nil if it has none
+    static func accessList(_ path: String) -> String? {
+        guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return nil }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        guard let text = acl_to_text(acl, nil) else { return nil }
+        defer { acl_free(UnsafeMutableRawPointer(text)) }
+        return String(cString: text)
     }
 
     /// true when the two files hold the same bytes. The image was attached afresh for
