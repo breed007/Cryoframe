@@ -212,3 +212,49 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
     #expect(!LeftoverCleanup.isAtLeast("fake", "1.6.0"))
     #expect(!LeftoverCleanup.isAtLeast("", "1.6.0"))
 }
+
+// MARK: - not stalling a live run
+
+/// unmount blocks until the test lets it go, the way a stuck mount does.
+private final class StuckUnmountBackend: SnapshotBackend, @unchecked Sendable {
+    let entered = DispatchSemaphore(value: 0)
+    let letGo = DispatchSemaphore(value: 0)
+    private let live: Set<String>
+    init(live: Set<String>) { self.live = live }
+    func create(on volume: VolumeRef) throws -> SnapshotRef { throw SnapshotBackendError.dataVolumeNotFound }
+    func mount(_ snapshot: SnapshotRef, ownerUID: uid_t) throws -> MountRef { throw SnapshotBackendError.dataVolumeNotFound }
+    func unmount(_ mount: MountRef) throws {
+        entered.signal()
+        letGo.wait()
+        MountPoint.removeDirectory(URL(fileURLWithPath: mount.mountPoint))
+    }
+    func delete(_ snapshot: SnapshotRef) throws {}
+    func list(on volume: VolumeRef) throws -> [SnapshotRef] {
+        live.map { SnapshotRef(name: $0, volume: volume, createdAt: Date(timeIntervalSince1970: 0)) }
+    }
+}
+
+private final class ReportBox: @unchecked Sendable { var report: ReconcileReport? }
+
+// The helper's snapshot lock also guards createSnapshot and mountSnapshot. A stuck
+// mount takes seconds to force off; holding the lock through that would stall a
+// live run's snapshot for as long.
+@Test func reconcileDoesNotHoldTheSnapshotLockWhileItUnmounts() throws {
+    let w = World(); defer { try? FileManager.default.removeItem(at: w.base) }
+    let r = try w.run(at: now.addingTimeInterval(-60), owner: appRun)
+    let backend = StuckUnmountBackend(live: [r.snapshot])
+    let reconciler = SnapshotReconciler(backend: backend, ledger: w.ledger, owners: w.owners, mountBase: w.mountBase,
+                                        dataVolume: data, isAlive: { _ in false }, now: now)
+    let snapshotLock = NSLock()
+    let box = ReportBox(), done = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async { box.report = reconciler.run(snapshotLock: snapshotLock); done.signal() }
+
+    #expect(backend.entered.wait(timeout: .now() + 5) == .success)
+    let free = snapshotLock.lock(before: Date().addingTimeInterval(1))
+    if free { snapshotLock.unlock() }
+    backend.letGo.signal()
+    done.wait()
+    #expect(free, "a live run's createSnapshot would wait behind a stuck unmount")
+    #expect(box.report?.unmounted == [r.mount] && box.report?.deletedSnapshots == [r.snapshot])
+}
+

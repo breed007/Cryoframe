@@ -38,35 +38,67 @@ public struct SnapshotReconciler {
     /// the kernel keeps the lock exactly as long as that process lives. A leftover
     /// with no recorded owner (made by a helper older than 1.6) is kept until it is
     /// older than any run could be.
-    public func run() -> ReconcileReport {
-        var unmounted: [String] = [], deleted: [String] = [], kept: [String] = []
-        let fm = FileManager.default
+    /// Unmount and delete what a run left behind when its process died. Anything
+    /// whose owner is still alive is kept: the helper can't see run locks, but the
+    /// process holding a job's run lock is the process that asked for its snapshot, and
+    /// the kernel keeps the lock exactly as long as that process lives. A leftover
+    /// with no recorded owner (made by a helper older than 1.6) is kept until it is
+    /// older than any run could be.
+    ///
+    /// `snapshotLock` is the helper's lock around create, mount and delete. It is held
+    /// while deciding and while deleting, never while unmounting: forcing off a stuck
+    /// mount takes seconds each, and a live run's createSnapshot waits on that lock.
+    /// What gets unmounted belongs to processes that are gone, so nothing else races
+    /// for it; a mount made meanwhile isn't in the plan.
+    public func run(snapshotLock: NSLock) -> ReconcileReport {
+        snapshotLock.lock()
+        let plan = self.plan()
+        snapshotLock.unlock()
 
-        // 1. tear down mounts whose run is gone.
-        if let entries = try? fm.contentsOfDirectory(atPath: mountBase) {
-            for e in entries.sorted() {
-                let mp = "\(mountBase)/\(e)"
-                guard isOrphan(owner: owners.mountOwner(mp), madeAt: Self.mountDate(e)) else { kept.append(mp); continue }
-                let stale = MountRef(mountPoint: mp,
-                                     snapshot: SnapshotRef(name: "", volume: dataVolume, createdAt: Date()))
-                // left on the books if it won't come down, so the next pass retries it
-                guard (try? backend.unmount(stale)) != nil else { continue }
-                owners.forgetMount(mp)
-                unmounted.append(mp)
-            }
+        var unmounted: [String] = []
+        for mp in plan.mounts {
+            let stale = MountRef(mountPoint: mp,
+                                 snapshot: SnapshotRef(name: "", volume: dataVolume, createdAt: Date()))
+            // left on the books if it won't come down, so the next pass retries it
+            guard (try? backend.unmount(stale)) != nil else { continue }
+            owners.forgetMount(mp)
+            unmounted.append(mp)
         }
 
-        // 2. delete orphan snapshots WE created (ledger ∩ still-live). never TM's.
-        let live = Set((try? backend.list(on: dataVolume))?.map(\.name) ?? [])
-        for name in ledger.all().sorted() where live.contains(name) {
-            guard isOrphan(owner: owners.snapshotOwner(name), madeAt: Self.snapshotDate(name)) else { kept.append(name); continue }
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        var deleted: [String] = []
+        for name in plan.snapshots {
             let ref = SnapshotRef(name: name, volume: dataVolume, createdAt: Date())
             guard (try? backend.delete(ref)) != nil else { continue }
             ledger.forget(name)
             owners.forgetSnapshot(name)
             deleted.append(name)
         }
-        return ReconcileReport(unmounted: unmounted, deletedSnapshots: deleted, kept: kept)
+        return ReconcileReport(unmounted: unmounted, deletedSnapshots: deleted, kept: plan.kept)
+    }
+
+    /// the same, for a caller that holds no lock of its own.
+    public func run() -> ReconcileReport { run(snapshotLock: NSLock()) }
+
+    struct Plan { var mounts: [String] = [], snapshots: [String] = [], kept: [String] = [] }
+
+    /// which mounts and snapshots are leftovers, and which are kept.
+    func plan() -> Plan {
+        var plan = Plan()
+        if let entries = try? FileManager.default.contentsOfDirectory(atPath: mountBase) {
+            for e in entries.sorted() {
+                let mp = "\(mountBase)/\(e)"
+                if isOrphan(owner: owners.mountOwner(mp), madeAt: Self.mountDate(e)) { plan.mounts.append(mp) }
+                else { plan.kept.append(mp) }
+            }
+        }
+        // only snapshots WE created (ledger ∩ still-live). never TM's.
+        let live = Set((try? backend.list(on: dataVolume))?.map(\.name) ?? [])
+        for name in ledger.all().sorted() where live.contains(name) {
+            if isOrphan(owner: owners.snapshotOwner(name), madeAt: Self.snapshotDate(name)) { plan.snapshots.append(name) }
+            else { plan.kept.append(name) }
+        }
+        return plan
     }
 
     private func isOrphan(owner: ProcessIdentity?, madeAt: Date?) -> Bool {

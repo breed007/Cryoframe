@@ -109,9 +109,13 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
         }
     }
 
+    // one reconcile at a time (the app and the agent can both ask). Separate from
+    // snapshotLock, which reconcile takes only while deciding and deleting.
+    private static let reconcileLock = NSLock()
+
     func reconcile(reply: @escaping (Data?, Error?) -> Void) {
         respond(reply) {
-            Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
+            Self.reconcileLock.lock(); defer { Self.reconcileLock.unlock() }
             return try self.runReconcile()
         }
     }
@@ -154,9 +158,11 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     func reloadForUpdate(reply: @escaping (Error?) -> Void) {
         reply(nil)
         // exit so launchd respawns us from the (updated) binary on the next XPC
-        // connection. The short delay lets the reply flush; the lock makes sure we
-        // aren't mid snapshot create/delete/reconcile when we go.
+        // connection. The short delay lets the reply flush; the locks make sure we
+        // aren't mid snapshot create/mount/delete or mid reconcile (which unmounts
+        // outside the snapshot lock) when we go. Same order reconcile takes them.
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            Self.reconcileLock.lock()
             Self.snapshotLock.lock()
             exit(0)
         }
@@ -164,10 +170,12 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
 
     // MARK: reconcile-on-launch
 
-    /// clean up after crashed runs, keeping whatever a live process still owns.
+    /// clean up after crashed runs, keeping whatever a live process still owns. The
+    /// snapshot lock is held only while deciding and deleting, so a stuck mount being
+    /// forced off doesn't hold up a live run's createSnapshot.
     private func runReconcile() throws -> ReconcileReport {
         SnapshotReconciler(backend: backend, ledger: ledger, owners: owners,
-                           mountBase: Self.mountBase, dataVolume: dataVolume).run()
+                           mountBase: Self.mountBase, dataVolume: dataVolume).run(snapshotLock: Self.snapshotLock)
     }
 
     // MARK: reply plumbing
