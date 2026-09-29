@@ -35,6 +35,9 @@ public struct JobExecutor: Sendable {
     let pendingStore: PendingTransferStore?
     let jobStore: JobStore?
     let dataVolume: VolumeRef
+    /// the archive checks recorded so far, newest first: retention keeps the version
+    /// last known to restore (see KnownGood)
+    let healthRecords: @Sendable () -> [HealthRecord]
 
     public init(helper: PrivilegedHelper,
                 detector: ProcessDetector,
@@ -46,11 +49,12 @@ public struct JobExecutor: Sendable {
                 pendingStore: PendingTransferStore? = nil,
                 jobStore: JobStore? = nil,
                 dataVolume: VolumeRef = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: ""),
-                passphraseProvider: @escaping @Sendable (String) -> String? = { _ in nil }) {
+                passphraseProvider: @escaping @Sendable (String) -> String? = { _ in nil },
+                healthRecords: @escaping @Sendable () -> [HealthRecord] = { [] }) {
         self.helper = helper; self.detector = detector; self.probe = probe; self.locator = locator
         self.scratchBase = scratchBase; self.chunkSize = chunkSize
         self.pendingStore = pendingStore; self.jobStore = jobStore; self.dataVolume = dataVolume
-        self.passphraseProvider = passphraseProvider
+        self.passphraseProvider = passphraseProvider; self.healthRecords = healthRecords
     }
 
     /// resolves the AES-256 passphrase for an encrypted job (jobID → passphrase),
@@ -293,7 +297,10 @@ public struct JobExecutor: Sendable {
 
         if pass.cancelled {
             pass.builds.forEach(cleanupBuild)
-            if sealed != nil { for t in job.targets { Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention) } }
+            if sealed != nil {
+                let checks = healthRecords()
+                for t in job.targets { Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention, checks: checks) }
+            }
             return .cancelled
         }
         var results = pass.results
@@ -382,8 +389,10 @@ public struct JobExecutor: Sendable {
 
         var pruneFailures: [String] = []
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
+            let checks = healthRecords()
             for t in job.targets {
-                pruneFailures += Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention)
+                pruneFailures += Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention,
+                                                    checks: checks)
             }
         }
         onStage(.completed)
@@ -405,7 +414,11 @@ public struct JobExecutor: Sendable {
     /// both go on believing the job is bounded. A share that dropped, a file still
     /// held open, a permissions change — all silent before 1.5.2.
     @discardableResult
-    static func pruneVersions(target: URL, libraries: [ContentType], policy: RetentionPolicy) -> [String] {
+    ///
+    /// The version of each library last known to restore (a passed drill, else a
+    /// passed checksum check, in `checks`) is never deleted, whatever the policy says.
+    static func pruneVersions(target: URL, libraries: [ContentType], policy: RetentionPolicy,
+                              checks: [HealthRecord] = []) -> [String] {
         let fm = FileManager.default
         var failures: [String] = []
         for library in libraries {
@@ -422,7 +435,8 @@ public struct JobExecutor: Sendable {
                 }
             }
             guard policy != .keepAll else { continue }
-            let prune = retentionPrune(complete.map(\.date), policy: policy)
+            let known = KnownGood.version(of: library.displayName, among: complete.map(\.date), records: checks)
+            let prune = retentionPrune(complete.map(\.date), policy: policy, keeping: Set([known].compactMap { $0 }))
             for v in complete where prune.contains(v.date) {
                 do { try fm.removeItem(at: v.url) }
                 catch { failures.append("\(library.displayName) \(VersionStamp.string(v.date)): \((error as NSError).localizedDescription)") }

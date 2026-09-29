@@ -49,6 +49,7 @@ enum TransferConfig {
                     chunkSize: chunkSize(),
                     pendingStore: PendingTransferStore.standard(),
                     jobStore: store,
-                    passphraseProvider: { KeychainArchiveKey.load(jobID: $0) })
+                    passphraseProvider: { KeychainArchiveKey.load(jobID: $0) },
+                    healthRecords: { HealthStore.standard().all() })
     }
 }

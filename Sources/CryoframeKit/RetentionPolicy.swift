@@ -41,7 +41,11 @@ public enum VersionStamp {
 /// writing. No policy should be able to say that, and no future policy should be
 /// able to reintroduce it, so the floor lives here in the one function every
 /// caller shares rather than at the call sites.
-public func retentionPrune(_ versions: [Date], policy: RetentionPolicy,
+///
+/// Nor is any version in `keeping` (see KnownGood): the policy counts versions, not
+/// whether they restore, and a week of versions that failed their drills would
+/// otherwise push the last one that passed out of a keep-the-last-seven policy.
+public func retentionPrune(_ versions: [Date], policy: RetentionPolicy, keeping: Set<Date> = [],
                            calendar: Calendar = Calendar(identifier: .gregorian)) -> Set<Date> {
     let sorted = versions.sorted(by: >)            // newest first
     var doomed: Set<Date>
@@ -58,7 +62,30 @@ public func retentionPrune(_ versions: [Date], policy: RetentionPolicy,
         doomed = Set(versions).subtracting(keep)
     }
     if let newest = sorted.first { doomed.remove(newest) }
-    return doomed
+    let kept = Set(keeping.map(VersionStamp.string))
+    return doomed.filter { !kept.contains(VersionStamp.string($0)) }
+}
+
+/// The version of a library last known to restore.
+public enum KnownGood {
+    /// The newest of `versions` a restore drill passed; if no version has passed
+    /// one, the newest whose checksum check (or recovery rehearsal) passed. nil when
+    /// none has passed a check. `records` newest first, as HealthStore.all() gives them.
+    ///
+    /// A version that passed and later failed still counts: keeping one version more
+    /// than the policy asks costs space, and deleting the last one that ever restored
+    /// can cost the backup.
+    public static func version(of library: String, among versions: [Date], records: [HealthRecord]) -> Date? {
+        var checksum: Date?
+        for v in versions.sorted(by: >) {
+            switch ArchiveAssurance.lastVerified(library: library, version: v, in: records)?.level {
+            case .drill?: return v
+            case .checksum?: if checksum == nil { checksum = v }
+            case nil: break
+            }
+        }
+        return checksum
+    }
 }
 
 /// keep the newest version in each of the newest `limit` distinct buckets.
