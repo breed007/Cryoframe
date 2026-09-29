@@ -245,3 +245,87 @@ private final class Tally: @unchecked Sendable {
         // right: still one run per job
     }
 }
+
+// MARK: - a run putting its lock file back
+
+/// wait up to `seconds` for another process to find the lock at `file` held. Timed
+/// on uptime, which stops while the Mac sleeps, as the lease's own check does: a wall
+/// clock deadline can pass during a sleep before the lease has had a chance to look.
+private func becomesHeldForOthers(_ file: URL, within seconds: Double) throws -> Bool {
+    let deadline = ProcessInfo.processInfo.systemUptime + seconds
+    while ProcessInfo.processInfo.systemUptime < deadline {
+        if FileManager.default.fileExists(atPath: file.path), try lockfCanTake(file) == 75 { return true }
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    return false
+}
+
+// Deleting the whole folder is what clearing Application Support mid-backup does.
+@Test func aRunPutsItsLockBackWhenTheWholeLockFolderIsRemoved() throws {
+    let dir = edgeDir(); defer { remove(dir) }
+    let locks = RunLocks(directory: dir)
+    let lease = try locks.acquire(jobID: "job", trigger: .scheduled)
+    defer { lease.release() }
+
+    try FileManager.default.removeItem(at: dir)
+
+    #expect(try becomesHeldForOthers(locks.lockURL("job"), within: 3))
+    // and says who holds it, so Stop from the other process can still name this run
+    Thread.sleep(forTimeInterval: 0.1)
+    let written = try JSONDecoder().decode(RunHolder.self, from: Data(contentsOf: locks.lockURL("job")))
+    #expect(written.runID == lease.holder.runID)
+}
+
+// The stated residual: another process that locks the re-created file inside the
+// one-second window gets in. Once it lets go, the run must take its lock back, so
+// the window doesn't stay open for the rest of the run.
+@Test func aRunTakesItsLockBackOnceAProcessThatSlippedInLetsGo() throws {
+    let dir = edgeDir(); defer { remove(dir) }
+    let locks = RunLocks(directory: dir)
+    let lease = try locks.acquire(jobID: "job", trigger: .scheduled)
+    defer { lease.release() }
+
+    try FileManager.default.removeItem(at: locks.lockURL("job"))
+    let other = try LockfHolder(locks.lockURL("job"))          // gets there before the run's next check
+    Thread.sleep(forTimeInterval: 1.5)                          // the run has checked, and lost
+    other.release()
+
+    #expect(try becomesHeldForOthers(locks.lockURL("job"), within: 3))
+}
+
+@Test func releasingARunWhoseLockWasPutBackFreesEveryCopy() throws {
+    let dir = edgeDir(); defer { remove(dir) }
+    let locks = RunLocks(directory: dir)
+    let lease = try locks.acquire(jobID: "job", trigger: .scheduled)
+    for _ in 0..<2 {
+        try FileManager.default.removeItem(at: locks.lockURL("job"))
+        #expect(try becomesHeldForOthers(locks.lockURL("job"), within: 3))
+    }
+    lease.release()
+
+    #expect(try lockfCanTake(locks.lockURL("job")) == 0)
+    #expect(locks.holder(of: "job") == nil)
+    let next = try RunLocks(directory: dir).acquire(jobID: "job", trigger: .manual)
+    next.release()
+}
+
+// A lock file the user can't read might be a run's: the cleanup gate must treat it
+// as busy (look says unreadable), while a run trying to start reports the lock as
+// unavailable rather than starting unlocked.
+@Test func aLockFileThatCantBeOpenedIsUnreadableNotFree() throws {
+    let dir = edgeDir(); defer { remove(dir) }
+    let locks = RunLocks(directory: dir)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: locks.lockURL("job").path, contents: nil)
+    chmod(locks.lockURL("job").path, 0o000)
+    defer { chmod(locks.lockURL("job").path, 0o644) }
+
+    guard case .unreadable = locks.look("job") else { Issue.record("read as \(locks.look("job"))"); return }
+    do {
+        let lease = try locks.acquire(jobID: "job", trigger: .scheduled)
+        lease.release()
+        Issue.record("started a run on a lock file it couldn't open")
+    } catch let e as RunLockError {
+        guard case .unavailable = e else { Issue.record("expected .unavailable, got \(e)"); return }
+    }
+}
