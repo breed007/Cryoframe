@@ -109,12 +109,34 @@ enum MirrorCopy {
     /// it can't have moved meanwhile (a volume that can't be frozen is read live with
     /// its app closed).
     static func verify(_ s: Staged, against source: URL, control: RunControl?) throws {
-        let fm = FileManager.default
-        var problems: [String] = [], count = 0
-        func note(_ rel: String, _ what: String) { count += 1; if problems.count < 3 { problems.append("\(rel) \(what)") } }
-        var inLibrary = Set<String>()
+        var found = try structure(of: s.next, against: source, previous: s.current, control: control)
+        // the bytes of everything this run wrote, several files at a time (opening a
+        // file is most of the cost for small ones)
+        let mismatched = compare(found.written, source: source, next: s.next, control: control)
+        if control?.isCancelled == true { throw CancelledError() }
+        for rel in mismatched { found.note(rel, "doesn't match the library") }
+        guard found.count == 0 else { throw MirrorCopyError.readBackMismatch(count: found.count, examples: found.examples) }
+    }
+
+    /// what differs between a copy and the library, item by item, and which files the
+    /// copy holds that `previous` didn't (by size and date: what rsync copies)
+    struct Differences {
+        var count = 0
+        var examples: [String] = []
         var written: [String] = []
-        guard let walker = fm.enumerator(atPath: source.path) else { return }
+        mutating func note(_ rel: String, _ what: String) {
+            count += 1
+            if examples.count < 3 { examples.append("\(rel) \(what)") }
+        }
+    }
+
+    /// Compare `copy` with the library by structure: every path there with the same
+    /// type, size, date and link target, and nothing else. No file data is read.
+    static func structure(of copy: URL, against source: URL, previous: URL?, control: RunControl?) throws -> Differences {
+        let fm = FileManager.default
+        var found = Differences()
+        var inLibrary = Set<String>()
+        guard let walker = fm.enumerator(atPath: source.path) else { return found }
         var seen = 0
         while let rel = walker.nextObject() as? String {
             seen += 1
@@ -122,34 +144,29 @@ enum MirrorCopy {
             inLibrary.insert(rel)
             var a = stat(), b = stat(), c = stat()
             guard lstat(source.appendingPathComponent(rel).path, &a) == 0 else { continue }
-            guard lstat(s.next.appendingPathComponent(rel).path, &b) == 0 else { note(rel, "is missing"); continue }
+            guard lstat(copy.appendingPathComponent(rel).path, &b) == 0 else { found.note(rel, "is missing"); continue }
             let type = a.st_mode & S_IFMT
-            guard type == b.st_mode & S_IFMT else { note(rel, "is the wrong kind of item"); continue }
+            guard type == b.st_mode & S_IFMT else { found.note(rel, "is the wrong kind of item"); continue }
             if type == S_IFLNK {
                 let t1 = try? fm.destinationOfSymbolicLink(atPath: source.appendingPathComponent(rel).path)
-                let t2 = try? fm.destinationOfSymbolicLink(atPath: s.next.appendingPathComponent(rel).path)
-                if t1 != t2 { note(rel, "points somewhere else") }
+                let t2 = try? fm.destinationOfSymbolicLink(atPath: copy.appendingPathComponent(rel).path)
+                if t1 != t2 { found.note(rel, "points somewhere else") }
                 continue
             }
             guard type == S_IFREG else { continue }
             guard a.st_size == b.st_size, a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec else {
-                note(rel, "has the wrong size or date"); continue
+                found.note(rel, "has the wrong size or date"); continue
             }
-            let carried = lstat(s.current.appendingPathComponent(rel).path, &c) == 0
+            let carried = previous.map { lstat($0.appendingPathComponent(rel).path, &c) == 0 } == true
                 && c.st_size == a.st_size && c.st_mtimespec.tv_sec == a.st_mtimespec.tv_sec
-            if !carried { written.append(rel) }
+            if !carried { found.written.append(rel) }
         }
-        // the bytes of everything this run wrote, several files at a time (opening a
-        // file is most of the cost for small ones)
-        let mismatched = compare(written, source: source, next: s.next, control: control)
-        if control?.isCancelled == true { throw CancelledError() }
-        for rel in mismatched { note(rel, "doesn't match the library") }
-        if let extra = fm.enumerator(atPath: s.next.path) {
-            while count < 1000, let rel = extra.nextObject() as? String {
-                if !inLibrary.contains(rel) { note(rel, "isn't in the library") }
+        if let extra = fm.enumerator(atPath: copy.path) {
+            while found.count < 1000, let rel = extra.nextObject() as? String {
+                if !inLibrary.contains(rel) { found.note(rel, "isn't in the library") }
             }
         }
-        guard count == 0 else { throw MirrorCopyError.readBackMismatch(count: count, examples: problems) }
+        return found
     }
 
     /// the files among `rels` whose bytes differ between `source` and `next`
@@ -421,6 +438,10 @@ public enum MirrorCopyError: Error, Equatable {
     case imageRecordedDamaged(image: String, why: String)
     /// the new copy, read back from the image, didn't match the library
     case readBackMismatch(count: Int, examples: [String])
+    /// after the swap, the image didn't hold the new copy
+    case updateNotConfirmed(count: Int, examples: [String])
+    /// after the swap, the image couldn't be checked
+    case couldNotConfirm(String)
 }
 
 extension MirrorCopyError: LocalizedError {
@@ -442,6 +463,10 @@ extension MirrorCopyError: LocalizedError {
             return "the new copy of the mirror didn't read back the same as the library (\(count) item\(count == 1 ? "" : "s"): \(list)). Data was lost on its way to the drive, so it wasn't put in place: nothing was updated and the previous copy is intact. Run again; if this repeats, check the drive."
         case .imageRecordedDamaged(let image, let why):
             return "the mirror's disk image (\(image)) was found damaged after an earlier run whose drive filled (\(why)), and it still is. Its backup can't be trusted and may not open. To start this mirror afresh, move that image out of the way (keep it until the new mirror is complete) and run again."
+        case .updateNotConfirmed(let count, let examples):
+            return "the mirror's update didn't reach the drive intact: checked afterwards, its copy differs from the library (\(count) item\(count == 1 ? "" : "s"): \(examples.joined(separator: "; "))). The mirror's disk image checked out and holds a complete copy, most likely the previous one. Run again; if this repeats, check the drive."
+        case .couldNotConfirm(let why):
+            return "the mirror was updated, but its disk image couldn't be checked afterwards (\(why)), so this run doesn't count as a success. Run again."
         case .stagingStuck(let path):
             return "an unfinished copy a previous run left inside the mirror (\(path)) couldn't be removed, and it can't be trusted, so nothing was updated. The previous copy is intact; run again, and if this repeats, start this mirror afresh."
         case .swapFailed(let why):

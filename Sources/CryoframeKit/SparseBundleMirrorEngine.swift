@@ -168,8 +168,49 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             throw error
         }
         compact(bundle, stdin: stdin)
+        do {
+            try confirm(bundle, name: source.root.lastPathComponent, against: source.root, in: destinationDir, stdin: stdin)
+        } catch MirrorCopyError.updateNotConfirmed(let count, let examples) {
+            // sound, and holding a complete copy that isn't the new one
+            try? MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted)
+            throw MirrorCopyError.updateNotConfirmed(count: count, examples: examples)
+        }
         try MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted)
         return result
+    }
+
+    /// After the swap, prove what reached the drive: the image's file system is sound
+    /// (fsck_apfs, 0.26 s for 30,000 files) and its library copy is the new one (by
+    /// structure, read-only; the data was read back before the swap). The swap, the
+    /// removal of the previous copy and the final flush are written after that
+    /// read-back, and a drive that runs out of room for an instant while they are would
+    /// otherwise go unseen: a damaged directory, or a swap that never landed, with the
+    /// run reported a success.
+    private func confirm(_ bundle: URL, name: String, against source: URL, in destinationDir: URL, stdin: Data?) throws {
+        let teardown = runner.forTeardown
+        switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: teardown) {
+        case .damaged(let why):
+            MirrorSeal.markDamaged(destinationDir, why: why)
+            throw MirrorCopyError.imageDamaged(why)             // stays marked; not sealed
+        case .unknown(let why):
+            throw MirrorCopyError.couldNotConfirm(why)          // stays marked; not sealed
+        case .sound:
+            break
+        }
+        let work = try MirrorMounts.makeWork(in: mountBase)
+        let mnt = work.appendingPathComponent("mnt", isDirectory: true)
+        defer { MountPoint.detach(mnt, runner: teardown); OpenedArchive.removeWork(work) }
+        try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
+        let attached = try? DiskImageGate.serialized {
+            try runner.runRetryingBusy("/usr/bin/hdiutil",
+                                       ArchivePlan.attach(image: bundle, mountpoint: mnt, readonly: true, encrypted: passphrase != nil).args,
+                                       stdin: stdin)
+        }
+        guard attached?.ok == true, MountPoint.isMounted(mnt) else {
+            throw MirrorCopyError.couldNotConfirm(attached?.stderr.trimmingCharacters(in: .whitespacesAndNewlines) ?? "it wouldn't attach")
+        }
+        let found = try MirrorCopy.structure(of: mnt.appendingPathComponent(name), against: source, previous: nil, control: runner.control)
+        guard found.count == 0 else { throw MirrorCopyError.updateNotConfirmed(count: found.count, examples: found.examples) }
     }
 
     /// Give the drive back the bands the image no longer uses.

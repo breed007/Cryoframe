@@ -729,6 +729,49 @@ extension MirrorCrashSafety {
         #expect(try insideMirror(bundle).library == tree(src))
     }
 
+    // The swap and the removal of the previous copy are written after the read-back. A
+    // write lost then (a swap that never landed, a directory entry gone) is caught by
+    // checking the image once more after the run: here a file vanishes from the copy
+    // between the swap and that check, leaving a sound file system.
+    @Test func aCopyThatChangedAfterTheSwapIsNotCountedASuccess() throws {
+        let src = try library(files: 6)
+        let out = tempDir("confirm"), base = tempDir("base")
+        defer { for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        let bundle = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        try editEverything(src, files: 6)
+
+        let loses = LosesAFileAfterTheSwap(bundle: bundle, victim: "Lib/sub/new0.txt", scratch: tempDir("confirm-mnt"))
+        #expect {
+            try SparseBundleMirrorEngine(sizeGB: 1, runner: loses, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        } throws: { error in
+            guard case MirrorCopyError.updateNotConfirmed(let count, _) = error else { return false }
+            return count == 1
+        }
+        #expect(loses.lost, "nothing was lost after the swap, so this proves nothing")
+        #expect(!MirrorSeal.isOpen(out), "a sound image holding a complete copy should be sealed")
+        #expect(try ChecksumVerifier().reverify(archiveDir: out).passed)
+    }
+
+    /// before the run's compact (after the swap and the detach), removes `victim`
+    private final class LosesAFileAfterTheSwap: CommandRunner, @unchecked Sendable {
+        let inner = ProcessCommandRunner()
+        let bundle: URL, victim: String, scratch: URL
+        private(set) var lost = false
+        init(bundle: URL, victim: String, scratch: URL) { self.bundle = bundle; self.victim = victim; self.scratch = scratch }
+        var forTeardown: CommandRunner { self }
+        func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+            if (launchPath as NSString).lastPathComponent == "hdiutil", args.first == "compact", !lost {
+                let a = try inner.run("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", scratch.path, "-nobrowse"], stdin: nil)
+                if a.ok {
+                    lost = (try? FileManager.default.removeItem(at: scratch.appendingPathComponent(victim))) != nil
+                    MountPoint.detach(scratch, runner: inner)
+                }
+            }
+            return try inner.run(launchPath, args, stdin: stdin)
+        }
+    }
+
     // Structure too: a file the new copy lost, or one it shouldn't have, fails the run.
     @Test func aNewCopyMissingAFileIsCaughtBeforeTheSwap() throws {
         let src = try library(files: 6)

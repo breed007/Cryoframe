@@ -137,7 +137,7 @@ enum MirrorIntegrity {
     static func check(_ bundle: URL, passphrase: String?, runner: CommandRunner) -> Verdict {
         var args = ["attach", "-nomount", "-readonly", "-nobrowse", bundle.path]
         if passphrase != nil { args.append("-stdinpass") }
-        guard let a = try? runner.run("/usr/bin/hdiutil", args, stdin: passphrase.map { Data($0.utf8) }), a.ok else {
+        guard let a = try? runner.runRetryingBusy("/usr/bin/hdiutil", args, stdin: passphrase.map { Data($0.utf8) }), a.ok else {
             return .unknown("the image wouldn't attach to be checked")
         }
         let lines = a.stdout.split(separator: "\n")
