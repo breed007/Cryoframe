@@ -429,9 +429,15 @@ private var deadOwner: ProcessIdentity {
         #expect(throws: MirrorSpaceError.imageTooSmall(size: big, needed: big + (1 << 30))) {
             try SparseBundleMirrorEngine.checkRoom(for: big, image: image, imageBytes: big, destination: dest)
         }
+        // The boot volume's free space moves while other tests run (438 KB between two
+        // reads was seen), so what is reported as free is only compared roughly. What is
+        // needed follows from the library alone and is exact.
         let free = try #require(JobExecutor.freeSpace(for: dest))
-        #expect(throws: MirrorSpaceError.notEnoughRoom(needed: free + 1 + (1 << 30), free: free)) {
+        #expect {
             try SparseBundleMirrorEngine.checkRoom(for: free + 1, image: image, imageBytes: .max, destination: dest)
+        } throws: { error in
+            guard case .notEnoughRoom(let needed, let reported)? = error as? MirrorSpaceError else { return false }
+            return needed == free + 1 + (1 << 30) && max(reported, free) - min(reported, free) < 1 << 30
         }
     }
 
