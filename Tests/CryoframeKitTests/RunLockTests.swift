@@ -323,3 +323,16 @@ private func lockfCanTake(_ file: URL) throws -> Int32 {
     #expect(TransferResumer.resumeAll(store: store, reachable: { _ in true }, locks: locks) == ["job:dest:lib"])
 }
 
+// MARK: - chores aren't runs
+
+@Test func aJobHeldForAChoreIsNotRunning() throws {
+    let locks = RunLocks(directory: tempDir())
+    defer { try? FileManager.default.removeItem(at: locks.directory) }
+    let tidy = try locks.acquire(jobID: "a", trigger: .cleanup)
+    let resume = try locks.acquire(jobID: "b", trigger: .resume)
+    let run = try locks.acquire(jobID: "c", trigger: .scheduled)
+    defer { tidy.release(); resume.release(); run.release() }
+    #expect(locks.runningJobIDs(among: ["a", "b", "c", "d"]) == ["c"])
+    #expect(!tidy.holder.isRun && !resume.holder.isRun && run.holder.isRun)
+    #expect(RunHolder.unknown.isRun)                          // can't tell: treat it as a run
+}

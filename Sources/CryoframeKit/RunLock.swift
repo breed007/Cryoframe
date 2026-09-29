@@ -42,6 +42,19 @@ public struct RunHolder: Codable, Sendable, Equatable {
 
     static let unknown = RunHolder(pid: 0, trigger: .unknown, runID: "", startedAt: .distantPast)
 
+    /// a run of the job, as opposed to a chore done for it (finishing a transfer,
+    /// tidying scratch). Unknown counts as a run: it can't be told apart from one.
+    public var isRun: Bool { trigger == .manual || trigger == .scheduled || trigger == .unknown }
+
+    /// why a scheduled run waits while this chore holds its job; nil for a run.
+    public var deferralReason: String? {
+        switch trigger {
+        case .resume:  "an interrupted transfer of this job is still finishing — it runs at the next check"
+        case .cleanup: "this job's leftovers were being tidied — it runs at the next check"
+        case .manual, .scheduled, .unknown: nil
+        }
+    }
+
     /// whether this holder is the current process.
     public var isThisProcess: Bool { pid == getpid() }
 
@@ -198,6 +211,11 @@ public final class RunLocks: @unchecked Sendable {
     public func holder(of jobID: String) -> RunHolder? {
         if case .held(let h) = look(jobID) { return h }
         return nil
+    }
+
+    /// the jobs a run (not a chore) holds right now, in any process.
+    public func runningJobIDs(among jobIDs: [String]) -> Set<String> {
+        Set(holders(of: jobIDs).filter { $0.value.isRun }.keys)
     }
 
     /// holders for the jobs that are running now, by job id.
