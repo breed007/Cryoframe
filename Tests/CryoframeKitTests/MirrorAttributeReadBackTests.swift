@@ -138,6 +138,35 @@ private func inMirror<T>(_ bundle: URL, _ rel: String, _ body: (String) -> T) th
     }
 }
 
+extension MirrorAttributeReadBackTests {
+    // A file the read-back can't open used to be reported as "doesn't match the
+    // library", the same as lost data. It says which it was now.
+    @Test func theReadBackSaysWhetherBytesDifferOrAFileCouldNotBeRead() throws {
+        let dir = attrDir("bytes")
+        defer { chmod(dir.appendingPathComponent("locked").path, 0o644); try? FileManager.default.removeItem(at: dir) }
+        func file(_ name: String, _ text: String) throws -> String {
+            let p = dir.appendingPathComponent(name).path
+            try Data(text.utf8).write(to: URL(fileURLWithPath: p))
+            return p
+        }
+        let size = 4
+        let x = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
+        let y = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
+        defer { x.deallocate(); y.deallocate() }
+        let a = try file("a", "the same bytes"), b = try file("b", "the same bytes")
+        let c = try file("c", "the other byte"), d = try file("d", "the same bytes, and more")
+        #expect(MirrorCopy.byteDifference(a, b, x, y, size) == nil)
+        #expect(MirrorCopy.byteDifference(a, c, x, y, size) == "doesn't match the library")
+        #expect(MirrorCopy.byteDifference(a, d, x, y, size) == "doesn't match the library")
+        #expect(MirrorCopy.byteDifference(d, a, x, y, size) == "doesn't match the library")
+        #expect(MirrorCopy.byteDifference(a, dir.appendingPathComponent("gone").path, x, y, size)
+                == "couldn't be read back (No such file or directory)")
+        let locked = try file("locked", "secret")
+        chmod(locked, 0)
+        #expect(MirrorCopy.byteDifference(locked, a, x, y, size) == "couldn't be read in the library (Permission denied)")
+    }
+}
+
 /// after the first rsync pass succeeds, `lose` damages the staging copy the way a lost
 /// write would (and says whether it did)
 private final class LosesAfterRsync: CommandRunner, @unchecked Sendable {

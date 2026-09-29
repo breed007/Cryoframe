@@ -119,8 +119,7 @@ enum MirrorCopy {
         // the bytes of everything this run wrote, several files at a time (opening a
         // file is most of the cost for small ones)
         let mismatched = inParallel(found.written, control: control) { rel, x, y, size in
-            sameBytes(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path, x, y, size)
-                ? nil : "doesn't match the library"
+            byteDifference(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path, x, y, size)
         }
         let attributes = inParallel(found.present, control: control) { rel, _, _, _ in
             differentAttributes(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path)
@@ -266,25 +265,41 @@ enum MirrorCopy {
         return String(cString: text)
     }
 
-    /// true when the two files hold the same bytes. The image was attached afresh for
-    /// this, and detaching drops what the mount had in memory, so reads of the new copy
-    /// come from the drive.
-    static func sameBytes(_ a: String, _ b: String, _ x: UnsafeMutableRawPointer, _ y: UnsafeMutableRawPointer,
-                          _ size: Int) -> Bool {
-        let fa = open(a, O_RDONLY), fb = open(b, O_RDONLY)
-        defer { if fa >= 0 { close(fa) }; if fb >= 0 { close(fb) } }
-        guard fa >= 0, fb >= 0 else { return false }
+    /// What differs between the bytes of `a` in the library and `b` in the copy, or
+    /// nil if nothing does. A file that can't be read on either side says so rather
+    /// than reading as different data: the one is lost data, the other may not be. The
+    /// image was attached afresh for this, and detaching drops what the mount had in
+    /// memory, so reads of the new copy come from the drive.
+    static func byteDifference(_ a: String, _ b: String, _ x: UnsafeMutableRawPointer, _ y: UnsafeMutableRawPointer,
+                               _ size: Int) -> String? {
+        func failed(_ what: String) -> String { "\(what) (\(String(cString: strerror(errno))))" }
+        let fa = open(a, O_RDONLY)
+        guard fa >= 0 else { return failed("couldn't be read in the library") }
+        defer { close(fa) }
+        let fb = open(b, O_RDONLY)
+        guard fb >= 0 else { return failed("couldn't be read back") }
+        defer { close(fb) }
+        func readSome(_ fd: Int32, _ into: UnsafeMutableRawPointer, _ n: Int) -> Int {
+            while true {
+                let got = read(fd, into, n)
+                if got >= 0 || errno != EINTR { return got }
+            }
+        }
         while true {
-            let n = read(fa, x, size)
-            guard n >= 0 else { return false }
-            if n == 0 { return read(fb, y, 1) == 0 }
+            let n = readSome(fa, x, size)
+            guard n >= 0 else { return failed("couldn't be read in the library") }
+            if n == 0 {
+                let more = readSome(fb, y, 1)
+                return more == 0 ? nil : more < 0 ? failed("couldn't be read back") : "doesn't match the library"
+            }
             var got = 0
             while got < n {
-                let m = read(fb, y + got, n - got)
-                guard m > 0 else { return false }
+                let m = readSome(fb, y + got, n - got)
+                guard m >= 0 else { return failed("couldn't be read back") }
+                guard m > 0 else { return "doesn't match the library" }
                 got += m
             }
-            if memcmp(x, y, n) != 0 { return false }
+            if memcmp(x, y, n) != 0 { return "doesn't match the library" }
         }
     }
 
