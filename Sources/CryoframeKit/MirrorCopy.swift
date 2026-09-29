@@ -36,12 +36,16 @@ import Foundation
 enum MirrorCopy {
     static let stagingName = ".cryoframe-staging"
 
-    /// bring `<volume>/<name>` up to date with `source`. `execute` runs a tool as the
-    /// run does (honoring Stop, throwing on failure).
-    /// `beforeSwap` runs once the new copy is complete and before it goes in place; if
-    /// it throws, the staging copy is removed and the previous copy stays.
-    static func update(volume: URL, name: String, source: URL, runner: CommandRunner,
-                       execute: (Command) throws -> Void, beforeSwap: () throws -> Void = {}) throws {
+    /// a new copy made in staging, not yet in place
+    struct Staged {
+        let volume: URL, current: URL, staging: URL, next: URL
+    }
+
+    /// Make the new copy of `source` in staging: a fresh clone of the previous copy,
+    /// brought up to date. `execute` runs a tool as the run does (honoring Stop,
+    /// throwing on failure). The previous copy is untouched.
+    static func stage(volume: URL, name: String, source: URL, runner: CommandRunner,
+                      execute: (Command) throws -> Void) throws -> Staged {
         let fm = FileManager.default
         let current = volume.appendingPathComponent(name, isDirectory: true)
         let staging = volume.appendingPathComponent(stagingName, isDirectory: true)
@@ -69,19 +73,129 @@ enum MirrorCopy {
             removeStaging(staging, runner: runner.forTeardown)
             throw MirrorCopyError.driveFilled
         }
+        return Staged(volume: volume, current: current, staging: staging, next: next)
+    }
 
-        do {
-            try beforeSwap()
-        } catch {
-            removeStaging(staging, runner: runner.forTeardown)
-            throw error
-        }
-
+    /// put the new copy in place of the previous one, and remove the previous one
+    static func commit(_ s: Staged, runner: CommandRunner) throws {
         // Never swap anywhere but inside the image. If it went away under the run,
         // `volume` is now a plain folder on the startup disk.
-        guard MountPoint.isMounted(volume) else { throw MirrorCopyError.imageWentAway(volume.path) }
-        try putInPlace(next, current)
-        removeStaging(staging, runner: runner)
+        guard MountPoint.isMounted(s.volume) else { throw MirrorCopyError.imageWentAway(s.volume.path) }
+        try putInPlace(s.next, s.current)
+        removeStaging(s.staging, runner: runner)
+    }
+
+    /// give up on the new copy; the previous one stays
+    static func abandon(_ s: Staged, runner: CommandRunner) {
+        guard MountPoint.isMounted(s.volume) else { return }       // the next run throws it away
+        removeStaging(s.staging, runner: runner.forTeardown)
+    }
+
+    /// Check the new copy against the library, reading it back from the image.
+    ///
+    /// A drive that runs out of room for an instant loses the image's writes, and
+    /// nothing says so: rsync exits 0, and a file system check can pass while a
+    /// file's data is gone. Measured: another program grabbing the drive for 15 to 25
+    /// ms at a time, shorter than any free-space watch sees, left 2 runs in 30
+    /// reporting success with a file matching neither version. So before the swap the
+    /// new copy is read back, and the caller must have detached and attached the image
+    /// again first, so the reads come from the drive and not from memory:
+    ///   - every path in the library is in the new copy with the same type, size,
+    ///     date and link target, and nothing else is;
+    ///   - every file this run wrote (its size or date differs from the previous copy,
+    ///     or it is new, which is exactly what rsync copies) matches the library byte
+    ///     for byte. Files carried over from the previous copy share its blocks.
+    /// A run with nothing changed reads no data. The library is a frozen snapshot, so
+    /// it can't have moved meanwhile (a volume that can't be frozen is read live with
+    /// its app closed).
+    static func verify(_ s: Staged, against source: URL, control: RunControl?) throws {
+        let fm = FileManager.default
+        var problems: [String] = [], count = 0
+        func note(_ rel: String, _ what: String) { count += 1; if problems.count < 3 { problems.append("\(rel) \(what)") } }
+        var inLibrary = Set<String>()
+        var written: [String] = []
+        guard let walker = fm.enumerator(atPath: source.path) else { return }
+        var seen = 0
+        while let rel = walker.nextObject() as? String {
+            seen += 1
+            if seen % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+            inLibrary.insert(rel)
+            var a = stat(), b = stat(), c = stat()
+            guard lstat(source.appendingPathComponent(rel).path, &a) == 0 else { continue }
+            guard lstat(s.next.appendingPathComponent(rel).path, &b) == 0 else { note(rel, "is missing"); continue }
+            let type = a.st_mode & S_IFMT
+            guard type == b.st_mode & S_IFMT else { note(rel, "is the wrong kind of item"); continue }
+            if type == S_IFLNK {
+                let t1 = try? fm.destinationOfSymbolicLink(atPath: source.appendingPathComponent(rel).path)
+                let t2 = try? fm.destinationOfSymbolicLink(atPath: s.next.appendingPathComponent(rel).path)
+                if t1 != t2 { note(rel, "points somewhere else") }
+                continue
+            }
+            guard type == S_IFREG else { continue }
+            guard a.st_size == b.st_size, a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec else {
+                note(rel, "has the wrong size or date"); continue
+            }
+            let carried = lstat(s.current.appendingPathComponent(rel).path, &c) == 0
+                && c.st_size == a.st_size && c.st_mtimespec.tv_sec == a.st_mtimespec.tv_sec
+            if !carried { written.append(rel) }
+        }
+        // the bytes of everything this run wrote, several files at a time (opening a
+        // file is most of the cost for small ones)
+        let mismatched = compare(written, source: source, next: s.next, control: control)
+        if control?.isCancelled == true { throw CancelledError() }
+        for rel in mismatched { note(rel, "doesn't match the library") }
+        if let extra = fm.enumerator(atPath: s.next.path) {
+            while count < 1000, let rel = extra.nextObject() as? String {
+                if !inLibrary.contains(rel) { note(rel, "isn't in the library") }
+            }
+        }
+        guard count == 0 else { throw MirrorCopyError.readBackMismatch(count: count, examples: problems) }
+    }
+
+    /// the files among `rels` whose bytes differ between `source` and `next`
+    static func compare(_ rels: [String], source: URL, next: URL, control: RunControl?) -> [String] {
+        guard !rels.isEmpty else { return [] }
+        let workers = min(8, rels.count)
+        let lock = NSLock()
+        var bad: [String] = []
+        DispatchQueue.concurrentPerform(iterations: workers) { w in
+            let size = 1 << 20
+            let x = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
+            let y = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
+            defer { x.deallocate(); y.deallocate() }
+            var i = w
+            while i < rels.count {
+                if control?.isCancelled == true { return }
+                let rel = rels[i]
+                if !sameBytes(source.appendingPathComponent(rel).path, next.appendingPathComponent(rel).path, x, y, size) {
+                    lock.lock(); bad.append(rel); lock.unlock()
+                }
+                i += workers
+            }
+        }
+        return bad.sorted()
+    }
+
+    /// true when the two files hold the same bytes. The image was attached afresh for
+    /// this, and detaching drops what the mount had in memory, so reads of the new copy
+    /// come from the drive.
+    static func sameBytes(_ a: String, _ b: String, _ x: UnsafeMutableRawPointer, _ y: UnsafeMutableRawPointer,
+                          _ size: Int) -> Bool {
+        let fa = open(a, O_RDONLY), fb = open(b, O_RDONLY)
+        defer { if fa >= 0 { close(fa) }; if fb >= 0 { close(fb) } }
+        guard fa >= 0, fb >= 0 else { return false }
+        while true {
+            let n = read(fa, x, size)
+            guard n >= 0 else { return false }
+            if n == 0 { return read(fb, y, 1) == 0 }
+            var got = 0
+            while got < n {
+                let m = read(fb, y + got, n - got)
+                guard m > 0 else { return false }
+                got += m
+            }
+            if memcmp(x, y, n) != 0 { return false }
+        }
     }
 
     /// rsync `source` into `next`, carrying extended attributes, resource forks and
@@ -303,6 +417,8 @@ public enum MirrorCopyError: Error, Equatable {
     case imageDamaged(String)
     /// what a previous run left in the image couldn't be removed
     case stagingStuck(String)
+    /// the new copy, read back from the image, didn't match the library
+    case readBackMismatch(count: Int, examples: [String])
 }
 
 extension MirrorCopyError: LocalizedError {
@@ -319,6 +435,9 @@ extension MirrorCopyError: LocalizedError {
             return "the drive nearly filled while the mirror was being written, because something else was writing to it at the same time. A disk image loses writes when its drive fills, so this run doesn't count. \(copy) Make room on the drive and run again."
         case .imageDamaged(let why):
             return "the drive filled while the mirror was being written, and the mirror's disk image is damaged (\(why)). Don't rely on this copy: run a restore drill, and consider starting this mirror afresh on a drive with room to spare."
+        case .readBackMismatch(let count, let examples):
+            let list = examples.joined(separator: "; ")
+            return "the new copy of the mirror didn't read back the same as the library (\(count) item\(count == 1 ? "" : "s"): \(list)). Data was lost on its way to the drive, so it wasn't put in place: nothing was updated and the previous copy is intact. Run again; if this repeats, check the drive."
         case .stagingStuck(let path):
             return "an unfinished copy a previous run left inside the mirror (\(path)) couldn't be removed, and it can't be trusted, so nothing was updated. The previous copy is intact; run again, and if this repeats, start this mirror afresh."
         case .swapFailed(let why):

@@ -252,31 +252,47 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             MountPoint.detach(mountpoint, runner: teardown)
             OpenedArchive.removeWork(work)          // only once nothing is mounted there
         }
-        try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
-
-        do {
-            try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
-        } catch {
-            try MirrorMounts.refuseIfOpen(bundle, except: mountpoint, runner: teardown)   // opened elsewhere meanwhile
-            throw error
+        // attach read-write at `mountpoint`; also used to attach it again for the read-back
+        func attach() throws {
+            try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
+            do {
+                try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
+            } catch {
+                try MirrorMounts.refuseIfOpen(bundle, except: mountpoint, runner: teardown)   // opened elsewhere meanwhile
+                throw error
+            }
+            // An image already attached elsewhere fails to attach again ("Resource busy")
+            // on current macOS; older versions have answered 0 and mounted nothing, and
+            // then rsync would write onto the startup disk instead of into the image.
+            // Refuse rather than detach someone else's open copy.
+            guard MountPoint.isMounted(mountpoint) else {
+                throw DiskImageInUse(image: bundle.path, mountedAt: MirrorMounts.mountPoints(of: bundle, runner: teardown))
+            }
         }
-        // An image already attached elsewhere fails to attach again ("Resource busy")
-        // on current macOS; older versions have answered 0 and mounted nothing, and
-        // then rsync would write onto the startup disk instead of into the image.
-        // Refuse rather than detach someone else's open copy.
-        guard MountPoint.isMounted(mountpoint) else {
-            throw DiskImageInUse(image: bundle.path, mountedAt: MirrorMounts.mountPoints(of: bundle, runner: teardown))
-        }
+        try attach()
         touched = true          // attached read-write: the image changes from here
-        // rsync into a clone and swap, so the copy restore reads is never half-updated
-        try MirrorCopy.update(volume: mountpoint, name: source.root.lastPathComponent, source: source.root,
-                              runner: runner, execute: { try execute($0) }, beforeSwap: {
-            // the new copy goes in place only once it is on the drive, and only if the
-            // drive never came close to full while it was being written
+
+        // rsync into a clone of the previous copy, so the copy restore reads is never
+        // half-updated; then prove the new copy reached the drive before swapping it in
+        let staged = try MirrorCopy.stage(volume: mountpoint, name: source.root.lastPathComponent, source: source.root,
+                                          runner: runner, execute: { try execute($0) })
+        do {
+            // on the drive, and the drive never came close to full while it was written
             MirrorCopy.flush(volume: mountpoint)
             drive.sample()
             if drive.dipped { throw MirrorCopyError.driveFilledByAnother(swapped: false) }
-        })
+            // read it back from the drive, not from memory: detach and attach again
+            MountPoint.detach(mountpoint, runner: teardown)
+            guard !MountPoint.isMounted(mountpoint) else { throw MountPointError.stillMounted(mountpoint.path) }
+            try attach()
+            try MirrorCopy.verify(staged, against: source.root, control: runner.control)
+            drive.sample()
+            if drive.dipped { throw MirrorCopyError.driveFilledByAnother(swapped: false) }
+        } catch {
+            MirrorCopy.abandon(staged, runner: runner)
+            throw error
+        }
+        try MirrorCopy.commit(staged, runner: runner)
         watch.swapped = true
         // The new copy is in place. A detach that comes back busy (Spotlight or
         // fseventsd still looking) used to fail the run here while the mirror already

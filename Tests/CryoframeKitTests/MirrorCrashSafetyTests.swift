@@ -661,3 +661,87 @@ extension MirrorCrashSafety {
         #expect(try insideMirror(bundle).library == before)
     }
 }
+
+/// What lost writes look like to rsync: a file of the right size and date holding the
+/// wrong bytes. The new copy is read back before it goes in place.
+@Suite(.serialized) struct ReadingTheNewCopyBack {
+
+    /// after rsync writes the new copy, zeroes one file it wrote, size and date kept
+    private final class LosesAWrite: CommandRunner, @unchecked Sendable {
+        let inner = ProcessCommandRunner()
+        let victim: String
+        private(set) var lost = false
+        init(victim: String) { self.victim = victim }
+        var forTeardown: CommandRunner { inner }
+        func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+            let r = try inner.run(launchPath, args, stdin: stdin)
+            if (launchPath as NSString).lastPathComponent == "rsync", !lost, r.ok, let dest = args.last {
+                let f = URL(fileURLWithPath: dest).appendingPathComponent(victim)
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: f.path),
+                   let size = attrs[.size] as? Int, let date = attrs[.modificationDate] as? Date {
+                    try? Data(count: size).write(to: f)
+                    try? FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: f.path)
+                    lost = true
+                }
+            }
+            return r
+        }
+    }
+
+    @Test func aFileWhoseDataWasLostIsCaughtBeforeTheSwap() throws {
+        let src = try library(files: 10)
+        let out = tempDir("readback"), base = tempDir("base")
+        defer { for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        let bundle = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        let before = tree(src)
+        try editEverything(src, files: 10)
+
+        let loses = LosesAWrite(victim: "f2.txt")
+        #expect {
+            try SparseBundleMirrorEngine(sizeGB: 1, runner: loses, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        } throws: { error in
+            guard case MirrorCopyError.readBackMismatch(let count, let examples) = error else { return false }
+            return count == 1 && examples.first?.hasPrefix("f2.txt") == true
+        }
+        #expect(loses.lost, "no write was lost, so this proves nothing")
+        let inside = try insideMirror(bundle)
+        #expect(inside.library == before, "a copy with lost data went in place")
+        #expect(inside.root == ["Lib"], "the rejected copy was left in the image: \(inside.root)")
+
+        _ = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out)
+        #expect(try insideMirror(bundle).library == tree(src))
+    }
+
+    // Structure too: a file the new copy lost, or one it shouldn't have, fails the run.
+    @Test func aNewCopyMissingAFileIsCaughtBeforeTheSwap() throws {
+        let src = try library(files: 6)
+        let out = tempDir("readback2"), base = tempDir("base")
+        defer { for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        _ = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out)
+        try Data("new".utf8).write(to: src.appendingPathComponent("added.txt"))
+
+        let drops = DropsAFile(victim: "added.txt")
+        #expect(throws: MirrorCopyError.self) {
+            try SparseBundleMirrorEngine(sizeGB: 1, runner: drops, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        }
+        #expect(drops.dropped)
+    }
+
+    private final class DropsAFile: CommandRunner, @unchecked Sendable {
+        let inner = ProcessCommandRunner()
+        let victim: String
+        private(set) var dropped = false
+        init(victim: String) { self.victim = victim }
+        var forTeardown: CommandRunner { inner }
+        func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+            let r = try inner.run(launchPath, args, stdin: stdin)
+            if (launchPath as NSString).lastPathComponent == "rsync", !dropped, r.ok, let dest = args.last {
+                dropped = (try? FileManager.default.removeItem(at: URL(fileURLWithPath: dest).appendingPathComponent(victim))) != nil
+            }
+            return r
+        }
+    }
+}
+
