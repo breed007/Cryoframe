@@ -105,31 +105,61 @@ public final class RunLocks: @unchecked Sendable {
                         now: Date = Date()) throws -> RunLease {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let path = lockURL(jobID).path
+        let deadline = Date().addingTimeInterval(wait)
+        var replaced = 0
+        while true {
+            switch try attempt(path: path, jobID: jobID) {
+            case .took(let fd):
+                // stale stop requests name an earlier run; clear them before saying who
+                // we are, so no request can name this run until it is known
+                try? FileManager.default.removeItem(at: stopURL(jobID))
+                let holder = RunHolder(pid: getpid(), trigger: trigger, runID: UUID().uuidString, startedAt: now)
+                Self.write(holder, to: fd)
+                HeldHere.shared.set(path, holder)
+                return RunLease(locks: self, jobID: jobID, path: path, fd: fd, holder: holder)
+            case .busy(let holder):
+                if Date() >= deadline { throw RunLockError.alreadyRunning(holder) }
+                Thread.sleep(forTimeInterval: 0.1)
+            case .replaced:
+                replaced += 1
+                if replaced > 20 { throw RunLockError.unavailable("its lock file keeps being replaced") }
+            }
+        }
+    }
+
+    private enum Attempt { case took(Int32), busy(RunHolder), replaced }
+
+    private func attempt(path: String, jobID: String) throws -> Attempt {
+        // This process's own locks are known here even once their file is gone: the
+        // lock is the inode, and a removed path no longer leads to it.
+        if let mine = HeldHere.shared.holder(path) { return .busy(mine) }
         // O_CLOEXEC: a tool this run launches must never inherit the lock. If it did,
         // a crash of this process would leave the lock held by an orphaned rsync.
         let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw RunLockError.unavailable(String(cString: strerror(errno))) }
-        let deadline = Date().addingTimeInterval(wait)
-        while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
             let err = errno
-            guard err == EWOULDBLOCK || err == EINTR else {
-                close(fd); throw RunLockError.unavailable(String(cString: strerror(err)))
-            }
-            if Date() >= deadline {
-                close(fd)
-                throw RunLockError.alreadyRunning(readHolder(jobID) ?? .unknown)
-            }
-            Thread.sleep(forTimeInterval: 0.1)
+            close(fd)
+            guard err == EWOULDBLOCK || err == EINTR else { throw RunLockError.unavailable(String(cString: strerror(err))) }
+            return .busy(readHolder(jobID) ?? .unknown)
         }
-        // stale stop requests name an earlier run; clear them before saying who we
-        // are, so no request can name this run until it is known
-        try? FileManager.default.removeItem(at: stopURL(jobID))
-        let holder = RunHolder(pid: getpid(), trigger: trigger, runID: UUID().uuidString, startedAt: now)
-        if let data = try? JSONEncoder().encode(holder) {
-            ftruncate(fd, 0)
-            _ = data.withUnsafeBytes { pwrite(fd, $0.baseAddress, data.count, 0) }
-        }
-        return RunLease(locks: self, jobID: jobID, fd: fd, holder: holder)
+        // What we locked must still be what the path names. If the file was removed
+        // (and perhaps re-created) between open and flock, we hold a lock nobody else
+        // can see; let go and take the one at the path.
+        guard Self.sameFile(fd, path) else { flock(fd, LOCK_UN); close(fd); return .replaced }
+        return .took(fd)
+    }
+
+    static func sameFile(_ fd: Int32, _ path: String) -> Bool {
+        var a = stat(), b = stat()
+        guard fstat(fd, &a) == 0, stat(path, &b) == 0 else { return false }
+        return a.st_dev == b.st_dev && a.st_ino == b.st_ino
+    }
+
+    static func write(_ holder: RunHolder, to fd: Int32) {
+        guard let data = try? JSONEncoder().encode(holder) else { return }
+        ftruncate(fd, 0)
+        _ = data.withUnsafeBytes { pwrite(fd, $0.baseAddress, data.count, 0) }
     }
 
     // MARK: looking without taking
@@ -143,6 +173,7 @@ public final class RunLocks: @unchecked Sendable {
     /// what is known about the job's lock, without taking it: a probe that briefly
     /// took the lock would make a run starting at that instant think the job was busy.
     public func look(_ jobID: String) -> Look {
+        if let mine = HeldHere.shared.holder(lockURL(jobID).path) { return .held(mine) }
         let fd = open(lockURL(jobID).path, O_RDONLY | O_CLOEXEC)
         guard fd >= 0 else {
             let err = errno
@@ -207,15 +238,41 @@ public final class RunLease: @unchecked Sendable {
     public let jobID: String
     public let holder: RunHolder
     private let locks: RunLocks
+    private let path: String
     private let mutex = NSLock()
-    private var fd: Int32
+    private var fds: [Int32]                  // the lock file, and any it was re-created as
     private var watcher: DispatchSourceTimer?
+    private var keeper: DispatchSourceTimer?
 
-    init(locks: RunLocks, jobID: String, fd: Int32, holder: RunHolder) {
-        self.locks = locks; self.jobID = jobID; self.fd = fd; self.holder = holder
+    /// how often a held lock checks that its file is still there.
+    static let keepInterval: TimeInterval = 1
+
+    init(locks: RunLocks, jobID: String, path: String, fd: Int32, holder: RunHolder) {
+        self.locks = locks; self.jobID = jobID; self.path = path; self.fds = [fd]; self.holder = holder
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + Self.keepInterval, repeating: Self.keepInterval)
+        timer.setEventHandler { [weak self] in self?.keepLockFile() }
+        keeper = timer
+        timer.resume()
     }
 
     deinit { release() }
+
+    /// If the lock file is removed while the run holds it (someone clears the app's
+    /// support folder mid-backup), the run's lock is on an inode no path leads to,
+    /// and another process could lock a fresh file and start a second run. Put the
+    /// file back and lock it too. The window is at most one check; this process's own
+    /// takers are covered with no window at all (see HeldHere).
+    func keepLockFile() {
+        mutex.lock(); defer { mutex.unlock() }
+        guard let current = fds.last, !RunLocks.sameFile(current, path) else { return }
+        try? FileManager.default.createDirectory(at: locks.directory, withIntermediateDirectories: true)
+        let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { return }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0, RunLocks.sameFile(fd, path) else { close(fd); return }
+        RunLocks.write(holder, to: fd)
+        fds.append(fd)
+    }
 
     /// whether another process has asked this run to stop.
     public var stopRequested: Bool { locks.stopRequested(jobID: jobID, runID: holder.runID) }
@@ -241,24 +298,40 @@ public final class RunLease: @unchecked Sendable {
     public func release() {
         mutex.lock(); defer { mutex.unlock() }
         watcher?.cancel(); watcher = nil
-        guard fd >= 0 else { return }
-        ftruncate(fd, 0)                       // nobody should read our identity after we're gone
-        flock(fd, LOCK_UN)
-        close(fd)
-        fd = -1
+        keeper?.cancel(); keeper = nil
+        guard !fds.isEmpty else { return }
+        HeldHere.shared.remove(path)
+        for fd in fds {
+            ftruncate(fd, 0)                   // nobody should read our identity after we're gone
+            flock(fd, LOCK_UN)
+            close(fd)
+        }
+        fds = []
     }
 
-    public var isHeld: Bool { mutex.lock(); defer { mutex.unlock() }; return fd >= 0 }
+    public var isHeld: Bool { mutex.lock(); defer { mutex.unlock() }; return !fds.isEmpty }
 
-    /// what a crash does to the lock: the descriptor goes away without an unlock.
-    /// For tests that prove nothing else keeps the lock alive.
+    /// what a crash does to the lock: the descriptor goes away without an unlock,
+    /// and the process's memory of holding it goes with it. For tests that prove
+    /// nothing else keeps the lock alive.
     func closeWithoutUnlocking() {
         mutex.lock(); defer { mutex.unlock() }
         watcher?.cancel(); watcher = nil
-        guard fd >= 0 else { return }
-        close(fd)
-        fd = -1
+        keeper?.cancel(); keeper = nil
+        HeldHere.shared.remove(path)
+        for fd in fds { close(fd) }
+        fds = []
     }
+}
+
+/// the run locks this process holds, by lock file path.
+final class HeldHere: @unchecked Sendable {
+    static let shared = HeldHere()
+    private let lock = NSLock()
+    private var held: [String: RunHolder] = [:]
+    func holder(_ path: String) -> RunHolder? { lock.lock(); defer { lock.unlock() }; return held[path] }
+    func set(_ path: String, _ holder: RunHolder) { lock.lock(); held[path] = holder; lock.unlock() }
+    func remove(_ path: String) { lock.lock(); held[path] = nil; lock.unlock() }
 }
 
 extension RunLocks {

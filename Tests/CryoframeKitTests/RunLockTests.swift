@@ -267,3 +267,33 @@ private final class OtherProcessHolding {
     #expect(await helper.calls.isEmpty)
 }
 
+// MARK: - a lock file removed while held
+
+/// 0 when another process could take the lock on `file` right now, 75 when it's held.
+private func lockfCanTake(_ file: URL) throws -> Int32 {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/lockf")
+    p.arguments = ["-k", "-t", "0", file.path, "/usr/bin/true"]
+    p.standardError = FileHandle.nullDevice
+    try p.run()
+    p.waitUntilExit()
+    return p.terminationStatus
+}
+
+@Test func aRunWhoseLockFileIsRemovedLocksItAgainForOtherProcesses() throws {
+    let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
+    let locks = RunLocks(directory: dir)
+    let lease = try locks.acquire(jobID: "job", trigger: .scheduled)
+    defer { lease.release() }
+    try FileManager.default.removeItem(at: locks.lockURL("job"))
+
+    // within a second the run puts its lock file back and holds it again
+    var status: Int32 = 0
+    for _ in 0..<40 {
+        if FileManager.default.fileExists(atPath: locks.lockURL("job").path),
+           try lockfCanTake(locks.lockURL("job")) == 75 { status = 75; break }
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    #expect(status == 75, "another process could take the lock of a job that is still running")
+}
+
