@@ -142,7 +142,15 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// needed: after one run filled the drive, every later one failed "No space left
     /// on device" even once the library had shrunk. Measured on that drive: 197 MB
     /// reclaimed in half a second. Best effort; a run doesn't fail over it.
+    ///
+    /// Compacting removes bands the last seal recorded, so the band list is withdrawn
+    /// from the manifest first (the mirror is marked open by then, so nothing else in
+    /// the manifest is being relied on). A run that dies between the compact and the
+    /// seal then leaves a mark over a manifest with no band list, which checks as
+    /// "not compared", rather than a list naming bands compact rightly removed, which
+    /// read as damage and refused the restore of a healthy mirror.
     private func compact(_ bundle: URL, stdin: Data?) {
+        MirrorSeal.withdrawBands(in: bundle.deletingLastPathComponent())
         var args = ["compact", bundle.path]
         if passphrase != nil { args.append("-stdinpass") }
         _ = try? runner.forTeardown.run("/usr/bin/hdiutil", args, stdin: stdin)
@@ -411,6 +419,14 @@ public enum MirrorSeal {
             for n in lo...hi where !present.contains(n) { missing.append(n) }
         }
         return missing
+    }
+
+    /// drop the band list from the manifest in `dir`, if there is one to drop
+    static func withdrawBands(in dir: URL) {
+        let url = dir.appendingPathComponent(ArchiveManifest.sidecarName)
+        guard var manifest = try? ArchiveManifest.read(url), manifest.sealedBands != nil else { return }
+        manifest.sealedBands = nil
+        _ = try? ArchiveManifest.write(manifest, toDir: dir)
     }
 
     static func clearOpen(_ dir: URL) {
