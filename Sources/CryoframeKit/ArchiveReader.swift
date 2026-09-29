@@ -14,6 +14,28 @@ public struct OpenedArchive: Sendable {
     let work: URL                        // temp scratch to delete on close
     let teardownFn: @Sendable () -> Void
 
+    /// the file in the work dir naming the process that has the archive open.
+    static let ownerFileName = "owner.json"
+
+    static func recordOwner(in work: URL) {
+        guard let me = ProcessIdentity.current, let data = try? JSONEncoder().encode(me) else { return }
+        try? data.write(to: work.appendingPathComponent(ownerFileName), options: .atomic)
+    }
+
+    /// An open archive's work dir may be swept once whoever opened it is gone. The
+    /// app, the scheduled agent and a second app instance share one temp folder, and
+    /// each has archives open for verifies, drills, rehearsals and browsing. One with
+    /// no readable owner was opened by an older version, or caught in the instant
+    /// before its owner was written; it waits a day, longer than any of those take.
+    static func isAbandoned(_ work: URL, now: Date, isAlive: (ProcessIdentity) -> Bool) -> Bool {
+        if let data = try? Data(contentsOf: work.appendingPathComponent(ownerFileName)),
+           let owner = try? JSONDecoder().decode(ProcessIdentity.self, from: data) {
+            return !isAlive(owner)
+        }
+        guard let made = (try? work.resourceValues(forKeys: [.creationDateKey]))?.creationDate else { return false }
+        return now.timeIntervalSince(made) > 24 * 3600
+    }
+
     /// detach the mount (if any) and remove the scratch dir. Always call this.
     public func close() {
         teardownFn()
@@ -32,15 +54,20 @@ public struct OpenedArchive: Sendable {
 
 public struct ArchiveReader: Sendable {
     let runner: CommandRunner
-    public init(runner: CommandRunner = ProcessCommandRunner()) { self.runner = runner }
+    let workBase: URL
+    public init(runner: CommandRunner = ProcessCommandRunner(),
+                workBase: URL = FileManager.default.temporaryDirectory) {
+        self.runner = runner; self.workBase = workBase
+    }
 
     /// open `result` into a fresh temp work dir. A non-nil `passphrase` mounts an
     /// AES-256 encrypted dmg/sparsebundle (via `hdiutil -stdinpass`). The caller
     /// MUST `close()` the returned handle to detach the mount and clean up.
     public func open(_ result: ArchiveResult, passphrase: String? = nil) throws -> OpenedArchive {
         let fm = FileManager.default
-        let work = fm.temporaryDirectory.appendingPathComponent("cf-open-\(UUID().uuidString)")
+        let work = workBase.appendingPathComponent("cf-open-\(UUID().uuidString)")
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        OpenedArchive.recordOwner(in: work)       // so another process's launch sweep leaves it be
         let runner = self.runner
         let teardown = runner.forTeardown      // still works after Stop, when cleanup matters most
         let enc = passphrase != nil
@@ -144,12 +171,16 @@ public struct ArchiveReader: Sendable {
         _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", mnt.path])
     }
 
-    /// on launch, force-detach and remove any browse mounts left attached by a crash.
-    public static func sweepStaleOpens() {
+    /// on launch, force-detach and remove any archive a crashed process left open.
+    /// Only those: an archive a live process has open (the agent verifying a run, a
+    /// drill, a rehearsal, another window browsing) is still in use.
+    public static func sweepStaleOpens(in directory: URL = FileManager.default.temporaryDirectory,
+                                       runner: CommandRunner = ProcessCommandRunner(), now: Date = Date(),
+                                       isAlive: (ProcessIdentity) -> Bool = { $0.isAlive }) {
         let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(at: fm.temporaryDirectory, includingPropertiesForKeys: nil) else { return }
-        let runner = ProcessCommandRunner()
+        guard let entries = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
         for e in entries where e.lastPathComponent.hasPrefix("cf-open-") {
+            guard OpenedArchive.isAbandoned(e, now: now, isAlive: isAlive) else { continue }
             let mnt = e.appendingPathComponent("mnt")
             if MountPoint.isMounted(mnt) { _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path]) }
             OpenedArchive.removeWork(e)
