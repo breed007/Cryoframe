@@ -445,14 +445,22 @@ public struct JobExecutor: Sendable {
 
     /// remove sealed build artifacts left in scratch by a crash or a one-time job —
     /// any `scratchBase/<job>/build/<lib>` whose artifact no pending transfer still
-    /// references. Safe to call at launch, before any run starts.
-    public static func sweepOrphanedScratch(scratchBase: URL, pendingStore: PendingTransferStore) {
+    /// references. With `locks`, a job that is running (in this process or the
+    /// scheduled agent) is skipped: its build folder is a half-written archive, not
+    /// a leftover. Without them, only safe when nothing can be running.
+    public static func sweepOrphanedScratch(scratchBase: URL, pendingStore: PendingTransferStore, locks: RunLocks? = nil) {
         let fm = FileManager.default
         let referenced = Set(pendingStore.all().map(\.sourceFile))
         guard let jobDirs = try? fm.contentsOfDirectory(at: scratchBase, includingPropertiesForKeys: nil) else { return }
         for jobDir in jobDirs {
             let buildRoot = jobDir.appendingPathComponent("build", isDirectory: true)
             guard let libDirs = try? fm.contentsOfDirectory(at: buildRoot, includingPropertiesForKeys: nil) else { continue }
+            var lease: RunLease?
+            if let locks {
+                guard let held = try? locks.acquire(jobID: jobDir.lastPathComponent, trigger: .cleanup) else { continue }
+                lease = held
+            }
+            defer { lease?.release() }
             for libDir in libDirs {
                 let artifacts = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: nil)) ?? []
                 if !artifacts.contains(where: { referenced.contains($0.path) }) { try? fm.removeItem(at: libDir) }

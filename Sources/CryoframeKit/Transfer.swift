@@ -161,11 +161,21 @@ public enum TransferResumer {
                                      var dir: ObjCBool = false
                                      return FileManager.default.fileExists(atPath: $0, isDirectory: &dir)
                                          && FileManager.default.isWritableFile(atPath: $0)
-                                 }) -> [String] {
+                                 },
+                                 locks: RunLocks? = nil) -> [String] {
         var resumed: [String] = []
         let fm = FileManager.default
         for pending in store.all() {
             guard fm.fileExists(atPath: pending.sourceFile), reachable(pending.targetDir) else { continue }
+            // A job that is running right now, here or in the other process, is
+            // shipping its own transfers; resuming alongside it writes the same parts
+            // twice at once. Leave it to the run, or to the next pass.
+            var lease: RunLease?
+            if let locks {
+                guard let held = try? locks.acquire(jobID: jobID(of: pending), trigger: .resume) else { continue }
+                lease = held
+            }
+            defer { lease?.release() }
             do {
                 _ = try ChunkedShipper().ship(pending, persist: { store.save($0) })
                 store.remove(jobID: pending.jobID)
@@ -183,5 +193,11 @@ public enum TransferResumer {
             }
         }
         return resumed
+    }
+
+    /// the job a pending transfer belongs to: records are keyed `<job>:<dest>:<lib>`
+    /// (older ones just `<job>`).
+    static func jobID(of pending: PendingTransfer) -> String {
+        pending.jobID.split(separator: ":", maxSplits: 1).first.map(String.init) ?? pending.jobID
     }
 }
