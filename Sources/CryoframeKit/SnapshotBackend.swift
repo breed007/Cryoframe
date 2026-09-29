@@ -138,11 +138,11 @@ public struct ProcessCommandRunner: CommandRunner {
         }
         let outData = out.fileHandleForReading.readDataToEndOfFile()
         errDrained.wait()
-        p.waitUntilExit()
+        let status = p.waitForExit()           // not waitUntilExit: see ProcessWait
         control?.detach()
         if control?.isCancelled == true { throw CancelledError() }
         return CommandResult(
-            status: p.terminationStatus,
+            status: status,
             stdout: String(decoding: outData, as: UTF8.self),
             stderr: String(decoding: errData, as: UTF8.self)
         )

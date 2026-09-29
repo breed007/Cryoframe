@@ -422,3 +422,32 @@ private func staticFixture() throws -> URL {
     let rep = try StrongVerifier().staticReport(dir, fm: .default)
     #expect(rep.passed, "the drill and the executor disagree about a folder of links: \(rep.details)")
 }
+
+// MARK: - waiting for a tool
+
+@Suite struct WaitingForATool {
+    private func launch(_ path: String, _ args: [String]) throws -> Process {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path); p.arguments = args
+        try p.run()
+        return p
+    }
+
+    @Test func theExitStatusAndTheEndingSignalAreReported() throws {
+        #expect(try launch("/bin/sh", ["-c", "exit 3"]).waitForExit() == 3)
+        let p = try launch("/bin/sleep", ["30"])
+        kill(p.processIdentifier, SIGTERM)
+        #expect(p.waitForExit() == SIGTERM)
+    }
+
+    // A process reaped behind Foundation's back is how a termination notice goes
+    // missing; the wait has to end anyway.
+    @Test func aProcessReapedElsewhereDoesNotHangTheWait() throws {
+        let p = try launch("/usr/bin/true", [])
+        var status: Int32 = 0
+        _ = waitpid(p.processIdentifier, &status, 0)
+        let start = ProcessInfo.processInfo.systemUptime
+        _ = p.waitForExit()
+        #expect(ProcessInfo.processInfo.systemUptime - start < 10)
+    }
+}
