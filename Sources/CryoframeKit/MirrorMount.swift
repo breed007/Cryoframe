@@ -85,6 +85,32 @@ public enum MirrorMounts {
     }
 }
 
+extension MirrorMounts {
+    /// throw `DiskImageInUse` when `image` is mounted anywhere other than `except`.
+    public static func refuseIfOpen(_ image: URL, except: URL? = nil, runner: CommandRunner) throws {
+        let mine = except.map { TMUtilSnapshotBackend.canonicalPath($0.path) }
+        let elsewhere = mountPoints(of: image, runner: runner)
+            .filter { TMUtilSnapshotBackend.canonicalPath($0) != mine }
+        if !elsewhere.isEmpty { throw DiskImageInUse(image: image.path, mountedAt: elsewhere) }
+    }
+}
+
+/// A disk image already attached somewhere on this Mac. macOS won't attach it a
+/// second time, and detaching it to make room would pull it out from under whoever
+/// has it: the restore window, a check, or a mirror run in the middle of its copy.
+public struct DiskImageInUse: Error, Equatable {
+    public let image: String
+    public let mountedAt: [String]
+}
+
+extension DiskImageInUse: LocalizedError {
+    public var errorDescription: String? {
+        let name = (image as NSString).lastPathComponent
+        let where_ = mountedAt.first.map { " (at \($0))" } ?? ""
+        return "\(name) is already open elsewhere on this Mac\(where_): in the restore window, being checked, or being updated by a backup. Try again once that has finished."
+    }
+}
+
 public enum MirrorMountError: Error, Equatable {
     case ownerUnrecorded(String)
 }

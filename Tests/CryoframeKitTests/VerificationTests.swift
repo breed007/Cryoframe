@@ -255,8 +255,11 @@ private final class BusyDetachRunner: CommandRunner, @unchecked Sendable {
     }
 }
 
-private func infoPlist(imagePath: String, devices: [String]) -> String {
-    let entities = devices.map { "<dict><key>dev-entry</key><string>\($0)</string></dict>" }.joined()
+private func infoPlist(imagePath: String, devices: [String], mountedAt: String? = nil) -> String {
+    let mount = mountedAt.map { "<key>mount-point</key><string>\($0)</string>" } ?? ""
+    let entities = devices.enumerated().map { i, dev in
+        "<dict><key>dev-entry</key><string>\(dev)</string>\(i == devices.count - 1 ? mount : "")</dict>"
+    }.joined()
     return """
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -276,7 +279,7 @@ private func infoPlist(imagePath: String, devices: [String]) -> String {
     let image = URL(fileURLWithPath: "/tmp/orphan-test/Photos.dmg")
     let runner = BusyDetachRunner(succeedOnAttempt: 4,
                                   infoPlist: infoPlist(imagePath: image.path, devices: ["/dev/disk9"]))
-    ArchiveReader.detachDevices(forImage: image, runner: runner)
+    ArchiveReader.detachOrphans(ofImage: image, runner: runner)
     #expect(runner.detachAttempts >= 4, "gave up after \(runner.detachAttempts) attempt(s)")
 }
 
@@ -287,11 +290,24 @@ private func infoPlist(imagePath: String, devices: [String]) -> String {
     let runner = BusyDetachRunner(succeedOnAttempt: 1,
                                   infoPlist: infoPlist(imagePath: image.path,
                                                        devices: ["/dev/disk9s1", "/dev/disk9"]))
-    ArchiveReader.detachDevices(forImage: image, runner: runner)
+    ArchiveReader.detachOrphans(ofImage: image, runner: runner)
     let detached = runner.commands.filter { $0.first == "detach" }.compactMap { $0.dropFirst().first }
     #expect(Set(detached) == ["/dev/disk9", "/dev/disk9s1"])
     // whole-disk first: detaching it takes the partitions with it
     #expect(detached.first == "/dev/disk9")
+}
+
+// A failed attach's cleanup detached every device of the image. The commonest reason
+// an attach fails is that the image is already open, so that pulled a restore out
+// in the middle of its copy, or a mirror run out in the middle of its rsync. A device
+// with something mounted on it is somebody's; only mountless ones are debris.
+@Test func anImageMountedSomewhereIsNotAnOrphan() {
+    let image = URL(fileURLWithPath: "/tmp/orphan-test/Lib.sparsebundle")
+    let runner = BusyDetachRunner(succeedOnAttempt: 1,
+                                  infoPlist: infoPlist(imagePath: image.path, devices: ["/dev/disk9", "/dev/disk9s1"],
+                                                       mountedAt: "/private/var/folders/x/T/cf-open-1/mnt"))
+    ArchiveReader.detachOrphans(ofImage: image, runner: runner)
+    #expect(runner.commands.filter { $0.first == "detach" }.isEmpty, "detached a mounted image: \(runner.commands)")
 }
 
 // MARK: - 1.5.4: the folder-library drill, probed directly (no image needed)

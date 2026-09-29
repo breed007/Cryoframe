@@ -112,13 +112,13 @@ public struct ArchiveReader: Sendable {
                 let dmg = try singleFile(result.artifacts, work: work, name: "reassembled.dmg", fm: fm)
                 let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
                 mountPoint = mnt; attemptedImage = dmg
-                try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: dmg, mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
+                try attach(dmg, at: mnt, encrypted: enc, stdin: stdin)
                 return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: teardown) }
 
             case .liveMirror:
                 let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
                 mountPoint = mnt; attemptedImage = result.artifacts[0]
-                try DiskImageGate.serialized { try exec(ArchivePlan.attach(image: result.artifacts[0], mountpoint: mnt, readonly: true, encrypted: enc), stdin: stdin) }
+                try attach(result.artifacts[0], at: mnt, encrypted: enc, stdin: stdin)
                 return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: teardown) }
 
             case .sealedZip:
@@ -129,9 +129,34 @@ public struct ArchiveReader: Sendable {
             }
         } catch {
             if let mnt = mountPoint { Self.detach(mnt, runner: teardown) }   // may be a no-op; cheap either way
-            if let image = attemptedImage { Self.detachDevices(forImage: image, runner: teardown) }
+            if let image = attemptedImage { Self.detachOrphans(ofImage: image, runner: teardown) }
             OpenedArchive.removeWork(work)
             throw error
+        }
+    }
+
+    /// attach `image` read-only at `mnt`, or say plainly that it is already open.
+    ///
+    /// A second attach of an image that is already attached fails "Resource busy"
+    /// (measured on macOS 26, every combination of format, read-only or not, and
+    /// passphrase), which the busy retries then repeated for 13 seconds before the
+    /// failure's cleanup detached every device of the image: another reader's mount,
+    /// or a mirror run's read-write attach in the middle of its rsync. Older macOS
+    /// has been seen answering 0 without mounting anything, so that is caught too.
+    private func attach(_ image: URL, at mnt: URL, encrypted: Bool, stdin: Data?) throws {
+        let look = runner.forTeardown
+        MirrorMounts.releaseAbandoned(image, runner: look)       // a crashed process's attach
+        try MirrorMounts.refuseIfOpen(image, runner: look)
+        do {
+            try DiskImageGate.serialized {
+                try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
+            }
+        } catch {
+            try MirrorMounts.refuseIfOpen(image, except: mnt, runner: look)   // opened by someone else meanwhile
+            throw error
+        }
+        guard MountPoint.isMounted(mnt) else {
+            throw DiskImageInUse(image: image.path, mountedAt: MirrorMounts.mountPoints(of: image, runner: look))
         }
     }
 
@@ -160,16 +185,19 @@ public struct ArchiveReader: Sendable {
         }
     }
 
-    /// detach a browse mount, retrying then forcing — Finder holding the mount open
-    /// otherwise leaves it (and the temp dir) attached after "Done browsing".
-    /// Force-detach every device still attached for this image.
+    /// Force-detach the devices a failed attach of `image` left behind with nothing
+    /// mounted on them.
     ///
-    /// A failed attach can leave a device behind with NO mount point — the device
-    /// node exists, nothing was mounted. Detaching by path cannot find those, so they
-    /// accumulate, and each orphan makes the next attach likelier to fail with EAGAIN
-    /// until nothing on the Mac will mount. Only a reboot or a manual detach clears
-    /// them, which is not a thing to ask of someone whose backup just failed.
-    @Sendable static func detachDevices(forImage image: URL, runner: CommandRunner) {
+    /// A failed attach can leave a device behind with NO mount point. Detaching by
+    /// path cannot find those, so they accumulate, and each orphan makes the next
+    /// attach likelier to fail with EAGAIN until nothing on the Mac will mount. Only
+    /// a reboot or a manual detach clears them, which is not a thing to ask of someone
+    /// whose backup just failed.
+    ///
+    /// Only those: this used to detach every device of the image, and the image being
+    /// open elsewhere is the commonest reason an attach fails, so it unmounted a
+    /// restore in the middle of its copy, or a mirror run in the middle of its rsync.
+    @Sendable static func detachOrphans(ofImage image: URL, runner: CommandRunner) {
         guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"]), r.ok,
               let data = r.stdout.data(using: .utf8),
               let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
@@ -178,25 +206,27 @@ public struct ArchiveReader: Sendable {
         for img in images {
             guard let path = img["image-path"] as? String,
                   URL(fileURLWithPath: path).resolvingSymlinksInPath().path == target,
-                  let entities = img["system-entities"] as? [[String: Any]] else { continue }
+                  let entities = img["system-entities"] as? [[String: Any]],
+                  !entities.contains(where: { $0["mount-point"] != nil }) else { continue }
             // whole-disk entries first: detaching one takes its partitions with it.
             let devices = entities.compactMap { $0["dev-entry"] as? String }
                 .sorted { $0.count < $1.count }
             // A detach issued during the contention that caused the failed attach is
             // itself likely to come back EAGAIN. Firing it once and discarding the
-            // result leaves the orphan exactly where it was — and an orphan is what
-            // makes the NEXT attach fail. Cleanup that gives up quietly is how one busy
-            // moment becomes a Mac that will not mount anything.
+            // result leaves the orphan exactly where it was.
             for dev in devices { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", dev, "-force"]) }
         }
     }
 
+    /// Returns at once when nothing is mounted there: a failed open cleaned up by
+    /// retrying a detach that could only fail, five times with backoff, 6 s in all.
     @Sendable static func detach(_ mnt: URL, runner: CommandRunner) {
         for i in 0..<5 {
+            if !MountPoint.isMounted(mnt) { return }
             if let r = try? runner.run("/usr/bin/hdiutil", ["detach", mnt.path]), r.ok { return }
             Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
         }
-        _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", mnt.path])
+        if MountPoint.isMounted(mnt) { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", mnt.path]) }
     }
 
     /// on launch, force-detach and remove any archive a crashed process left open,

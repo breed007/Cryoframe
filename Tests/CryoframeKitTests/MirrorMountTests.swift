@@ -160,4 +160,33 @@ private var deadOwner: ProcessIdentity {
         #expect(!FileManager.default.fileExists(atPath: dead.path))
         #expect(MountPoint.isMounted(live.appendingPathComponent("mnt")), "the sweep detached a live run's mirror")
     }
+
+    // An image that is already open used to fail after 13 seconds of retries with
+    // hdiutil's own "attach failed - Resource busy". Now it's recognized at once and
+    // said plainly, for a reader and for a mirror run alike.
+    @Test func anImageAlreadyOpenIsSaidToBeOpenWithoutWaiting() throws {
+        let src = try library(files: 4)
+        let out = tempDir("inuse"), base = tempDir("base")
+        defer { for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        let result = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out)
+        let first = try ArchiveReader(workBase: base).open(result)
+        defer { first.close() }
+
+        var start = ProcessInfo.processInfo.systemUptime
+        #expect(throws: DiskImageInUse.self) { _ = try ArchiveReader(workBase: base).open(result) }
+        #expect(ProcessInfo.processInfo.systemUptime - start < 5, "a reader waited out the busy retries first")
+        start = ProcessInfo.processInfo.systemUptime
+        #expect(throws: DiskImageInUse.self) { _ = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out) }
+        #expect(ProcessInfo.processInfo.systemUptime - start < 5, "a mirror run waited out the busy retries first")
+        // one that would grow the image first: refused before the resize, which on an
+        // open image failed EAGAIN after the retries and left the mirror marked open
+        start = ProcessInfo.processInfo.systemUptime
+        #expect(throws: DiskImageInUse.self) {
+            _ = try SparseBundleMirrorEngine(sizeGB: 2, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        }
+        #expect(ProcessInfo.processInfo.systemUptime - start < 5, "growing an open image waited out the busy retries")
+        #expect(!MirrorSeal.isOpen(out), "a run refused before touching the image left it marked open")
+        #expect(MountPoint.isMounted(first.root))
+    }
 }

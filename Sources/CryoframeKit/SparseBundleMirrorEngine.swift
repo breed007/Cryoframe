@@ -126,6 +126,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let legacy = destinationDir.appendingPathComponent(".\(source.name).mirror-mnt")
         if fm.fileExists(atPath: legacy.path) { try MountPoint.clear(legacy, runner: teardown) }
         MirrorMounts.releaseAbandoned(bundle, runner: teardown)
+        // open elsewhere (a restore, a check, another run): say so now, before growing
+        // it or attaching it, rather than fail on hdiutil's "Resource busy" later
+        if fm.fileExists(atPath: bundle.path) { try MirrorMounts.refuseIfOpen(bundle, runner: teardown) }
 
         // `touched` is set at each step that changes the image, so a run that fails
         // before any of them leaves the manifest standing
@@ -151,14 +154,18 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         }
         try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
 
-        try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
-        // hdiutil answers 0 when the image is already attached somewhere else (the
-        // restore window browsing it, say), and then nothing is mounted here: rsync
-        // would write onto the startup disk instead of into the image.
+        do {
+            try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
+        } catch {
+            try MirrorMounts.refuseIfOpen(bundle, except: mountpoint, runner: teardown)   // opened elsewhere meanwhile
+            throw error
+        }
+        // An image already attached elsewhere fails to attach again ("Resource busy")
+        // on current macOS; older versions have answered 0 and mounted nothing, and
+        // then rsync would write onto the startup disk instead of into the image.
         // Refuse rather than detach someone else's open copy.
         guard MountPoint.isMounted(mountpoint) else {
-            throw ArchiveError.toolFailed(tool: "hdiutil", status: 0,
-                                          stderr: "the mirror is already open somewhere else (the restore window, or another run of this job), so it did not mount at \(mountpoint.path)")
+            throw DiskImageInUse(image: bundle.path, mountedAt: MirrorMounts.mountPoints(of: bundle, runner: teardown))
         }
         touched = true          // attached read-write: the image changes from here
         // rsync into a clone and swap, so the copy restore reads is never half-updated
@@ -177,7 +184,11 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
               let current = Self.currentSectors(r.stdout) else { return nil }   // unknown: leave it as it is
         guard current < Self.sectors(gb: gb) * 99 / 100 else { return current * 512 }   // within partition overhead
         touched = true
-        try execute(ArchivePlan.resize(image: bundle, sizeGB: gb, encrypted: encrypted), stdin: stdin)
+        do {
+            try execute(ArchivePlan.resize(image: bundle, sizeGB: gb, encrypted: encrypted), stdin: stdin)
+        } catch ArchiveError.toolFailed(_, _, let stderr) {
+            throw MirrorSpaceError.couldNotGrow(stderr.split(separator: "\n").last.map(String.init) ?? "")
+        }
         return Self.sectors(gb: gb) * 512
     }
 
@@ -227,6 +238,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 public enum MirrorSpaceError: Error, Equatable {
     case notEnoughRoom(needed: UInt64, free: UInt64)
     case imageTooSmall(size: UInt64, needed: UInt64)
+    case couldNotGrow(String)
 }
 
 extension MirrorSpaceError: LocalizedError {
@@ -236,6 +248,8 @@ extension MirrorSpaceError: LocalizedError {
             return "not enough space for the mirror: this run needs about \(JobExecutor.human(needed)) more and only \(JobExecutor.human(free)) is free. Nothing was changed; free up space or choose a bigger destination."
         case .imageTooSmall(let size, let needed):
             return "the mirror's disk image holds \(JobExecutor.human(size)) and the library needs about \(JobExecutor.human(needed)). Nothing was changed."
+        case .couldNotGrow(let why):
+            return "couldn't make the mirror's disk image bigger to fit the drive (\(why.isEmpty ? "hdiutil gave no reason" : why)). The mirror is unchanged; run again."
         }
     }
 }
