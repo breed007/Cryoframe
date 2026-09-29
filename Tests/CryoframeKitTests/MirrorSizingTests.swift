@@ -78,6 +78,23 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
     // a drive that won't say is not read as full
     #expect(SparseBundleMirrorEngine.roomVerdict(needs: 250 * gib, held: 0, imageBytes: .max, freeNow: nil, freeEventually: nil) == nil)
 }
+
+// The image is capped to leave a reserve free on its drive, so a drive with room for
+// the library but not for the reserve as well can't take the run. It used to pass
+// this check, make an image too small for the library, and blame the image's size.
+@Test func aDriveShortOfTheReserveIsRefusedAndTheDriveIsBlamed() {
+    let mib: UInt64 = 1 << 20
+    let verdict = SparseBundleMirrorEngine.roomVerdict(needs: 100 * mib, held: 0, imageBytes: .max,
+                                                       freeNow: 110 * mib, freeEventually: 110 * mib, reserve: 19 * mib)
+    #expect(verdict == .notEnoughRoomBesideReserve(needed: 105 * mib, free: 110 * mib, reserve: 19 * mib))
+    let text = verdict?.errorDescription ?? ""
+    #expect(text.contains("drive") && !text.contains("disk image holds"), "\(text)")
+    #expect(SparseBundleMirrorEngine.roomVerdict(needs: 100 * mib, held: 0, imageBytes: .max,
+                                                 freeNow: 125 * mib, freeEventually: 125 * mib, reserve: 19 * mib) == nil)
+    // what the image already holds counts toward the library here too
+    #expect(SparseBundleMirrorEngine.roomVerdict(needs: 100 * mib, held: 90 * mib, imageBytes: .max,
+                                                 freeNow: 40 * mib, freeEventually: 40 * mib, reserve: 19 * mib) == nil)
+}
 }
 
 @Test func theImageSizeComesFromTheDrive() {
@@ -184,6 +201,51 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
         #expect(!MirrorSeal.isOpen(out), "a refused run left the mirror marked open")
         let check = try ChecksumVerifier().reverify(archiveDir: out)
         #expect(check.passed, "\(check.details)")
+    }
+}
+
+extension MirrorSizingOnDisk {
+    // A first run on a drive with room for the library but not for the reserve kept
+    // free beside it: refused before an image is made, and the message is about the
+    // drive. It used to make the image, find it too small, and say "the mirror's disk
+    // image holds 93 MB".
+    @Test func aFirstRunOnADriveShortOfTheReserveMakesNoImage() throws {
+        let scratch = tempDir("reserve"), base = tempDir("base")
+        let src = tempDir("reservesrc").appendingPathComponent("Lib")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        for i in 0..<10 { try Data(count: 10 << 20).write(to: src.appendingPathComponent("p\(i).raw")) }
+        let drive = try scratchDrive("380m", in: scratch)
+        defer {
+            MountPoint.detach(drive, runner: ProcessCommandRunner())
+            for d in [scratch, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) }
+        }
+        let needs = JobExecutor.directorySize(src)
+        let margin = min(needs / 20, 1 << 30)
+        let reserve = MirrorSizing.reserve(capacity: StorageReporter.volume(of: drive).total)
+        // leave room for the library and its margin, and half the reserve
+        let leave = needs + margin + reserve / 2
+        let filler = drive.appendingPathComponent("other.bin")
+        FileManager.default.createFile(atPath: filler.path, contents: nil)
+        let h = try #require(FileHandle(forWritingAtPath: filler.path))
+        while let now = JobExecutor.freeNow(for: drive), now > leave + (1 << 20) {
+            try h.write(contentsOf: Data(count: Int(min(now - leave, 8 << 20))))
+            try h.synchronize()
+        }
+        try h.close()
+        let free = try #require(JobExecutor.freeNow(for: drive))
+        try #require(free >= needs + margin && free < needs + margin + reserve, "free \(free) is outside the gap this is about")
+
+        let out = drive.appendingPathComponent("Lib")
+        var failure: Error?
+        do {
+            _ = try SparseBundleMirrorEngine(mountBase: base).archive(ArchiveSource(name: "Lib", root: src, sizeHint: needs), to: out)
+        } catch { failure = error }
+        if case .notEnoughRoomBesideReserve? = failure as? MirrorSpaceError {} else {
+            Issue.record("expected a refusal about the drive's reserve, got \(String(describing: failure))")
+        }
+        #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent("Lib.sparsebundle").path),
+                "an image was made for a run that was then refused")
+        #expect(!MirrorSeal.isOpen(out))
     }
 }
 

@@ -277,11 +277,12 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // what is free now, not what could be purged later (see JobExecutor.freeNow)
         let free = JobExecutor.freeNow(for: destinationDir)
         let reserve = MirrorSizing.reserve(capacity: capacity)
+        // before making, growing or shrinking anything
+        if let needs = source.sizeHint {
+            try Self.checkRoom(for: needs, image: bundle, imageBytes: .max, destination: destinationDir, reserve: reserve)
+        }
         var imageBytes: UInt64
         if !fm.fileExists(atPath: bundle.path) {
-            if let needs = source.sizeHint {     // before making anything
-                try Self.checkRoom(for: needs, image: bundle, imageBytes: .max, destination: destinationDir)
-            }
             imageBytes = MirrorSizing.targetBytes(ceiling: ceiling, held: 0, free: free, reserve: reserve, minimum: 0)
             touched = true
             try execute(ArchivePlan.sparseBundleCreate(output: bundle, name: source.name, sizeGB: 0,
@@ -292,7 +293,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                                  touched: &touched) ?? ceiling
         }
         if let needs = source.sizeHint {
-            try Self.checkRoom(for: needs, image: bundle, imageBytes: imageBytes, destination: destinationDir)
+            try Self.checkRoom(for: needs, image: bundle, imageBytes: imageBytes, destination: destinationDir, reserve: reserve)
         }
 
         // watch the drive for as long as the image is attached (see MirrorWriteGuard)
@@ -395,10 +396,15 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// Files changed in place need room too and can't be known ahead; running out for
     /// those fails the run with the previous copy intact. An unknown free-space figure
     /// (some network shares) is not read as "full".
-    static func checkRoom(for needs: UInt64, image: URL, imageBytes: UInt64, destination: URL) throws {
+    ///
+    /// The image is capped to leave `reserve` free on the drive (see MirrorSizing), so
+    /// the drive must hold that as well. Without it a first run on a drive short of the
+    /// reserve made an image, found it too small, and blamed the image's size.
+    static func checkRoom(for needs: UInt64, image: URL, imageBytes: UInt64, destination: URL,
+                          reserve: UInt64 = 0) throws {
         if let refusal = roomVerdict(needs: needs, held: Checksum.byteSize(of: image), imageBytes: imageBytes,
                                      freeNow: JobExecutor.freeNow(for: destination),
-                                     freeEventually: JobExecutor.freeSpace(for: destination)) {
+                                     freeEventually: JobExecutor.freeSpace(for: destination), reserve: reserve) {
             throw refusal
         }
     }
@@ -411,7 +417,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// inside the image on every run, since nothing ever made macOS purge. A run in
     /// that gap is now refused up front and told why.
     static func roomVerdict(needs: UInt64, held: UInt64, imageBytes: UInt64,
-                            freeNow: UInt64?, freeEventually: UInt64?) -> MirrorSpaceError? {
+                            freeNow: UInt64?, freeEventually: UInt64?, reserve: UInt64 = 0) -> MirrorSpaceError? {
         let margin = min(needs / 20, 1 << 30)
         let fromDrive = (needs > held ? needs - held : 0) + margin
         if let eventually = freeEventually, eventually < fromDrive {
@@ -420,6 +426,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         if let now = freeNow, now < fromDrive {
             return .notEnoughRoomUntilPurged(needed: fromDrive, free: now,
                                              purgeable: (freeEventually ?? now) > now ? (freeEventually ?? now) - now : 0)
+        }
+        if let now = freeNow, now < fromDrive + reserve {
+            return .notEnoughRoomBesideReserve(needed: fromDrive, free: now, reserve: reserve)
         }
         // a fixed-size image too small to hold the library at all
         if imageBytes < needs + margin {
@@ -456,6 +465,8 @@ public enum MirrorSpaceError: Error, Equatable {
     /// enough room only if macOS gave up the purgeable space it is holding
     case notEnoughRoomUntilPurged(needed: UInt64, free: UInt64, purgeable: UInt64)
     case imageTooSmall(size: UInt64, needed: UInt64)
+    /// the room is there, but only by eating into what is kept free on the drive
+    case notEnoughRoomBesideReserve(needed: UInt64, free: UInt64, reserve: UInt64)
     case couldNotResize(String)
 }
 
@@ -468,6 +479,8 @@ extension MirrorSpaceError: LocalizedError {
             return "not enough space for the mirror: this run needs about \(JobExecutor.human(needed)) more and \(JobExecutor.human(free)) is free now. macOS is holding another \(JobExecutor.human(purgeable)) as purgeable space (local snapshots and caches), which Finder counts as available, but it releases that only when something else needs it, and a mirror can't make it. Nothing was changed; free up space on the drive and run again."
         case .imageTooSmall(let size, let needed):
             return "the mirror's disk image holds \(JobExecutor.human(size)) and the library needs about \(JobExecutor.human(needed)). Nothing was changed."
+        case .notEnoughRoomBesideReserve(let needed, let free, let reserve):
+            return "not enough space for the mirror on its drive: this run needs about \(JobExecutor.human(needed)) more and \(JobExecutor.human(free)) is free, but a mirror always leaves \(JobExecutor.human(reserve)) of its drive free, because a disk image whose drive fills up loses data. Nothing was changed; free up space on the drive or choose a bigger one."
         case .couldNotResize(let why):
             return "couldn't resize the mirror's disk image to fit the room on its drive (\(why.isEmpty ? "hdiutil gave no reason" : why)). The mirror is unchanged; run again."
         }
