@@ -50,7 +50,16 @@ enum MirrorCopy {
             }
         }
 
-        try execute(ArchivePlan.rsync(root: source, into: next))
+        do {
+            try execute(ArchivePlan.rsync(root: source, into: next))
+        } catch ArchiveError.toolFailed(_, _, let stderr) where stderr.localizedCaseInsensitiveContains("No space left on device") {
+            // Updating beside the previous copy needs room for everything that changed
+            // as well as the library. When the drive runs out, the staging copy is what
+            // is holding it full: left there, every later run failed the same way even
+            // once the library had shrunk. The previous copy is untouched.
+            removeStaging(staging, runner: runner.forTeardown)
+            throw MirrorCopyError.driveFilled
+        }
 
         // Never swap anywhere but inside the image. If it went away under the run,
         // `volume` is now a plain folder on the startup disk.
@@ -125,16 +134,21 @@ enum MirrorCopy {
     }
 }
 
-enum MirrorCopyError: Error, Equatable {
+/// What goes wrong while a run is updating the mirror (MirrorSpaceError is what
+/// refuses a run before it starts).
+public enum MirrorCopyError: Error, Equatable {
     case imageWentAway(String)
     case swapFailed(String)
+    case driveFilled
 }
 
 extension MirrorCopyError: LocalizedError {
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .imageWentAway(let path):
             return "the mirror's disk image was detached from \(path) during the run; the previous copy is untouched — run again"
+        case .driveFilled:
+            return "the mirror ran out of room during the run. A mirror is updated beside the previous copy, so it needs room for everything that changed as well as the library. The previous copy is intact; free up space on the drive, or use a bigger one, and run again."
         case .swapFailed(let why):
             return "couldn't put the updated copy in place (\(why)); the previous copy is untouched — run again"
         }

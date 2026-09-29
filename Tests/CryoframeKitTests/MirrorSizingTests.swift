@@ -56,6 +56,22 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
     #expect(MirrorSizing.fixed(gb: 7).imageGB(destinationCapacity: 2_000_000_000_000) == 7)
 }
 
+// Held to what the drive can back: the image fills before the drive does, so a run
+// that runs out of room fails as an ordinary full disk instead of losing band writes.
+@Test func theImageIsHeldToWhatItsDriveCanBack() {
+    let gib: UInt64 = 1 << 30
+    // plenty of room: the ceiling applies
+    #expect(MirrorSizing.targetBytes(ceiling: 100 * gib, held: 10 * gib, free: 500 * gib, reserve: gib, minimum: 0) == 100 * gib)
+    // a nearly full drive: what's held plus what's free, less the reserve
+    #expect(MirrorSizing.targetBytes(ceiling: 100 * gib, held: 10 * gib, free: 5 * gib, reserve: gib, minimum: 0) == 14 * gib)
+    // less free than the reserve: no room to grow into, but never below hdiutil's minimum
+    #expect(MirrorSizing.targetBytes(ceiling: 100 * gib, held: 10 * gib, free: gib / 2, reserve: gib, minimum: 11 * gib) == 11 * gib)
+    // a drive that won't say: the ceiling
+    #expect(MirrorSizing.targetBytes(ceiling: 100 * gib, held: 10 * gib, free: nil, reserve: gib, minimum: 0) == 100 * gib)
+    #expect(MirrorSizing.reserve(capacity: 380 << 20) == 19 << 20)
+    #expect(MirrorSizing.reserve(capacity: 4000 * gib) == gib)
+}
+
 @Suite(.serialized) struct MirrorSizingOnDisk {
 
     // A URL keeps the resource values it has read, and the app holds a job's
@@ -104,8 +120,10 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
         // what a job saved before 1.6 says: a fixed 1 GB
         let target = Target.localVolume(id: "t", name: "Disk", dir: dest)
         _ = try EngineFactory.engine(for: .liveMirror(sizeGB: 1), target: target).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        // as big as the drive, or as the room the drive has left, whichever is less
         let capacity = try #require(StorageReporter.volume(of: dest).total)
-        #expect(try imageBytes(bundle) + (1 << 30) > capacity, "the mirror wasn't grown to its drive")
+        let free = try #require(JobExecutor.freeSpace(for: dest))
+        #expect(try imageBytes(bundle) + (2 << 30) > min(capacity, free), "the mirror wasn't grown to its drive")
     }
 
     // A library that no longer fits on the drive used to fail part-way through rsync,

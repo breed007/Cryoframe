@@ -84,10 +84,11 @@ public enum ArchivePlan {
         Command("/usr/bin/split", ["-b", "\(cap)", file.path, prefix])
     }
 
+    /// `sectors`, when given, sets the size in 512-byte sectors instead of `sizeGB`.
     public static func sparseBundleCreate(output: URL, name: String, sizeGB: Int, bandSectors: Int,
-                                          encrypted: Bool = false) -> Command {
-        var args = ["create", "-type", "SPARSEBUNDLE", "-fs", "APFS",
-                    "-size", "\(sizeGB)g", "-volname", name,
+                                          encrypted: Bool = false, sectors: UInt64? = nil) -> Command {
+        let size = sectors.map { ["-sectors", "\($0)"] } ?? ["-size", "\(sizeGB)g"]
+        var args = ["create", "-type", "SPARSEBUNDLE", "-fs", "APFS"] + size + ["-volname", name,
                     "-imagekey", "sparse-band-size=\(bandSectors)"]
         if encrypted { args += ["-encryption", "AES-256", "-stdinpass"] }
         args += [output.path]
@@ -101,8 +102,9 @@ public enum ArchivePlan {
 
     /// grow an image (and the APFS volume inside it) to `sizeGB`. Measured on APFS
     /// sparsebundles, plain and encrypted: the mounted volume reports the new size.
-    public static func resize(image: URL, sizeGB: Int, encrypted: Bool = false) -> Command {
-        Command("/usr/bin/hdiutil", ["resize", "-size", "\(sizeGB)g"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
+    public static func resize(image: URL, sizeGB: Int, encrypted: Bool = false, sectors: UInt64? = nil) -> Command {
+        let size = sectors.map { ["-sectors", "\($0)"] } ?? ["-size", "\(sizeGB)g"]
+        return Command("/usr/bin/hdiutil", ["resize"] + size + (encrypted ? ["-stdinpass"] : []) + [image.path])
     }
 
     /// attach a sparsebundle or dmg at a known mountpoint. `readonly` for
