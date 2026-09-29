@@ -9,6 +9,8 @@
 //
 
 import Foundation
+import ServiceManagement
+import CryoframeShared
 import CryoframeKit
 
 enum AgentMain {
@@ -143,15 +145,28 @@ enum AgentMain {
 
     /// Ask the helper to clean up after crashed runs before any run of ours starts.
     /// Bounded: if the helper doesn't answer, the backups matter more than the
-    /// tidying, and the helper keeps anything a live process owns either way.
+    /// tidying. Giving up means giving up: a late answer must not start a reconcile
+    /// alongside the runs that follow (the helper would still keep what they own,
+    /// but that is the second guard, not the first).
     private static func cleanUpLeftovers(jobIDs: [String], locks: RunLocks) {
+        // no helper set up: nothing could answer, so don't wait a minute to find out
+        guard SMAppService.daemon(plistName: CryoframeHelper.daemonPlistName).status == .enabled else { return }
+        let wanted = StillWanted()
+        let helper = XPCPrivilegedHelper()
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            let helper = XPCPrivilegedHelper()
-            _ = await LeftoverCleanup.run(helper: helper, locks: locks, jobIDs: jobIDs)
-            helper.invalidate()
+            _ = await LeftoverCleanup.run(helper: helper, locks: locks, jobIDs: jobIDs,
+                                          stillWanted: { wanted.value })
             done.signal()
         }
-        _ = done.wait(timeout: .now() + 60)
+        if done.wait(timeout: .now() + 60) == .timedOut { wanted.giveUp() }
+        helper.invalidate()                 // fails any call still waiting for an answer
+    }
+
+    private final class StillWanted: @unchecked Sendable {
+        private let lock = NSLock()
+        private var wanted = true
+        var value: Bool { lock.lock(); defer { lock.unlock() }; return wanted }
+        func giveUp() { lock.lock(); wanted = false; lock.unlock() }
     }
 }

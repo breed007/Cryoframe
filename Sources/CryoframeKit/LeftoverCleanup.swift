@@ -21,16 +21,26 @@ public enum LeftoverCleanup {
         case skippedRunInProgress(String)     // a job id whose run lock is held
         case skippedOldHelper(String)         // the helper's reported version
         case skippedLocksUnreadable(String)   // can't tell whether anything is running
+        case abandoned                        // the caller stopped waiting before it was asked
         case failed(String)
     }
 
-    /// - Parameter jobIDs: every job this user has; if any is running, in this
-    ///   process or another, cleanup waits for a later launch.
-    public static func run(helper: PrivilegedHelper, locks: RunLocks, jobIDs: [String]) async -> Outcome {
+    /// - Parameters:
+    ///   - jobIDs: every job this user has; if any is running, in this process or
+    ///     another, cleanup waits for a later launch.
+    ///   - stillWanted: asked just before reconcile. A caller that stops waiting
+    ///     (the agent, after a minute) answers false from then on, so a helper that
+    ///     answers late never starts a reconcile alongside the runs that followed.
+    public static func run(helper: PrivilegedHelper, locks: RunLocks, jobIDs: [String],
+                           stillWanted: @escaping @Sendable () -> Bool = { true }) async -> Outcome {
         if let skip = gate(locks: locks, jobIDs: jobIDs) { return skip }
         do {
             let info = try await helper.handshake()
             guard isAtLeast(info.version, minimumHelperVersion) else { return .skippedOldHelper(info.version) }
+            // the handshake can take a while (a helper being launched); a run may
+            // have started meanwhile, or the caller given up. Look again.
+            guard stillWanted() else { return .abandoned }
+            if let skip = gate(locks: locks, jobIDs: jobIDs) { return skip }
             return .cleaned(try await helper.reconcile())
         } catch {
             return .failed(error.localizedDescription)

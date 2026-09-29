@@ -258,3 +258,15 @@ private final class ReportBox: @unchecked Sendable { var report: ReconcileReport
     #expect(box.report?.unmounted == [r.mount] && box.report?.deletedSnapshots == [r.snapshot])
 }
 
+// MARK: - an abandoned cleanup
+
+// The agent stops waiting for cleanup after a while and starts its runs. A cleanup
+// that gets its answer from the helper after that must not go on to reconcile.
+@Test func cleanupThatIsNoLongerWantedNeverReconciles() async throws {
+    let helper = FakePrivilegedHelper(version: SnapshotReconciler.helperVersion)
+    let dir = tempDir("gate"); defer { try? FileManager.default.removeItem(at: dir) }
+    let outcome = await LeftoverCleanup.run(helper: helper, locks: RunLocks(directory: dir), jobIDs: [],
+                                            stillWanted: { false })
+    if case .cleaned = outcome { Issue.record("reconciled after the caller gave up on it") }
+    #expect(await helper.calls == [])
+}
