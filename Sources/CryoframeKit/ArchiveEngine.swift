@@ -19,7 +19,12 @@ import Foundation
 public struct ArchiveSource: Sendable, Equatable {
     public let name: String        // base name for the artifact
     public let root: URL           // directory to archive (e.g. the frozen .photoslibrary)
-    public init(name: String, root: URL) { self.name = name; self.root = root }
+    /// bytes the source takes up, when the caller has measured it (JobExecutor walks
+    /// every source before archiving). The mirror checks the destination against it.
+    public let sizeHint: UInt64?
+    public init(name: String, root: URL, sizeHint: UInt64? = nil) {
+        self.name = name; self.root = root; self.sizeHint = sizeHint
+    }
 }
 
 public enum ArchiveFormat: String, Sendable, Equatable, Codable {

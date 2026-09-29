@@ -13,7 +13,13 @@ import CryoframeShared
 public enum FormatChoice: Sendable, Equatable, Codable {
     case sealedDMG
     case sealedZip
+    /// `sizeGB` is what a job saved before 1.6 chose. It is kept so those jobs (and an
+    /// older app reading a newer job) still decode, and is otherwise ignored: the image
+    /// is sized from its destination (see MirrorSizing).
     case liveMirror(sizeGB: Int)
+
+    /// what a new mirror job records as its size, for the benefit of older versions
+    public static let legacyMirrorGB = 500
 
     /// sealed formats are versioned into timestamped folders; a live mirror is a single
     /// in-place copy. Two sealed jobs to the same (target, library) share version folders
@@ -38,11 +44,11 @@ public enum EngineFactory {
             return SealedArchiveEngine(.dmg, split: target.constraints.splitPolicy, runner: runner, passphrase: passphrase)
         case .sealedZip:
             return SealedArchiveEngine(.zip, split: target.constraints.splitPolicy, runner: runner)
-        case .liveMirror(let sizeGB):
+        case .liveMirror:
             guard target.constraints.supportsIncremental else {
                 throw TargetError.incrementalUnsupported(target.displayName)
             }
-            return SparseBundleMirrorEngine(sizeGB: sizeGB, runner: runner, passphrase: passphrase)
+            return SparseBundleMirrorEngine(sizing: .fromDestination, runner: runner, passphrase: passphrase)
         }
     }
 }

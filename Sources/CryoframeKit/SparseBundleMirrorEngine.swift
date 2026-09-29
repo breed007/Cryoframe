@@ -11,18 +11,56 @@
 
 import Foundation
 
+/// How big the mirror's image is made.
+///
+/// A size used to be chosen when the job was set up (500 GB unless changed, and the
+/// setup wizard never showed it), and a library that outgrew it failed with "no space"
+/// from inside the image, on a drive with plenty left. A sparse image costs only what
+/// is written to it (measured: 30 to 47 MB on disk whether made at 1 TB or 64 TB,
+/// created in about a second), so it is now made as big as the drive it lives on and
+/// grown to match if the drive turns out bigger than the image.
+public enum MirrorSizing: Sendable, Equatable {
+    /// the destination volume's capacity, or `unknownCapacityGB` where it doesn't say
+    case fromDestination
+    /// exactly this many GiB, grown to if smaller. Tests use it to keep images small.
+    case fixed(gb: Int)
+
+    /// for a destination that reports no capacity (some network shares). Large, since
+    /// the size costs nothing; the free-space check before each run is what protects
+    /// a destination that is actually small.
+    public static let unknownCapacityGB = 16 * 1024
+
+    /// the image size, in GiB, for a destination of `capacity` bytes (nil: unknown)
+    public func imageGB(destinationCapacity capacity: UInt64?) -> Int {
+        switch self {
+        case .fixed(let gb): return max(gb, 1)
+        case .fromDestination:
+            guard let capacity, capacity > 0 else { return Self.unknownCapacityGB }
+            return max(Int(capacity >> 30), 1)
+        }
+    }
+}
+
 public struct SparseBundleMirrorEngine: ArchiveEngine {
-    let sizeGB: Int
+    let sizing: MirrorSizing
     let bandSectors: Int          // 16384 sectors * 512 = 8 MiB bands
     let runner: CommandRunner
     let passphrase: String?       // AES-256 encryption when set
     let mountBase: URL            // where the image is attached while a run updates it (see MirrorMounts)
 
+    public init(sizing: MirrorSizing = .fromDestination, bandSectors: Int = 16384,
+                runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil,
+                mountBase: URL = MirrorMounts.defaultBase) {
+        self.sizing = sizing; self.bandSectors = bandSectors; self.runner = runner; self.passphrase = passphrase
+        self.mountBase = mountBase
+    }
+
+    /// a fixed-size image, as tests use
     public init(sizeGB: Int, bandSectors: Int = 16384,
                 runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil,
                 mountBase: URL = MirrorMounts.defaultBase) {
-        self.sizeGB = sizeGB; self.bandSectors = bandSectors; self.runner = runner; self.passphrase = passphrase
-        self.mountBase = mountBase
+        self.init(sizing: .fixed(gb: sizeGB), bandSectors: bandSectors, runner: runner,
+                  passphrase: passphrase, mountBase: mountBase)
     }
 
     public func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
@@ -83,14 +121,20 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         if fm.fileExists(atPath: legacy.path) { try MountPoint.clear(legacy, runner: teardown) }
         MirrorMounts.releaseAbandoned(bundle, runner: teardown)
 
-        // `touched`: from here on the image may differ from its manifest
+        // `touched` is set at each step that changes the image, so a run that fails
+        // before any of them leaves the manifest standing
+        let sizeGB = sizing.imageGB(destinationCapacity: StorageReporter.volume(of: destinationDir).total)
+        var imageBytes = Self.sectors(gb: sizeGB) * 512
         if !fm.fileExists(atPath: bundle.path) {
             touched = true
             try execute(ArchivePlan.sparseBundleCreate(output: bundle, name: source.name,
                                                        sizeGB: sizeGB, bandSectors: bandSectors,
                                                        encrypted: encrypted), stdin: stdin)
         } else {
-            try growIfSmallerThanRequested(bundle, stdin: stdin, touched: &touched)
+            imageBytes = try grow(bundle, toGB: sizeGB, stdin: stdin, touched: &touched) ?? imageBytes
+        }
+        if let needs = source.sizeHint {
+            try Self.checkRoom(for: needs, image: bundle, imageBytes: imageBytes, destination: destinationDir)
         }
 
         let work = try MirrorMounts.makeWork(in: mountBase)
@@ -117,18 +161,43 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         try execute(ArchivePlan.detach(mountpoint: mountpoint))
     }
 
-    /// The mirror's size used to be fixed at creation: editing it did nothing, which
-    /// left a library that outgrew its 500 GB default failing with "no space" from
-    /// inside the image. A larger size is now applied here, detached, before the run.
-    /// Never shrinks: a smaller request is refused in the job editor.
-    private func growIfSmallerThanRequested(_ bundle: URL, stdin: Data?, touched: inout Bool) throws {
+    /// Grow an image smaller than `gb` (one made at an older fixed size, or on a drive
+    /// since replaced by a bigger one). Never shrinks. Returns the image's size in
+    /// bytes afterwards, or nil if hdiutil wouldn't say.
+    private func grow(_ bundle: URL, toGB gb: Int, stdin: Data?, touched: inout Bool) throws -> UInt64? {
         let encrypted = passphrase != nil
         let limits = ArchivePlan.resizeLimits(image: bundle, encrypted: encrypted)
         guard let r = try? runner.run(limits.tool, limits.args, stdin: stdin), r.ok,
-              let current = Self.currentSectors(r.stdout) else { return }   // unknown: leave it as it is
-        guard current < Self.sectors(gb: sizeGB) * 99 / 100 else { return }   // within partition overhead
+              let current = Self.currentSectors(r.stdout) else { return nil }   // unknown: leave it as it is
+        guard current < Self.sectors(gb: gb) * 99 / 100 else { return current * 512 }   // within partition overhead
         touched = true
-        try execute(ArchivePlan.resize(image: bundle, sizeGB: sizeGB, encrypted: encrypted), stdin: stdin)
+        try execute(ArchivePlan.resize(image: bundle, sizeGB: gb, encrypted: encrypted), stdin: stdin)
+        return Self.sectors(gb: gb) * 512
+    }
+
+    /// Refuse a run that can't fit, before the image is even attached, rather than let
+    /// the drive fill part-way through rsync.
+    ///
+    /// What the drive has to supply is the library less what the image's bands already
+    /// hold, plus a small margin (5%, at most 1 GiB: a percentage of a 2 TB library
+    /// would refuse runs on a nearly full drive that has room for them). The bands are
+    /// measured on the drive, not inside the image: inside a sparse image the kernel
+    /// caps both free and total figures by the drive's free space, so "used" read from
+    /// there is meaningless (measured: 543 MB "used" in a mirror holding 20 KB).
+    /// Files changed in place need room too and can't be known ahead; running out for
+    /// those fails the run with the previous copy intact. An unknown free-space figure
+    /// (some network shares) is not read as "full".
+    static func checkRoom(for needs: UInt64, image: URL, imageBytes: UInt64, destination: URL) throws {
+        let margin = min(needs / 20, 1 << 30)
+        let held = Checksum.byteSize(of: image)
+        let fromDrive = (needs > held ? needs - held : 0) + margin
+        if let free = JobExecutor.freeSpace(for: destination), free < fromDrive {
+            throw MirrorSpaceError.notEnoughRoom(needed: fromDrive, free: free)
+        }
+        // a fixed-size image too small to hold the library at all
+        if imageBytes < needs + margin {
+            throw MirrorSpaceError.imageTooSmall(size: imageBytes, needed: needs + margin)
+        }
     }
 
     /// `hdiutil resize -limits` prints "min current max" in 512-byte sectors.
@@ -145,6 +214,22 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         guard r.ok else {
             throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent,
                                           status: r.status, stderr: r.stderr)
+        }
+    }
+}
+
+public enum MirrorSpaceError: Error, Equatable {
+    case notEnoughRoom(needed: UInt64, free: UInt64)
+    case imageTooSmall(size: UInt64, needed: UInt64)
+}
+
+extension MirrorSpaceError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .notEnoughRoom(let needed, let free):
+            return "not enough space for the mirror: this run needs about \(JobExecutor.human(needed)) more and only \(JobExecutor.human(free)) is free. Nothing was changed; free up space or choose a bigger destination."
+        case .imageTooSmall(let size, let needed):
+            return "the mirror's disk image holds \(JobExecutor.human(size)) and the library needs about \(JobExecutor.human(needed)). Nothing was changed."
         }
     }
 }

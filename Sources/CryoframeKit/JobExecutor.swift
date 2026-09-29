@@ -197,9 +197,9 @@ public struct JobExecutor: Sendable {
                       let root = placement.root(in: mounts) else {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
                 }
-                let source = ArchiveSource(name: root.lastPathComponent, root: root)
                 let stats = Self.directoryStats(root)
                 let sourceSize = stats.bytes
+                let source = ArchiveSource(name: root.lastPathComponent, root: root, sizeHint: sourceSize)
 
                 // An empty source seals into an archive that reports success and then
                 // cannot be restored: RestoreEngine finds nothing to rebuild the bundle
