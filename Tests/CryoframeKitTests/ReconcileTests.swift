@@ -168,7 +168,7 @@ private let agentRun = ProcessIdentity(pid: 202, startedAt: 2_000)
     p.executableURL = URL(fileURLWithPath: "/usr/bin/true")
     try p.run()
     let id = ProcessIdentity.of(pid: p.processIdentifier)
-    p.waitUntilExit()
+    waitBounded(p)
     // it may already have exited before we looked; either way it is gone now
     #expect(id?.isAlive != true)
     #expect(ProcessIdentity.of(pid: p.processIdentifier) == nil || id == nil)

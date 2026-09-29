@@ -44,7 +44,7 @@ private final class OtherProcessHolding {
 
     func release() {
         try? stdin.fileHandleForWriting.close()
-        process.waitUntilExit()
+        waitBounded(process)
     }
 }
 
@@ -124,7 +124,7 @@ private final class OtherProcessHolding {
     tool.executableURL = URL(fileURLWithPath: "/bin/sleep")
     tool.arguments = ["30"]
     try tool.run()
-    defer { tool.terminate(); tool.waitUntilExit() }
+    defer { tool.terminate(); waitBounded(tool) }
     // the run's process dies without unlocking; the tool it launched lives on
     lease.closeWithoutUnlocking()
     let next = try locks.acquire(jobID: "job", trigger: .scheduled)
@@ -287,8 +287,7 @@ private func lockfCanTake(_ file: URL) throws -> Int32 {
     p.arguments = ["-k", "-t", "0", file.path, "/usr/bin/true"]
     p.standardError = FileHandle.nullDevice
     try p.run()
-    p.waitUntilExit()
-    return p.terminationStatus
+    return waitBounded(p) ?? -1
 }
 
 @Test func aRunWhoseLockFileIsRemovedLocksItAgainForOtherProcesses() throws {
