@@ -471,3 +471,28 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
         #expect(try !ChecksumVerifier().verify(manifest, in: dir).passed, "a changed bundle passed on the legacy digest")
     }
 }
+
+/// A rehearsal looks where a recovery looks. For a mirror that is <volume>/<name>,
+/// not "anything at the volume's root" (which always holds .fseventsd).
+@Suite(.serialized) struct RehearsingAMirror {
+
+    @Test func aMirrorWithoutItsLibraryFailsTheRehearsal() throws {
+        let src = try library(files: 4)
+        let dest = tempDir("reh"), base = tempDir("base")
+        let out = dest.appendingPathComponent("Lib")
+        defer { for d in [dest, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let result = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        #expect(RecoveryRehearsal().rehearse(destination: dest, expecting: ["Lib"]).passed)
+
+        // the library folder goes missing inside an otherwise sound image
+        let mnt = tempDir("reh-mnt")
+        let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", result.artifacts[0].path, "-mountpoint", mnt.path, "-nobrowse"]) }
+        try #require(r.ok, "\(r.stderr)")
+        try FileManager.default.moveItem(at: mnt.appendingPathComponent("Lib"), to: mnt.appendingPathComponent("Elsewhere"))
+        MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt)
+        try ArchiveManifest.write(try ArchiveManifest.build(for: result), toDir: out)
+
+        let rehearsal = RecoveryRehearsal().rehearse(destination: dest, expecting: ["Lib"])
+        #expect(!rehearsal.passed, "a mirror a restore would find nothing in passed the rehearsal: \(rehearsal.outcomes.map(\.detail))")
+    }
+}

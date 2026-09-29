@@ -103,7 +103,11 @@ public struct RecoveryRehearsal: Sendable {
                 }
                 let opened = try ArchiveReader(runner: runner).open(a.archiveResult(), passphrase: key)
                 defer { opened.close() }
-                let entries = (try? FileManager.default.contentsOfDirectory(atPath: opened.root.path)) ?? []
+                // A mirror holds the library at <volume>/<name>, which is what a restore
+                // copies. Its volume root is never empty (.fseventsd), so looking there
+                // passed a mirror a restore would find nothing in.
+                let look = a.format == .liveMirror ? opened.root.appendingPathComponent(a.bundleName) : opened.root
+                let entries = (try? FileManager.default.contentsOfDirectory(atPath: look.path)) ?? []
                 guard !entries.isEmpty else {
                     return LibraryOutcome(library: a.libraryName, version: a.version, ok: false,
                                           detail: "opened, but there is nothing inside it")
