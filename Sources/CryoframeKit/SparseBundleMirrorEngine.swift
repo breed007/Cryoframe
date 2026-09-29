@@ -82,14 +82,20 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // the moment it attaches. Mark it open first, so a run that dies anywhere
         // after this leaves a mirror whose checksum is known not to apply (see
         // MirrorSeal), rather than one that looks corrupt.
+        //
+        // A mark already there is someone else's: a run that crashed, or one still
+        // writing. It stands until a run seals the image again. A run that fails before
+        // it changes anything clears only a mark it made itself; clearing another's
+        // put a manifest that no longer matches back in charge, and the intact copy
+        // was refused as "checksum mismatch" again.
         let wasSealed = fm.fileExists(atPath: destinationDir.appendingPathComponent(ArchiveManifest.sidecarName).path)
-        try MirrorSeal.markOpen(destinationDir)
+        let markedHere = try MirrorSeal.markOpen(destinationDir)
         var touched = false
         do {
             try update(source, in: destinationDir, bundle: bundle, stdin: stdin, touched: &touched)
         } catch {
             if !touched {
-                MirrorSeal.clearOpen(destinationDir)       // never changed: the manifest still holds
+                if markedHere { MirrorSeal.clearOpen(destinationDir) }   // never changed: the manifest still holds
             } else if wasSealed, MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty {
                 // Stopped or failed, but closed: the copy inside is the previous complete
                 // one (MirrorCopy only swaps after rsync succeeds), so the manifest can
@@ -259,9 +265,22 @@ public enum MirrorSeal {
         FileManager.default.fileExists(atPath: dir.appendingPathComponent(openMarkerName).path)
     }
 
-    static func markOpen(_ dir: URL) throws {
-        let owner = (ProcessIdentity.current).flatMap { try? JSONEncoder().encode($0) } ?? Data()
-        try owner.write(to: dir.appendingPathComponent(openMarkerName), options: .atomic)
+    /// mark the mirror open. Returns false when it already was: another run's mark,
+    /// which this run must leave in place unless it seals the image itself.
+    @discardableResult
+    static func markOpen(_ dir: URL) throws -> Bool {
+        let path = dir.appendingPathComponent(openMarkerName).path
+        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
+        if fd < 0 {
+            if errno == EEXIST { return false }
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path,
+                                                          NSUnderlyingErrorKey: POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)])
+        }
+        defer { close(fd) }
+        if let owner = ProcessIdentity.current.flatMap({ try? JSONEncoder().encode($0) }) {
+            _ = owner.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        }
+        return true
     }
 
     static func seal(_ result: ArchiveResult, in dir: URL, encrypted: Bool) throws {
