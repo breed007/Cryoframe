@@ -176,7 +176,14 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         MirrorMounts.releaseAbandoned(bundle, runner: teardown)
         // open elsewhere (a restore, a check, another run): say so now, before growing
         // it or attaching it, rather than fail on hdiutil's "Resource busy" later
-        if fm.fileExists(atPath: bundle.path) { try MirrorMounts.refuseIfOpen(bundle, runner: teardown) }
+        if fm.fileExists(atPath: bundle.path) {
+            try MirrorMounts.refuseIfOpen(bundle, runner: teardown)
+            // Attached with nothing mounted (a failed attach, or a volume unmounted
+            // without ejecting the image): nobody has it open, but the attach below
+            // reused that device, read-only if it was, and failed "volume is read
+            // only" every run. Nothing mounted on it means nobody is using it.
+            ArchiveReader.detachOrphans(ofImage: bundle, runner: teardown)
+        }
 
         // `touched` is set at each step that changes the image, so a run that fails
         // before any of them leaves the manifest standing
