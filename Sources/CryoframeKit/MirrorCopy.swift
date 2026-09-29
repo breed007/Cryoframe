@@ -228,12 +228,21 @@ enum MirrorCopy {
     static func differentAttributes(_ a: String, _ b: String) -> String? {
         guard let names = attributeNames(a) else { return nil }
         guard let copied = attributeNames(b) else { return "has extended attributes that can't be read back" }
-        guard names == copied else { return "has different extended attributes" }
-        for name in names where attributeValue(a, name) != attributeValue(b, name) {
-            return "has a different \(name == "com.apple.ResourceFork" ? "resource fork" : "extended attribute (\(name))")"
+        func called(_ n: String) -> String { n == "com.apple.ResourceFork" ? "resource fork" : n }
+        var found: [String] = []
+        let missing = names.filter { !copied.contains($0) }, extra = copied.filter { !names.contains($0) }
+        if !missing.isEmpty { found.append("is missing extended attribute \(missing.map(called).joined(separator: ", "))") }
+        if !extra.isEmpty { found.append("has extended attribute \(extra.map(called).joined(separator: ", ")) the library doesn't") }
+        let changed = names.filter { copied.contains($0) && attributeValue(a, $0) != attributeValue(b, $0) }
+        if !changed.isEmpty {
+            found.append(changed == ["com.apple.ResourceFork"] ? "has a different resource fork"
+                         : "has a different value for extended attribute \(changed.map(called).joined(separator: ", "))")
         }
-        guard accessList(a) == accessList(b) else { return "has a different access list" }
-        return nil
+        if accessList(a) != accessList(b) {
+            found.append(accessList(b) == nil ? "is missing its access list"
+                         : accessList(a) == nil ? "has an access list the library doesn't" : "has a different access list")
+        }
+        return found.isEmpty ? nil : found.joined(separator: "; ")
     }
 
     /// the item's extended attribute names, sorted, less those the system manages

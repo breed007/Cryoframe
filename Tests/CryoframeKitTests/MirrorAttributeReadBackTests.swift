@@ -107,13 +107,13 @@ private func inMirror<T>(_ bundle: URL, _ rel: String, _ body: (String) -> T) th
         for p in [a, b] { FileManager.default.createFile(atPath: p, contents: Data("x".utf8)) }
         #expect(MirrorCopy.differentAttributes(a, b) == nil)
         #expect(setTag(a, "Red") == 0)
-        #expect(MirrorCopy.differentAttributes(a, b) != nil, "a tag missing from the copy")
+        #expect(MirrorCopy.differentAttributes(a, b) == "is missing extended attribute com.apple.metadata:_kMDItemUserTags")
         #expect(setTag(b, "Blue") == 0)
-        #expect(MirrorCopy.differentAttributes(a, b)?.contains("_kMDItemUserTags") == true)
+        #expect(MirrorCopy.differentAttributes(a, b) == "has a different value for extended attribute com.apple.metadata:_kMDItemUserTags")
         #expect(setTag(b, "Red") == 0)
         #expect(MirrorCopy.differentAttributes(a, b) == nil)
         #expect(setxattr(b, "com.example.extra", "1", 1, 0, 0) == 0)
-        #expect(MirrorCopy.differentAttributes(a, b) != nil, "an attribute only the copy has")
+        #expect(MirrorCopy.differentAttributes(a, b) == "has extended attribute com.example.extra the library doesn't")
         #expect(removexattr(b, "com.example.extra", 0) == 0)
 
         let fork = [UInt8](repeating: 7, count: 300)
@@ -124,7 +124,8 @@ private func inMirror<T>(_ bundle: URL, _ rel: String, _ body: (String) -> T) th
         #expect(MirrorCopy.differentAttributes(a, b) == nil)
 
         #expect(try ProcessCommandRunner().run("/bin/chmod", ["+a", "everyone deny delete", a]).ok)
-        #expect(MirrorCopy.differentAttributes(a, b) == "has a different access list")
+        #expect(MirrorCopy.differentAttributes(a, b) == "is missing its access list")
+        #expect(MirrorCopy.differentAttributes(b, a) == "has an access list the library doesn't")
         #expect(try ProcessCommandRunner().run("/bin/chmod", ["+a", "everyone deny delete", b]).ok)
         #expect(MirrorCopy.differentAttributes(a, b) == nil)
 
