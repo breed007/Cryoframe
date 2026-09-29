@@ -18,9 +18,13 @@
 //  At every instant <volume>/<name> is a complete copy: the old one until the swap,
 //  the new one after it.
 //
-//  Whatever a crash leaves in staging (a half-updated copy, or the previous copy the
-//  swap moved aside) is where the next run starts: rsync makes it match the source
-//  exactly either way, and usually has less to do than from a fresh clone.
+//  Whatever a crash or a failed run leaves in staging is thrown away when the next
+//  run starts, which clones afresh (0.2 s for 30,000 files). It used to be where the
+//  next run started, on the grounds that rsync would make it exact; but rsync decides
+//  what to copy by size and date, and a staging copy whose writes were lost (a drive
+//  that filled, a crash that committed metadata before data) holds files whose size
+//  and date are right and whose data isn't. rsync passed them over, the swap put them
+//  in place, and the run reported success.
 //
 //  The staging folder sits one level below the volume root on purpose. Restore,
 //  drills and rehearsals look for <volume>/<name>, and anything searching the root
@@ -42,14 +46,17 @@ enum MirrorCopy {
         let current = volume.appendingPathComponent(name, isDirectory: true)
         let staging = volume.appendingPathComponent(stagingName, isDirectory: true)
         let next = staging.appendingPathComponent(name, isDirectory: true)
+        // never start from what a previous run left (see above); a leftover that won't
+        // go fails the run rather than being trusted
+        if fm.fileExists(atPath: staging.path) {
+            removeStaging(staging, runner: runner.forTeardown)
+            if fm.fileExists(atPath: staging.path) { throw MirrorCopyError.stagingStuck(staging.path) }
+        }
         try fm.createDirectory(at: staging, withIntermediateDirectories: true)
-
-        if !fm.fileExists(atPath: next.path) {
-            if fm.fileExists(atPath: current.path) {
-                try clone(current, to: next, runner: runner)
-            } else {
-                try fm.createDirectory(at: next, withIntermediateDirectories: true)   // the first run
-            }
+        if fm.fileExists(atPath: current.path) {
+            try clone(current, to: next, runner: runner)
+        } else {
+            try fm.createDirectory(at: next, withIntermediateDirectories: true)   // the first run
         }
 
         do {
@@ -260,6 +267,8 @@ public enum MirrorCopyError: Error, Equatable {
     case driveFilledByAnother(swapped: Bool)
     /// fsck_apfs found the file system inside the image damaged
     case imageDamaged(String)
+    /// what a previous run left in the image couldn't be removed
+    case stagingStuck(String)
 }
 
 extension MirrorCopyError: LocalizedError {
@@ -276,6 +285,8 @@ extension MirrorCopyError: LocalizedError {
             return "the drive nearly filled while the mirror was being written, because something else was writing to it at the same time. A disk image loses writes when its drive fills, so this run doesn't count. \(copy) Make room on the drive and run again."
         case .imageDamaged(let why):
             return "the drive filled while the mirror was being written, and the mirror's disk image is damaged (\(why)). Don't rely on this copy: run a restore drill, and consider starting this mirror afresh on a drive with room to spare."
+        case .stagingStuck(let path):
+            return "an unfinished copy a previous run left inside the mirror (\(path)) couldn't be removed, and it can't be trusted, so nothing was updated. The previous copy is intact; run again, and if this repeats, start this mirror afresh."
         case .swapFailed(let why):
             return "couldn't put the updated copy in place (\(why)); the previous copy is untouched — run again"
         }

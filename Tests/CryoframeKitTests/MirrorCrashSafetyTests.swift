@@ -626,3 +626,36 @@ extension ReadOnlyFilesInAMirror {
         #expect(throws: CancelledError.self) { _ = try VolumeLock.acquire(for: dir, in: base, control: control) }
     }
 }
+
+extension MirrorCrashSafety {
+    // A leftover staging copy is never reused. One that can't be removed fails the run
+    // plainly, with the previous copy untouched, rather than being trusted.
+    @Test func aLeftoverThatWontGoFailsTheRunRatherThanBeingTrusted() throws {
+        let src = try library(files: 6)
+        let out = tempDir("stuck"), base = tempDir("base")
+        defer { for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        let bundle = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        let before = tree(src)
+
+        let mnt = tempDir("stuck-mnt")
+        func attachRW() throws {
+            let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse"]) }
+            try #require(r.ok, "\(r.stderr)")
+        }
+        try attachRW()
+        let locked = mnt.appendingPathComponent("\(MirrorCopy.stagingName)/Lib/locked.txt")
+        try FileManager.default.createDirectory(at: locked.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("left".utf8).write(to: locked)
+        #expect(chflags(locked.path, UInt32(UF_IMMUTABLE)) == 0)
+        MountPoint.detach(mnt, runner: ProcessCommandRunner())
+        defer {
+            if (try? attachRW()) != nil { _ = chflags(locked.path, 0); MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
+            try? FileManager.default.removeItem(at: mnt)
+        }
+
+        try editEverything(src, files: 6)
+        #expect(throws: MirrorCopyError.self) { try engine.archive(ArchiveSource(name: "Lib", root: src), to: out) }
+        #expect(try insideMirror(bundle).library == before)
+    }
+}
