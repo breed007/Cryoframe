@@ -16,6 +16,8 @@ public struct OpenedArchive: Sendable {
 
     /// the file in the work dir naming the process that has the archive open.
     static let ownerFileName = "owner.json"
+    /// names every open archive's work dir
+    static let workPrefix = "cf-open-"
 
     static func recordOwner(in work: URL) {
         guard let me = ProcessIdentity.current, let data = try? JSONEncoder().encode(me) else { return }
@@ -93,7 +95,7 @@ public struct ArchiveReader: Sendable {
 
     private func openOnce(_ result: ArchiveResult, passphrase: String?) throws -> OpenedArchive {
         let fm = FileManager.default
-        let work = workBase.appendingPathComponent("cf-open-\(UUID().uuidString)")
+        let work = workBase.appendingPathComponent(OpenedArchive.workPrefix + UUID().uuidString)
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
         OpenedArchive.recordOwner(in: work)       // so another process's launch sweep leaves it be
         let runner = self.runner
@@ -239,7 +241,7 @@ public struct ArchiveReader: Sendable {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
         // a mirror run's attach (MirrorMounts) follows the same rules as an open archive
-        for e in entries where e.lastPathComponent.hasPrefix("cf-open-") || e.lastPathComponent.hasPrefix(MirrorMounts.prefix) {
+        for e in entries where e.lastPathComponent.hasPrefix(OpenedArchive.workPrefix) || e.lastPathComponent.hasPrefix(MirrorMounts.prefix) {
             guard OpenedArchive.isAbandoned(e, now: now, isAlive: isAlive) else { continue }
             let mnt = e.appendingPathComponent("mnt")
             if MountPoint.isMounted(mnt) { _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path]) }

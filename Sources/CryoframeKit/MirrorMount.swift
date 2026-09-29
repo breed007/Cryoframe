@@ -68,16 +68,19 @@ public enum MirrorMounts {
         return out
     }
 
-    /// detach `image` from wherever a run that no longer exists left it attached, and
-    /// tidy that run's directory. Attachments with a live owner, and ones that aren't
-    /// a mirror run's at all (a restore browsing it, Finder), are left alone; the run
-    /// then refuses to write, as it always has, rather than yank someone's open copy.
+    /// detach `image` from wherever a process that no longer exists left it attached:
+    /// a mirror run (`cf-mirror-`) or a reader (`cf-open-`: a drill, a rehearsal, a
+    /// restore), and tidy that process's directory. Only the app's launch sweep used
+    /// to release a dead reader's attach, so a drill killed with the agent blocked
+    /// every scheduled run of that mirror until the app was next opened. Attachments
+    /// with a live owner, and ones that aren't Cryoframe's (Finder), are left alone.
     static func releaseAbandoned(_ image: URL, runner: CommandRunner, now: Date = Date(),
                                  isAlive: (ProcessIdentity) -> Bool = { $0.isAlive }) {
         for mp in mountPoints(of: image, runner: runner) {
             let mnt = URL(fileURLWithPath: mp, isDirectory: true)
             let work = mnt.deletingLastPathComponent()
-            guard mnt.lastPathComponent == "mnt", work.lastPathComponent.hasPrefix(prefix),
+            let name = work.lastPathComponent
+            guard mnt.lastPathComponent == "mnt", name.hasPrefix(prefix) || name.hasPrefix(OpenedArchive.workPrefix),
                   OpenedArchive.isAbandoned(work, now: now, isAlive: isAlive) else { continue }
             MountPoint.detach(mnt, runner: runner)
             OpenedArchive.removeWork(work)

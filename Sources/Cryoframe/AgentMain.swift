@@ -18,6 +18,9 @@ enum AgentMain {
         let store = JobStore.standard()
         let locks = RunLocks.standard()
         cleanUpLeftovers(jobIDs: store.load().jobs.map(\.id), locks: locks)
+        // archives and mirrors a crashed process left attached (the app does this at
+        // launch too); ones a live process has open are left alone
+        ArchiveReader.sweepStaleOpens()
         // finish interrupted transfers first
         let resumes = TransferResumer.resume(store: PendingTransferStore.standard(), locks: locks)
 
