@@ -201,7 +201,7 @@ public struct JobExecutor: Sendable {
                       let root = placement.root(in: mounts) else {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
                 }
-                let stats = Self.directoryStats(root)
+                let stats = Self.directoryStats(root, forDMG: sealed == .dmg)
                 let sourceSize = stats.bytes
                 let source = ArchiveSource(name: root.lastPathComponent, root: root, sizeHint: sourceSize)
 
@@ -222,6 +222,16 @@ public struct JobExecutor: Sendable {
                     for d in dests {
                         results.append(.failed(library: library.displayName, destination: d.target.displayName,
                                                error: "\(library.displayName) is empty — there is nothing to back up"))
+                    }
+                    continue
+                }
+                // hdiutil stops and waits for an administrator's password when it meets
+                // any of these, and an unattended run waited on that prompt all night
+                // with its snapshot held. Name them now instead.
+                if !stats.dmgBlockers.isEmpty {
+                    let why = stats.dmgBlockers.explanation(library: library.displayName)
+                    for d in dests {
+                        results.append(.failed(library: library.displayName, destination: d.target.displayName, error: why))
                     }
                     continue
                 }
@@ -578,17 +588,28 @@ public struct JobExecutor: Sendable {
     /// what one walk of a source tells the run: allocated bytes, how many things
     /// worth backing up it holds (regular files and symlinks — a folder of links is
     /// not nothing), and whether the walk could see the tree at all.
-    struct DirectoryStats { var bytes: UInt64 = 0; var entries = 0; var readable = true }
+    /// With `forDMG`, also what in it would make a sealed DMG's build stop and ask for
+    /// a password (see DMGBlockers), found on the same walk.
+    struct DirectoryStats {
+        var bytes: UInt64 = 0; var entries = 0; var readable = true
+        var dmgBlockers = DMGBlockers()
+    }
 
-    static func directoryStats(_ url: URL) -> DirectoryStats {
+    static func directoryStats(_ url: URL, forDMG: Bool = false) -> DirectoryStats {
         var out = DirectoryStats()
         let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
+        let root = url.standardizedFileURL.path
+        // a folder that can't be listed is found by inspecting it, before the walk
+        // tries to go in (see DMGBlockers.inspect)
         guard FileManager.default.isReadableFile(atPath: url.path),
               let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys), options: [],
                                                      errorHandler: { _, _ in out.readable = false; return true }) else {
             out.readable = false; return out
         }
+        var groups = DMGBlockers.Membership()
+        if forDMG { out.dmgBlockers.inspect(url.path, relative: url.lastPathComponent, groups: &groups) }   // copied too
         for case let u as URL in e {
+            if forDMG { out.dmgBlockers.inspect(u.path, relative: DMGBlockers.relative(u.path, to: root), groups: &groups) }
             guard let v = try? u.resourceValues(forKeys: keys) else { continue }
             if v.isSymbolicLink == true { out.entries += 1; continue }
             guard v.isRegularFile == true else { continue }
