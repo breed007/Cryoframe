@@ -476,6 +476,11 @@ public struct JobExecutor: Sendable {
     public static func freeSpace(for url: URL) -> UInt64? {
         var dir = url
         for _ in 0..<8 {
+            // A URL keeps the resource values it has read. The app holds a job's
+            // destination URL for as long as it runs, so without this it went on
+            // reporting the free space it saw the first time, however full the drive
+            // had since become.
+            dir.removeAllCachedResourceValues()
             // first existing ancestor IS the target volume — read it and stop, even if
             // it answers "unknown" (nil). Walking further would cross into /Volumes on
             // the boot disk and report the wrong volume's free space.

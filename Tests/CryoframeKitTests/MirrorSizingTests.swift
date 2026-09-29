@@ -58,6 +58,25 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
 
 @Suite(.serialized) struct MirrorSizingOnDisk {
 
+    // A URL keeps the resource values it has read, and the app holds a job's
+    // destination URL as long as it runs: the free-space check went on seeing the room
+    // the drive had the first time it looked. (Found because it let a mirror's image
+    // be grown past what its drive could hold.)
+    @Test func freeSpaceIsReadFreshThroughTheSameURL() throws {
+        let scratch = tempDir("fresh")
+        let drive = try scratchDrive("200m", in: scratch)
+        defer { MountPoint.detach(drive, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: scratch) }
+        let dest = drive.appendingPathComponent("Backups")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let before = try #require(JobExecutor.freeSpace(for: dest))
+        let reportedBefore = try #require(StorageReporter.volume(of: dest).free)
+        try Data(count: 80 << 20).write(to: drive.appendingPathComponent("filler.bin"))
+        let after = try #require(JobExecutor.freeSpace(for: dest))
+        let reportedAfter = try #require(StorageReporter.volume(of: dest).free)
+        #expect(after + (60 << 20) < before, "80 MB written, free space went from \(before) to \(after)")
+        #expect(reportedAfter + (60 << 20) < reportedBefore, "the storage view still shows \(reportedAfter)")
+    }
+
     @Test func aNewMirrorIsMadeAsBigAsItsDrive() throws {
         let scratch = tempDir("drive"), base = tempDir("base")
         let src = try library(files: 3)

@@ -63,6 +63,7 @@ public enum StorageReporter {
     public static func volume(of url: URL) -> (free: UInt64?, total: UInt64?) {
         var dir = url
         for _ in 0..<8 {
+            dir.removeAllCachedResourceValues()     // a URL keeps what it read; see JobExecutor.freeSpace
             // the first EXISTING ancestor is the volume being asked about. Read it and
             // stop, even when it answers "unknown" — walking further would step off an
             // external drive into /Volumes on the boot disk and report a free-space
