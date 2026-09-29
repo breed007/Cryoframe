@@ -26,9 +26,9 @@ struct MenuBarView: View {
                 Text(statusLine(job))
             }
         }
-        if !model.runningJobIDs.isEmpty {
+        if !model.allRunningJobIDs.isEmpty {
             Divider()
-            Text("\(model.runningJobIDs.count) running")
+            Text("\(model.allRunningJobIDs.count) running")
         }
         Divider()
         if !model.jobs.isEmpty {
@@ -43,7 +43,7 @@ struct MenuBarView: View {
         if model.isPaused(job.id) { return "⏸ \(job.name): paused" }
         if model.isRunning(job.id) {
             let pct = model.jobProgress[job.id]?.fraction.map { " \(Int($0 * 100))%" } ?? ""
-            return "● \(job.name): \(model.jobStage[job.id]?.rawValue ?? "running")\(pct)"
+            return "● \(job.name): \(model.runningLabel(job.id))\(pct)"
         }
         if let r = model.lastRecords[job.id] { return "\(AppModel.symbol(r.outcome)) \(job.name): \(r.summary)" }
         return "○ \(job.name): no runs yet"

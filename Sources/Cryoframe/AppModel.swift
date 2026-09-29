@@ -4,7 +4,8 @@
 //
 //  Central state for the GUI: jobs (persisted), targets, system services, and
 //  the live run/verification status. Runs jobs through the same JobRunner the
-//  scheduled agent uses.
+//  scheduled agent uses, under the same per-job run lock, and shows (and can stop)
+//  the runs the agent is doing.
 //
 
 import Foundation
@@ -24,6 +25,7 @@ final class AppModel: ObservableObject {
     private let store = JobStore.standard()
     private let history = RunHistoryStore.standard()
     private let healthStore = HealthStore.standard()
+    private let runLocks = RunLocks.standard()
 
     @Published var jobs: [BackupJob] = []
     @Published var targets: [Target] = []
@@ -32,7 +34,9 @@ final class AppModel: ObservableObject {
     @Published var lastHealth: [String: HealthRecord] = [:] // latest archive health check per job
     @Published var healthRecords: [HealthRecord] = []       // full history, newest first — drives per-version "verified" badges
     @Published var verifyingJobIDs: Set<String> = []        // jobs whose archives are being re-verified
-    @Published var runningJobIDs: Set<String> = []      // jobs currently executing
+    @Published var runningJobIDs: Set<String> = []      // jobs this app is running
+    @Published var externalRuns: [String: RunHolder] = [:]   // jobs another process (the agent) is running
+    @Published var stoppingJobIDs: Set<String> = []     // external runs asked to stop, not yet ended
     @Published var pausedJobIDs: Set<String> = []       // running jobs whose tool is suspended
     @Published var jobStage: [String: BackupStage] = [:]
     @Published var jobLibrary: [String: String] = [:]   // job id -> library being archived
@@ -57,6 +61,7 @@ final class AppModel: ObservableObject {
     private var notifiedIDs = Set<String>()             // run records already notified this session
     private var notifiedHealthIDs = Set<String>()       // health records already notified this session
     private var historyWatcher: DirWatcher?
+    private var runWatch: Task<Void, Never>?
     private var maxConcurrent: Int {
         let n = UserDefaults.standard.integer(forKey: Prefs.maxConcurrent)
         return n > 0 ? n : 2
@@ -84,8 +89,10 @@ final class AppModel: ObservableObject {
         revalidate()
         Task { await helper.reloadIfStale() }   // pick up a new helper binary after an app update
         Task.detached { ArchiveReader.sweepStaleOpens() }   // clean any browse mounts a crash left attached
+        let locks = runLocks
         Task.detached { JobExecutor.sweepOrphanedScratch(scratchBase: TransferConfig.scratchBase(),
-                                                         pendingStore: .standard()) }   // clean leftover build artifacts
+                                                         pendingStore: .standard(), locks: locks) }   // clean leftover build artifacts
+        watchOtherRuns()
         resumeTransfers()
         armWake()                               // align the optional pmset wake with the schedule
         refreshProtectedSize()                  // dashboard "backed up" total
@@ -366,8 +373,9 @@ final class AppModel: ObservableObject {
     /// resume any transfer interrupted by a disconnect, once its target is back.
     func resumeTransfers() {
         guard runningJobIDs.isEmpty else { return }
+        let locks = runLocks
         Task.detached {
-            let resumed = TransferResumer.resumeAll(store: PendingTransferStore.standard())
+            let resumed = TransferResumer.resumeAll(store: PendingTransferStore.standard(), locks: locks)
             if !resumed.isEmpty {
                 await MainActor.run { self.activity.insert("resumed \(resumed.count) interrupted transfer(s)", at: 0) }
             }
@@ -443,8 +451,18 @@ final class AppModel: ObservableObject {
     func openOwners(_ job: BackupJob) -> [String] {
         job.libraries.compactMap(\.owningProcess).filter(detector.isRunning).map(\.displayName)
     }
-    func isRunning(_ id: String) -> Bool { runningJobIDs.contains(id) }
+    func isRunning(_ id: String) -> Bool { runningJobIDs.contains(id) || externalRuns[id] != nil }
     func isQueued(_ id: String) -> Bool { queue.contains(id) }
+    /// every running job, whether this app or the scheduled agent is running it.
+    var allRunningJobIDs: Set<String> { runningJobIDs.union(externalRuns.keys) }
+
+    /// what a running job's badge says: its stage when this app runs it (only this
+    /// process sees the stages), otherwise who is running it.
+    func runningLabel(_ id: String) -> String {
+        if let stage = jobStage[id] { return stage.rawValue }
+        if stoppingJobIDs.contains(id) { return "stopping…" }
+        return externalRuns[id]?.runningLabel ?? "running"
+    }
 
     func nextDue(_ job: BackupJob) -> Date? {
         let ref = store.load().lastRun[job.id] ?? job.createdAt
@@ -455,14 +473,60 @@ final class AppModel: ObservableObject {
 
     func runNow(_ job: BackupJob) {
         guard !runningJobIDs.contains(job.id), !queue.contains(job.id) else { return }
+        if let holder = externalRuns[job.id] {
+            log("⏸ \(job.name): \(RunLockError.alreadyRunning(holder).localizedDescription)")
+            return
+        }
         queue.append(job.id)
         pump()
     }
 
     func stopJob(_ id: String) {
         queue.removeAll { $0 == id }
+        if controls[id] == nil, externalRuns[id] != nil {
+            // the scheduled agent is running it: ask that process to stop its own run,
+            // so its teardown (snapshot, mounts, tools) happens where they live
+            let name = jobs.first { $0.id == id }?.name ?? "Job"
+            if runLocks.requestStop(jobID: id) {
+                stoppingJobIDs.insert(id)
+                log("⏹ \(name): asked the scheduled run to stop")
+            } else {
+                log("⚠︎ \(name): couldn't reach the run to stop it — try again in a moment")
+            }
+            return
+        }
         controls[id]?.cancel()
         pausedJobIDs.remove(id)
+    }
+
+    // MARK: runs in other processes
+
+    /// Poll the run locks so a job the scheduled agent is running shows as running
+    /// here, and stops showing the moment it ends (even if the agent crashed: the
+    /// kernel drops a dead process's lock). Only looks; never takes a lock.
+    private func watchOtherRuns() {
+        runWatch?.cancel()
+        runWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.refreshOtherRuns()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    func refreshOtherRuns() {
+        let found = runLocks.holders(of: jobs.map(\.id))
+            .filter { !$0.value.isThisProcess && !runningJobIDs.contains($0.key) }
+        guard found != externalRuns else { return }
+        let ended = Set(externalRuns.keys).subtracting(found.keys)
+        externalRuns = found
+        stoppingJobIDs.formIntersection(found.keys)
+        if !ended.isEmpty {
+            reloadHistory()                         // the agent recorded the result as it finished
+            refreshProtectedSize(force: true)
+            armWake()                               // lastRun moved
+        }
     }
 
     func pauseJob(_ id: String) { if controls[id]?.pause() == true { pausedJobIDs.insert(id); refreshSleepGuard() } }
@@ -500,18 +564,36 @@ final class AppModel: ObservableObject {
 
     private func startRun(_ job: BackupJob) {
         let id = job.id
-        let startedAt = Date()
         runningJobIDs.insert(id)
         refreshSleepGuard()
         let control = RunControl(); controls[id] = control
         jobStage[id] = .preparing
-        // marks the run as started; its result line replaces it when it finishes, so
-        // the log doesn't accumulate a timestamp-less "▶ JobName" beside every
-        // completed run — which reads like a run that started and never came back.
-        log(Self.startedLine(job.name))
         let resolved = job.resolvingLibraries(in: registry)
         let executor = TransferConfig.makeExecutor(detector: detector, store: store)
+        let locks = runLocks
         Task {
+            // One run per job across this app and the scheduled agent. The short wait
+            // rides out a momentary holder (a scratch tidy) that isn't a run.
+            let lease: RunLease
+            do {
+                lease = try await Task.detached { try locks.acquire(jobID: id, trigger: .manual, wait: 2) }.value
+            } catch RunLockError.alreadyRunning(let holder) {
+                log("⏸ \(job.name): \(RunLockError.alreadyRunning(holder).localizedDescription)")
+                finishRun(id)
+                refreshOtherRuns()
+                return
+            } catch {
+                apply(RunRecord.failure(job: job, error: error.localizedDescription,
+                                        startedAt: Date(), finishedAt: Date(), trigger: "manual"))
+                finishRun(id)
+                return
+            }
+            lease.onStopRequest { control.cancel() }
+            let startedAt = Date()
+            // marks the run as started; its result line replaces it when it finishes, so
+            // the log doesn't accumulate a timestamp-less "▶ JobName" beside every
+            // completed run — which reads like a run that started and never came back.
+            log(Self.startedLine(job.name))
             do {
                 let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date(), control: control,
                     onStage: { s in Task { @MainActor in self.jobStage[id] = s } },
@@ -522,14 +604,20 @@ final class AppModel: ObservableObject {
                 apply(RunRecord.failure(job: job, error: error.localizedDescription,
                                         startedAt: startedAt, finishedAt: Date(), trigger: "manual"))
             }
-            runningJobIDs.remove(id); controls[id] = nil; jobStage[id] = nil; jobLibrary[id] = nil; jobProgress[id] = nil
-            pausedJobIDs.remove(id)
-            refreshSleepGuard()
+            lease.release()
             jobs = store.load().jobs
             revalidate()
             armWake()                               // lastRun changed — re-point the wake
-            pump()                                  // give the next queued job its slot
+            finishRun(id)
         }
+    }
+
+    /// clear a run's live state and give the next queued job its slot.
+    private func finishRun(_ id: String) {
+        runningJobIDs.remove(id); controls[id] = nil; jobStage[id] = nil; jobLibrary[id] = nil; jobProgress[id] = nil
+        pausedJobIDs.remove(id)
+        refreshSleepGuard()
+        pump()
     }
 
     /// persist a finished run, update its badge, and narrate the result.

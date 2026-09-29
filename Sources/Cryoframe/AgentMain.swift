@@ -4,7 +4,8 @@
 //
 //  Launched periodically by the LaunchAgent. Resumes interrupted transfers,
 //  then runs any due jobs (up to the concurrency limit) through the same
-//  JobExecutor the GUI uses, then exits.
+//  JobExecutor the GUI uses, then exits. Every run holds its job's run lock, so a
+//  job the app is already running is left to the app.
 //
 
 import Foundation
@@ -13,9 +14,12 @@ import CryoframeKit
 enum AgentMain {
     static func run() {
         let store = JobStore.standard()
-        TransferResumer.resumeAll(store: PendingTransferStore.standard())   // finish interrupted transfers first
+        let locks = RunLocks.standard()
+        TransferResumer.resumeAll(store: PendingTransferStore.standard(), locks: locks)   // finish interrupted transfers first
 
-        var due = Scheduler().dueJobs(store.load(), now: Date())
+        // a due job the app is running right now is the app's run: it records the
+        // result and moves the schedule on. Not due here, and not a deferral either.
+        var due = Scheduler().dueJobs(store.load(), now: Date()).filter { locks.holder(of: $0.id) == nil }
         var alerts: [RunRecord] = []      // deferrals, delivered once the run loop is done
 
         // Unattended work on a dying laptop battery is how a Mac ends up flat. Hold
@@ -50,22 +54,40 @@ enum AgentMain {
 
             for job in due {
                 limit.wait()                                    // bound concurrency
+                // One run per job, across this process and the app. Taken here, not
+                // in the task: the short wait sleeps, and must not tie up the pool.
+                let lease: RunLease
+                do {
+                    lease = try locks.acquire(jobID: job.id, trigger: .scheduled, wait: 2)
+                } catch RunLockError.alreadyRunning {
+                    limit.signal(); continue                    // started elsewhere since we looked
+                } catch {
+                    // can't tell whether it's running: say so rather than skip quietly
+                    let now = Date()
+                    let record = RunRecord.failure(job: job, error: error.localizedDescription,
+                                                   startedAt: now, finishedAt: now, trigger: "scheduled")
+                    historyStore.append(record)
+                    alerts.append(record)
+                    limit.signal(); continue
+                }
+                let control = RunControl()
+                lease.onStopRequest { control.cancel() }        // Stop, pressed in the app
                 group.enter()
                 let resolved = job.resolvingLibraries(in: registry)
                 Task {
                     let started = Date()
+                    let record: RunRecord
                     do {
-                        let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date())
-                        let record = RunRecord.make(job: job, outcome: outcome,
-                                                    startedAt: started, finishedAt: Date(), trigger: "scheduled")
-                        historyStore.append(record)
-                        await RemoteAlert.deliver(for: record)      // nobody is watching the screen
+                        let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date(), control: control)
+                        record = RunRecord.make(job: job, outcome: outcome,
+                                                startedAt: started, finishedAt: Date(), trigger: "scheduled")
                     } catch {
-                        let record = RunRecord.failure(job: job, error: error.localizedDescription,
-                                                       startedAt: started, finishedAt: Date(), trigger: "scheduled")
-                        historyStore.append(record)
-                        await RemoteAlert.deliver(for: record)
+                        record = RunRecord.failure(job: job, error: error.localizedDescription,
+                                                   startedAt: started, finishedAt: Date(), trigger: "scheduled")
                     }
+                    historyStore.append(record)
+                    lease.release()                                 // the run is over once it's recorded
+                    await RemoteAlert.deliver(for: record)          // nobody is watching the screen
                     limit.signal()
                     group.leave()
                 }
@@ -105,4 +127,5 @@ enum AgentMain {
         sem.wait()
         exit(0)
     }
+
 }

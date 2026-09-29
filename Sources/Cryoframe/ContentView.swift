@@ -183,9 +183,9 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("Activity").font(.headline)
-                if !model.runningJobIDs.isEmpty {
+                if !model.allRunningJobIDs.isEmpty {
                     ProgressView().controlSize(.small)
-                    Text("\(model.runningJobIDs.count) running").font(.caption).foregroundStyle(.cryoAccent)
+                    Text("\(model.allRunningJobIDs.count) running").font(.caption).foregroundStyle(.cryoAccent)
                 }
             }
             ScrollView {
@@ -363,7 +363,7 @@ private struct JobRow: View {
             badge("paused", .cryoWarn)
         } else if isRunning {
             let pct = model.jobProgress[job.id]?.fraction.map { " \(Int($0 * 100))%" } ?? ""
-            badge((model.jobStage[job.id]?.rawValue ?? "running") + pct, .cryoAccent)
+            badge(model.runningLabel(job.id) + pct, .cryoAccent)
         } else if isQueued {
             badge("queued", .cryoAccent)
         } else if !job.enabled {
