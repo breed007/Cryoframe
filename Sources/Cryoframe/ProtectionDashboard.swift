@@ -83,21 +83,14 @@ struct ProtectionDashboard: View {
     // MARK: - stat values
 
     private var lastBackupSub: String {
-        guard let rec = model.jobs.compactMap({ model.lastRecords[$0.id] })
-            .filter({ [.verified, .completed, .partial].contains($0.outcome) })
-            .max(by: { $0.finishedAt < $1.finishedAt }) else { return "no runs yet" }
-        return rec.jobName
+        ProtectionVerdict.lastSuccessfulRecord(jobs: model.jobs, lastRecords: model.lastRecords)?.jobName ?? "no runs yet"
     }
     private var protectedText: String {
         guard let b = model.protectedBytes else { return "—" }
         return ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .file)
     }
-    private var libraryCount: Int {
-        Set(model.jobs.flatMap { $0.libraries.map(\.displayName) }).count
-    }
-    private var destinationCount: Int {
-        Set(model.jobs.flatMap { $0.targets.map(\.destinationDir.path) }).count
-    }
+    private var libraryCount: Int { ProtectionVerdict.libraryCount(model.jobs) }
+    private var destinationCount: Int { ProtectionVerdict.destinationCount(model.jobs) }
     /// the destination with the least free space — the "are we running low?" signal.
     private var tightestDestination: (name: String, free: UInt64)? {
         let unique = Dictionary(grouping: model.jobs.flatMap(\.targets), by: { $0.destinationDir.path }).compactMap { $0.value.first }

@@ -104,7 +104,7 @@ final class RestoreModel: ObservableObject {
                                detail: "restored in place — the previous version is in the Trash", url: liveURL)
             } catch {
                 return Outcome(name: a.bundleName, ok: false,
-                               detail: "in-place restore failed — \(Self.message(error, encrypted: a.encrypted)). Your live library was left untouched.",
+                               detail: "in-place restore failed — \(RestoreFailureText.restoreMessage(error, encrypted: a.encrypted)). Your live library was left untouched.",
                                url: nil)
             }
         }.value
@@ -179,39 +179,9 @@ final class RestoreModel: ObservableObject {
                 let url = try RestoreEngine().restore(a, to: dest, verify: verify, passphrase: passphrase, onStage: onStage)
                 return Outcome(name: a.bundleName, ok: true, detail: "copied to \(dest.lastPathComponent)", url: url)
             } catch {
-                return Outcome(name: a.bundleName, ok: false, detail: Self.message(error, encrypted: a.encrypted), url: nil)
+                return Outcome(name: a.bundleName, ok: false, detail: RestoreFailureText.restoreMessage(error, encrypted: a.encrypted), url: nil)
             }
         }.value
-    }
-
-    private nonisolated static func message(_ e: Error, encrypted: Bool) -> String {
-        switch e as? RestoreError {
-        case .verificationFailed(let d): return "verification failed — \(d)"
-        case .destinationExists:         return "already exists in the destination — rename or move it, then try again"
-        case .libraryNotFound:           return "library not found inside the archive"
-        case .noManifest:                return "no checksum manifest beside the archive"
-        case .none: break
-        }
-        // an ArchiveError surfaces when the archive itself won't open. Its raw
-        // description is Swift internals ("ArchiveError error 0"), so say what
-        // actually happened and what to do about it.
-        if let a = e as? ArchiveError {
-            switch a {
-            case .toolFailed(let tool, _, let stderr):
-                if encrypted { return "couldn't open the archive — check the passphrase" }
-                let detail = stderr.split(separator: "\n").last.map(String.init) ?? ""
-                return detail.isEmpty ? "couldn't open the archive (\(tool) failed)"
-                                      : "couldn't open the archive — \(detail)"
-            case .noArtifactProduced:   return "the archive is missing its files"
-            case .sourceMissing(let s): return "missing part of the archive — \(s)"
-            case .passphraseUnavailable: return "this archive is encrypted and no passphrase was found"
-            }
-        }
-        // before the encrypted fallback: a copy that failed on one file happened after
-        // the archive opened, so the passphrase was fine
-        if let copy = RestoreFailureText.copyFailure(e) { return copy }
-        if encrypted { return "couldn't open the archive — check the passphrase" }
-        return (e as NSError).localizedDescription
     }
 }
 

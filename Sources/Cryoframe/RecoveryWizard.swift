@@ -125,32 +125,9 @@ final class RecoveryModel: ObservableObject {
                 let url = try RestoreEngine().restore(a, to: dest, verify: true, passphrase: passphrase, onStage: onStage)
                 return Outcome(library: library, ok: true, detail: "restored to \(dest.path)", url: url)
             } catch {
-                return Outcome(library: library, ok: false, detail: Self.message(error, encrypted: a.encrypted), url: nil)
+                return Outcome(library: library, ok: false, detail: RestoreFailureText.recoveryMessage(error, encrypted: a.encrypted), url: nil)
             }
         }.value
-    }
-
-    private nonisolated static func message(_ e: Error, encrypted: Bool) -> String {
-        if let r = e as? RestoreError {
-            switch r {
-            case .verificationFailed(let d): return "verification failed — \(d)"
-            case .destinationExists(let p):  return "something is already at \(  (p as NSString).lastPathComponent) — it was left alone"
-            case .libraryNotFound:           return "the archive didn't contain the library"
-            case .noManifest:                return "no checksum manifest beside the archive"
-            }
-        }
-        if let a = e as? ArchiveError {
-            switch a {
-            case .toolFailed(_, _, let stderr):
-                if encrypted { return "couldn't open — check the recovery key" }
-                return "couldn't open the archive — \(stderr.split(separator: "\n").last.map(String.init) ?? "unreadable")"
-            case .noArtifactProduced:    return "the archive is missing its files"
-            case .sourceMissing(let s):  return "missing part of the archive — \(s)"
-            case .passphraseUnavailable: return "encrypted, and no passphrase was recovered"
-            }
-        }
-        if let copy = RestoreFailureText.copyFailure(e) { return copy }
-        return (e as NSError).localizedDescription
     }
 }
 

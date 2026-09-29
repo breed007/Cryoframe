@@ -3,9 +3,10 @@
 //  Cryoframe (app)
 //
 //  The single source of truth for building a backup job — shared by the guided wizard
-//  (new jobs) and the full sheet (editing). Owns every field, the derived values
-//  (deduped destinations, retention/frequency, encryption validity, conflicts), and the
-//  commit path (Keychain + save). Neither view reimplements this; they only render it.
+//  (new jobs) and the full sheet (editing). The rules live in CryoframeKit's
+//  JobDraftState, where they are tested; this wrapper makes them observable, supplies
+//  what only the app knows (saved jobs, preferences), and owns the commit path
+//  (Keychain + save). Neither view reimplements any of it; they only render it.
 //
 
 import SwiftUI
@@ -13,258 +14,73 @@ import AppKit
 import CryoframeKit
 
 @MainActor
+@dynamicMemberLookup
 final class JobDraft: ObservableObject {
     let model: AppModel
+    @Published var state: JobDraftState
 
-    @Published var name = ""
-    @Published var libraries: [ContentType] = []
-    @Published var selectedLibraryIDs: Set<String> = []
-    @Published var targets: [Target] = []
-    @Published var selectedTargetIDs: [String] = []        // ordered; first is primary
-
-    @Published var formatKind = "mirror"                   // "mirror" | "zip" | "dmg"
-    @Published var mirrorValue = 500
-    @Published var mirrorUnit = "GB"
-
-    @Published var verification: VerificationPolicy = .checksumOnly
-    @Published var runPolicy: RunPolicy = .proceed
-    @Published var encrypt = false
-    @Published var passphrase = ""
-    @Published var passphraseConfirm = ""
-
-    // Bounded by default. "Keep every version" meant a sealed job grew until the
-    // destination filled and every run after that failed — while the app promised
-    // retention was what kept the disk from filling. Keeping every version is still
-    // one choice away; it is just no longer the one you get without deciding.
-    @Published var retentionKind = "lastN"                 // all | lastN | gfs
-    @Published var keepN = 7
-    @Published var gfsDaily = 7
-    @Published var gfsWeekly = 4
-    @Published var gfsMonthly = 6
-
-    @Published var freqKind = FreqKind.daily
-    @Published var dailyTime = Calendar.current.date(bySettingHour: 2, minute: 0, second: 0, of: Date()) ?? Date()
-    @Published var everyHours = 24
-    @Published var onceDate = Date().addingTimeInterval(3600)
-
-    enum FreqKind: String, CaseIterable, Identifiable { case daily, everyHours, once, manual; var id: String { rawValue } }
-
-    // edit context
-    let editingID: String?
-    private let editingEncrypted: Bool
-    private let editingMirrorGB: Int?     // the size the existing mirror image was made at
-    private let editingEnabled: Bool
-    private let editingCreatedAt: Date?
-    var isEditing: Bool { editingID != nil }
+    typealias FreqKind = JobDraftState.FreqKind
 
     init(model: AppModel, editing: BackupJob? = nil) {
         self.model = model
-        editingID = editing?.id
-        editingEncrypted = editing?.encrypted ?? false
-        if case .liveMirror(let g)? = editing?.format { editingMirrorGB = g } else { editingMirrorGB = nil }
-        editingEnabled = editing?.enabled ?? true
-        editingCreatedAt = editing?.createdAt
-        libraries = model.registry.types
-        targets = model.targets
-        if let job = editing { seedFrom(job) } else { seedDefaults() }
+        let d = UserDefaults.standard
+        let defaults = JobDraftState.Defaults(mirrorValue: d.integer(forKey: Prefs.mirrorGB),
+                                              mirrorUnit: d.string(forKey: Prefs.mirrorUnit),
+                                              formatKind: d.string(forKey: Prefs.format),
+                                              verification: d.string(forKey: Prefs.verify),
+                                              runPolicy: d.string(forKey: Prefs.runPolicy))
+        state = JobDraftState(editing: editing, libraries: model.registry.types, targets: model.targets,
+                              defaults: defaults)
     }
 
-    // MARK: derived
-
-    var mirrorGB: Int { mirrorUnit == "TB" ? mirrorValue * 1000 : mirrorValue }
-    var format: FormatChoice {
-        switch formatKind { case "dmg": .sealedDMG; case "zip": .sealedZip; default: .liveMirror(sizeGB: mirrorGB) }
+    /// every field and rule of the draft reads (and, where it is a field, writes)
+    /// straight through to the Kit state, so `draft.encrypt` and `$draft.encrypt`
+    /// work as they always did.
+    subscript<T>(dynamicMember keyPath: WritableKeyPath<JobDraftState, T>) -> T {
+        get { state[keyPath: keyPath] }
+        set { state[keyPath: keyPath] = newValue }
     }
-    var isSealed: Bool { formatKind != "mirror" }
-    var selectedLibraries: [ContentType] { libraries.filter { selectedLibraryIDs.contains($0.id) } }
-    var selectedTargets: [Target] { selectedTargetIDs.compactMap { id in targets.first { $0.id == id } } }
-    var primaryTarget: Target? { dedupedTargets.first }
+    subscript<T>(dynamicMember keyPath: KeyPath<JobDraftState, T>) -> T { state[keyPath: keyPath] }
 
-    /// selected destinations with duplicates-by-path collapsed (a phantom-copy guard).
-    var dedupedTargets: [Target] {
-        var seen = Set<String>(), out: [Target] = []
-        for t in selectedTargets where seen.insert(t.destinationDir.path).inserted { out.append(t) }
-        return out
-    }
-    var hasDuplicateDestinations: Bool { dedupedTargets.count != selectedTargets.count }
+    // MARK: rules that need the saved jobs
 
-    var retentionPolicy: RetentionPolicy {
-        switch retentionKind {
-        case "lastN": return .keepLast(max(1, keepN))
-        // an individual bucket at zero is a real preference ("no monthlies"); all
-        // three at zero is a setting that means "keep nothing", which is not a
-        // retention policy. retentionPrune refuses to act on it either way — this
-        // just stops the UI expressing it.
-        case "gfs":
-            let (d, w, m) = (max(0, gfsDaily), max(0, gfsWeekly), max(0, gfsMonthly))
-            return d + w + m == 0 ? .keepLast(1) : .gfs(daily: d, weekly: w, monthly: m)
-        default:      return .keepAll
-        }
-    }
-
-    var frequency: BackupFrequency {
-        switch freqKind {
-        case .daily:
-            let c = Calendar.current.dateComponents([.hour, .minute], from: dailyTime)
-            return .daily(hour: c.hour ?? 2, minute: c.minute ?? 0)
-        case .everyHours: return .everyHours(everyHours)
-        case .once:       return .oneTime(onceDate)
-        case .manual:     return .manual
-        }
-    }
-
-    /// Encryption and the passphrase are fixed once a job exists. Turning encryption on
-    /// left an existing mirror image in plaintext while the manifest said encrypted; a
-    /// new passphrase replaced the only stored key, so the mirror and every earlier
-    /// version stopped opening; turning it off deleted that key. Changing keys needs a
-    /// key history, which is 1.6 work. Until then: create a new job.
-    var encryptionLocked: Bool { isEditing }
-
-    /// A mirror image can be grown in place on its next run but not shrunk.
-    var mirrorShrinkRequested: Bool {
-        guard isEditing, formatKind == "mirror", let was = editingMirrorGB else { return false }
-        return mirrorGB < was
-    }
-    var editingMirrorSizeText: String? {
-        editingMirrorGB.map { $0 >= 1000 && $0 % 1000 == 0 ? "\($0 / 1000) TB" : "\($0) GB" }
-    }
-
-    /// a new encrypted job needs a passphrase, entered twice and matching.
-    var encryptionValid: Bool {
-        if encryptionLocked { return true }
-        guard encrypt else { return true }
-        return !passphrase.isEmpty && passphrase == passphraseConfirm
-    }
-
-    /// another sealed job already archiving the same library to the same destination —
-    /// they'd share version folders and cross-prune. Blocks create.
-    /// Two sealed jobs writing the same library to the same folder share version
-    /// folders and cross-prune each other, so this blocks the combination. Compared
-    /// on canonical paths and case-insensitively: /Volumes/D/Backups and
-    /// /Volumes/d/backups are the SAME directory on case-insensitive APFS, and a raw
-    /// string compare let that pair through into exactly the data loss this prevents.
-    private static func samePlace(_ a: URL, _ b: URL) -> Bool {
-        TMUtilSnapshotBackend.canonicalPath(a.resolvingSymlinksInPath().path)
-            .compare(TMUtilSnapshotBackend.canonicalPath(b.resolvingSymlinksInPath().path),
-                     options: .caseInsensitive) == .orderedSame
-    }
-
-    /// Two mirror jobs writing the same library to the same folder share one image the
-    /// same way, and each run's --delete erases the other's copy, so mirrors are held
-    /// to the same rule. A sealed job and a mirror job may share a folder: their files
-    /// don't overlap.
-    var destinationConflicts: [String] {
-        var out = Set<String>()
-        for job in model.jobs where job.id != editingID && job.format.isSealed == isSealed {
-            for t in selectedTargets where job.targets.contains(where: { Self.samePlace($0.destinationDir, t.destinationDir) }) {
-                for lib in selectedLibraries where job.libraries.contains(where: { LibraryNames.same($0.displayName, lib.displayName) }) {
-                    out.insert("“\(job.name)” already \(isSealed ? "archives" : "mirrors") \(lib.displayName) to \(t.displayName)")
-                }
-            }
-        }
-        return out.sorted()
-    }
-
-    /// libraries in THIS job that would share an archive folder (see LibraryNames).
-    var libraryNameClashes: [String] { LibraryNames.clashMessages(selectedLibraries) }
-
-    var isValid: Bool {
-        !selectedLibraries.isEmpty && !dedupedTargets.isEmpty && encryptionValid && destinationConflicts.isEmpty
-            && libraryNameClashes.isEmpty && !mirrorShrinkRequested
-    }
-
-    var defaultName: String {
-        let names = selectedLibraries.map(\.displayName)
-        let lib = names.isEmpty ? "Libraries" : (names.count <= 2 ? names.joined(separator: ", ") : "\(names.count) libraries")
-        let dest = primaryTarget?.displayName ?? "Target"
-        let suffix = dedupedTargets.count > 1 ? " +\(dedupedTargets.count - 1)" : ""
-        return "\(lib) → \(dest)\(suffix)"
-    }
+    /// another job already writing one of these libraries to one of these folders.
+    var destinationConflicts: [String] { state.destinationConflicts(existing: model.jobs) }
+    var isValid: Bool { state.isValid(existing: model.jobs) }
 
     // MARK: mutators
 
-    func toggleLibrary(_ id: String) { if selectedLibraryIDs.contains(id) { selectedLibraryIDs.remove(id) } else { selectedLibraryIDs.insert(id) } }
-    func toggleTarget(_ id: String) { if selectedTargetIDs.contains(id) { selectedTargetIDs.removeAll { $0 == id } } else { selectedTargetIDs.append(id) } }
+    func toggleLibrary(_ id: String) { state.toggleLibrary(id) }
+    func toggleTarget(_ id: String) { state.toggleTarget(id) }
 
     func addLibrary(_ ct: ContentType, at url: URL) {
-        libraries.removeAll { $0.id == ct.id }
-        libraries.append(ct)
-        selectedLibraryIDs.insert(ct.id)
+        state.addLibrary(ct)
         model.libraryValid[ct.id] = FileManager.default.fileExists(atPath: url.path)
     }
     /// re-read the built-in library list (after a location edit) while keeping added ones.
     func refreshBuiltInLibraries() {
-        let builtins = model.registry.types
-        let ids = Set(builtins.map(\.id))
-        libraries = builtins + libraries.filter { !ids.contains($0.id) }
+        state.replaceBuiltInLibraries(model.registry.types)
         model.revalidate()
     }
 
     func addTarget(_ t: Target) {
-        targets.removeAll { $0.id == t.id }; targets.append(t); model.addTarget(t)
-        if !selectedTargetIDs.contains(t.id) { selectedTargetIDs.append(t.id) }
+        state.addTarget(t)
+        model.addTarget(t)
     }
     func removeTarget(_ id: String) {
         guard model.canRemoveTarget(id) else { return }
-        selectedTargetIDs.removeAll { $0 == id }
+        state.selectedTargetIDs.removeAll { $0 == id }
         model.removeTarget(id)
-        targets = model.targets
+        state.targets = model.targets
     }
 
     /// persist the job (Keychain + store). Returns false if the draft isn't valid.
     @discardableResult
     func commit() -> Bool {
         guard isValid else { return false }
-        let id = editingID ?? UUID().uuidString
-        // an existing job keeps its encryption and its key exactly as they are (see
-        // encryptionLocked); only a new job sets them
-        let encrypted = encryptionLocked ? editingEncrypted : encrypt
-        if !encryptionLocked, encrypt, !passphrase.isEmpty { KeychainArchiveKey.save(passphrase, jobID: id) }
-        model.addJob(BackupJob(id: id, name: name.isEmpty ? defaultName : name,
-                               libraries: selectedLibraries, targets: dedupedTargets, format: format,
-                               frequency: frequency, verification: verification, runPolicy: runPolicy,
-                               enabled: editingEnabled, encrypted: encrypted,
-                               retention: isSealed ? retentionPolicy : .keepAll,
-                               createdAt: editingCreatedAt ?? Date()))
+        let id = state.editingID ?? UUID().uuidString
+        if state.storesNewPassphrase { KeychainArchiveKey.save(state.passphrase, jobID: id) }
+        model.addJob(state.makeJob(id: id))
         return true
-    }
-
-    // MARK: seeding
-
-    private func seedDefaults() {
-        selectedTargetIDs = targets.first.map { [$0.id] } ?? []
-        let d = UserDefaults.standard
-        if d.integer(forKey: Prefs.mirrorGB) > 0 { mirrorValue = d.integer(forKey: Prefs.mirrorGB) }
-        if let u = d.string(forKey: Prefs.mirrorUnit) { mirrorUnit = u }
-        formatKind = d.string(forKey: Prefs.format) ?? "mirror"
-        if let v = d.string(forKey: Prefs.verify), let p = VerificationPolicy(rawValue: v) { verification = p }
-        if let r = d.string(forKey: Prefs.runPolicy), let p = RunPolicy(rawValue: r) { runPolicy = p }
-    }
-
-    private func seedFrom(_ job: BackupJob) {
-        name = job.name
-        for lib in job.libraries where !libraries.contains(where: { $0.id == lib.id }) { libraries.append(lib) }
-        selectedLibraryIDs = Set(job.libraries.map(\.id))
-        for t in job.targets where !targets.contains(where: { $0.id == t.id }) { targets.append(t) }
-        selectedTargetIDs = job.targets.map(\.id)
-        switch job.format {
-        case .sealedDMG: formatKind = "dmg"
-        case .sealedZip: formatKind = "zip"
-        case .liveMirror(let g):
-            formatKind = "mirror"
-            if g >= 1000, g % 1000 == 0 { mirrorValue = g / 1000; mirrorUnit = "TB" } else { mirrorValue = g; mirrorUnit = "GB" }
-        }
-        verification = job.verification; runPolicy = job.runPolicy; encrypt = job.encrypted
-        switch job.retention {
-        case .keepAll: retentionKind = "all"
-        case .keepLast(let n): retentionKind = "lastN"; keepN = n
-        case .gfs(let d, let w, let m): retentionKind = "gfs"; gfsDaily = d; gfsWeekly = w; gfsMonthly = m
-        }
-        switch job.frequency {
-        case .daily(let h, let m): freqKind = .daily; dailyTime = Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: Date()) ?? Date()
-        case .everyHours(let h): freqKind = .everyHours; everyHours = h
-        case .oneTime(let date): freqKind = .once; onceDate = date
-        case .manual: freqKind = .manual
-        }
     }
 }
