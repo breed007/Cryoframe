@@ -57,6 +57,29 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
     #expect(now <= eventually + (64 << 20), "free now \(now) is more than free after purging \(eventually)")
 }
 
+// The room check refuses exactly what the image's cap leaves no room for. A library
+// that fits only if macOS gave up its purgeable space used to pass the check and then
+// run out of room inside the image on every run.
+@Suite struct RoomCheck {
+@Test func aLibraryThatFitsOnlyIfMacOSPurgedIsRefusedAndToldWhy() {
+    let gib: UInt64 = 1 << 30
+    let between = SparseBundleMirrorEngine.roomVerdict(needs: 250 * gib, held: 0, imageBytes: .max,
+                                                       freeNow: 206 * gib, freeEventually: 324 * gib)
+    #expect(between == .notEnoughRoomUntilPurged(needed: 251 * gib, free: 206 * gib, purgeable: 118 * gib))
+    #expect(between?.errorDescription?.contains("purgeable") == true)
+    let beyond = SparseBundleMirrorEngine.roomVerdict(needs: 400 * gib, held: 0, imageBytes: .max,
+                                                      freeNow: 206 * gib, freeEventually: 324 * gib)
+    #expect(beyond == .notEnoughRoom(needed: 401 * gib, free: 324 * gib))
+    #expect(SparseBundleMirrorEngine.roomVerdict(needs: 100 * gib, held: 0, imageBytes: .max,
+                                                 freeNow: 206 * gib, freeEventually: 324 * gib) == nil)
+    // what the image already holds needn't come from the drive again
+    #expect(SparseBundleMirrorEngine.roomVerdict(needs: 250 * gib, held: 200 * gib, imageBytes: .max,
+                                                 freeNow: 206 * gib, freeEventually: 324 * gib) == nil)
+    // a drive that won't say is not read as full
+    #expect(SparseBundleMirrorEngine.roomVerdict(needs: 250 * gib, held: 0, imageBytes: .max, freeNow: nil, freeEventually: nil) == nil)
+}
+}
+
 @Test func theImageSizeComesFromTheDrive() {
     #expect(MirrorSizing.fromDestination.imageGB(destinationCapacity: 2_000_000_000_000) == 1862)
     #expect(MirrorSizing.fromDestination.imageGB(destinationCapacity: nil) == MirrorSizing.unknownCapacityGB)

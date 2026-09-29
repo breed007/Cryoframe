@@ -342,16 +342,36 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// those fails the run with the previous copy intact. An unknown free-space figure
     /// (some network shares) is not read as "full".
     static func checkRoom(for needs: UInt64, image: URL, imageBytes: UInt64, destination: URL) throws {
+        if let refusal = roomVerdict(needs: needs, held: Checksum.byteSize(of: image), imageBytes: imageBytes,
+                                     freeNow: JobExecutor.freeNow(for: destination),
+                                     freeEventually: JobExecutor.freeSpace(for: destination)) {
+            throw refusal
+        }
+    }
+
+    /// The decision in `checkRoom`, from its figures. It refuses exactly what the cap on
+    /// the image would leave no room for: anything over what is free now. On the
+    /// startup disk macOS also holds purgeable space (local snapshots, caches) that it
+    /// frees only when something needs it, and the check used to count that while the
+    /// cap didn't: a library between the two passed the check and then ran out of room
+    /// inside the image on every run, since nothing ever made macOS purge. A run in
+    /// that gap is now refused up front and told why.
+    static func roomVerdict(needs: UInt64, held: UInt64, imageBytes: UInt64,
+                            freeNow: UInt64?, freeEventually: UInt64?) -> MirrorSpaceError? {
         let margin = min(needs / 20, 1 << 30)
-        let held = Checksum.byteSize(of: image)
         let fromDrive = (needs > held ? needs - held : 0) + margin
-        if let free = JobExecutor.freeSpace(for: destination), free < fromDrive {
-            throw MirrorSpaceError.notEnoughRoom(needed: fromDrive, free: free)
+        if let eventually = freeEventually, eventually < fromDrive {
+            return .notEnoughRoom(needed: fromDrive, free: eventually)
+        }
+        if let now = freeNow, now < fromDrive {
+            return .notEnoughRoomUntilPurged(needed: fromDrive, free: now,
+                                             purgeable: (freeEventually ?? now) > now ? (freeEventually ?? now) - now : 0)
         }
         // a fixed-size image too small to hold the library at all
         if imageBytes < needs + margin {
-            throw MirrorSpaceError.imageTooSmall(size: imageBytes, needed: needs + margin)
+            return .imageTooSmall(size: imageBytes, needed: needs + margin)
         }
+        return nil
     }
 
     /// `hdiutil resize -limits` prints "min current max" in 512-byte sectors.
@@ -379,6 +399,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 
 public enum MirrorSpaceError: Error, Equatable {
     case notEnoughRoom(needed: UInt64, free: UInt64)
+    /// enough room only if macOS gave up the purgeable space it is holding
+    case notEnoughRoomUntilPurged(needed: UInt64, free: UInt64, purgeable: UInt64)
     case imageTooSmall(size: UInt64, needed: UInt64)
     case couldNotResize(String)
 }
@@ -388,6 +410,8 @@ extension MirrorSpaceError: LocalizedError {
         switch self {
         case .notEnoughRoom(let needed, let free):
             return "not enough space for the mirror: this run needs about \(JobExecutor.human(needed)) more and only \(JobExecutor.human(free)) is free. Nothing was changed; free up space or choose a bigger destination."
+        case .notEnoughRoomUntilPurged(let needed, let free, let purgeable):
+            return "not enough space for the mirror: this run needs about \(JobExecutor.human(needed)) more and \(JobExecutor.human(free)) is free now. macOS is holding another \(JobExecutor.human(purgeable)) as purgeable space (local snapshots and caches), which Finder counts as available, but it releases that only when something else needs it, and a mirror can't make it. Nothing was changed; free up space on the drive and run again."
         case .imageTooSmall(let size, let needed):
             return "the mirror's disk image holds \(JobExecutor.human(size)) and the library needs about \(JobExecutor.human(needed)). Nothing was changed."
         case .couldNotResize(let why):
