@@ -134,6 +134,29 @@ enum MirrorCopy {
             if i % 256 == 0, runner.control?.isCancelled == true { throw CancelledError() }
             try copyAttributes(from: source.appendingPathComponent(rel), to: next.appendingPathComponent(rel))
         }
+        restoreFolderModes(from: source, to: next)
+    }
+
+    /// Put every folder's mode back as the library has it. A --files-from pass makes
+    /// the folders on the way to each file it names writable so it can create the
+    /// file there, and leaves them so: a read-only folder holding a read-only file
+    /// came back 755 (plain rsync does the same: 555 after -aE, 755 after
+    /// --files-from). --no-implied-dirs keeps the mode but then can't create the file.
+    static func restoreFolderModes(from source: URL, to next: URL) {
+        var rels = [""]
+        if let walker = FileManager.default.enumerator(atPath: source.path) {
+            while let rel = walker.nextObject() as? String {
+                if walker.fileAttributes?[.type] as? FileAttributeType == .typeDirectory { rels.append(rel) }
+            }
+        }
+        // deepest first, so a folder is made read-only only after everything in it is set
+        for rel in rels.sorted(by: { $0.count > $1.count }) {
+            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
+            let to = rel.isEmpty ? next.path : next.appendingPathComponent(rel).path
+            var a = stat(), b = stat()
+            guard lstat(from, &a) == 0, lstat(to, &b) == 0, a.st_mode & 0o7777 != b.st_mode & 0o7777 else { continue }
+            chmod(to, a.st_mode & 0o7777)
+        }
     }
 
     /// regular files under `root` their owner can't write, relative to it.
@@ -244,14 +267,17 @@ enum MirrorCopy {
         acl_free(UnsafeMutableRawPointer(empty))
     }
 
-    /// remove the previous copy. Deny-delete ACLs inside it are lifted first if the
-    /// plain remove is refused. Whatever still won't go is left for the next run,
-    /// which starts from it rather than cloning again.
+    /// remove the previous copy. Deny-delete ACLs and read-only folders inside it are
+    /// dealt with if the plain remove is refused. Whatever still won't go is left for
+    /// the next run, which removes it before it starts (and fails if it can't).
     static func removeStaging(_ staging: URL, runner: CommandRunner) {
         let fm = FileManager.default
         try? fm.removeItem(at: staging)
         guard fm.fileExists(atPath: staging.path) else { return }
+        // deny-delete ACLs, and read-only folders (whose modes the copy keeps), are
+        // what stops a plain remove
         _ = try? runner.run("/bin/chmod", ["-R", "-N", staging.path], stdin: nil)
+        _ = try? runner.run("/bin/chmod", ["-R", "u+w", staging.path], stdin: nil)
         try? fm.removeItem(at: staging)
     }
 }
