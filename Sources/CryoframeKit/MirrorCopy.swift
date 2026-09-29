@@ -32,6 +32,7 @@
 //
 
 import Foundation
+import os
 
 enum MirrorCopy {
     static let stagingName = ".cryoframe-staging"
@@ -173,8 +174,7 @@ enum MirrorCopy {
     static func compare(_ rels: [String], source: URL, next: URL, control: RunControl?) -> [String] {
         guard !rels.isEmpty else { return [] }
         let workers = min(8, rels.count)
-        let lock = NSLock()
-        var bad: [String] = []
+        let bad = OSAllocatedUnfairLock(initialState: [String]())
         DispatchQueue.concurrentPerform(iterations: workers) { w in
             let size = 1 << 20
             let x = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
@@ -185,12 +185,12 @@ enum MirrorCopy {
                 if control?.isCancelled == true { return }
                 let rel = rels[i]
                 if !sameBytes(source.appendingPathComponent(rel).path, next.appendingPathComponent(rel).path, x, y, size) {
-                    lock.lock(); bad.append(rel); lock.unlock()
+                    bad.withLock { $0.append(rel) }
                 }
                 i += workers
             }
         }
-        return bad.sorted()
+        return bad.withLock { $0 }.sorted()
     }
 
     /// true when the two files hold the same bytes. The image was attached afresh for
