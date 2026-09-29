@@ -54,6 +54,20 @@ public struct OpenedArchive: Sendable {
     }
 }
 
+/// What sits at the top of an opened archive that isn't the library: a mirror's
+/// staging copy left by a crashed run, and the file system's own folders. The file
+/// browser hid nothing, so a crashed run's staging copy showed beside the library
+/// as if it were part of the backup. Only at the top: inside the library, a hidden
+/// name is the library's own.
+public enum ArchiveBookkeeping {
+    public static let rootNames: Set<String> = [MirrorCopy.stagingName, ".fseventsd", ".Spotlight-V100",
+                                                ".Trashes", ".TemporaryItems", ".DocumentRevisions-V100"]
+
+    public static func isHidden(_ name: String, atRoot: Bool) -> Bool {
+        atRoot && rootNames.contains(name)
+    }
+}
+
 public struct ArchiveReader: Sendable {
     let runner: CommandRunner
     let workBase: URL

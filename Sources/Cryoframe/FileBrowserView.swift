@@ -158,17 +158,19 @@ struct FileBrowserView: View {
         loading = true
         let dir = current
         Task {
-            let result = await Task.detached { Self.enumerate(dir) }.value
+            let atRoot = dir == root
+            let result = await Task.detached { Self.enumerate(dir, atRoot: atRoot) }.value
             guard current == dir else { return }      // user navigated again mid-read
             entries = result
             loading = false
         }
     }
 
-    private nonisolated static func enumerate(_ dir: URL) -> [Entry] {
+    private nonisolated static func enumerate(_ dir: URL, atRoot: Bool) -> [Entry] {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey, .fileSizeKey]
-        let urls = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: [])) ?? []
+        let urls = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: [])) ?? [])
+            .filter { !ArchiveBookkeeping.isHidden($0.lastPathComponent, atRoot: atRoot) }
         return urls.map { url in
             let v = try? url.resourceValues(forKeys: Set(keys))
             return Entry(url: url, isDir: v?.isDirectory ?? false, isPackage: v?.isPackage ?? false,

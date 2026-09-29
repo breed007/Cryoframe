@@ -43,6 +43,16 @@ private func archive(_ kind: SealedArchiveEngine.Sealed, _ lib: URL, to dir: URL
     #expect(name(["Music.sparsebundle"]) == "Music")
 }
 
+// The archive browser shows the library, not Cryoframe's or the file system's own
+// folders at the top of a mirror's volume. Hidden names inside the library stay.
+@Test func theBrowserHidesBookkeepingOnlyAtTheTop() {
+    #expect(ArchiveBookkeeping.isHidden(".cryoframe-staging", atRoot: true))
+    #expect(ArchiveBookkeeping.isHidden(".fseventsd", atRoot: true))
+    #expect(!ArchiveBookkeeping.isHidden("Lib", atRoot: true))
+    #expect(!ArchiveBookkeeping.isHidden(".cryoframe-staging", atRoot: false))
+    #expect(!ArchiveBookkeeping.isHidden(".git", atRoot: true))
+}
+
 // Only a trailing part suffix is one: a library can have ".part." in its own name,
 // and a mirror is never split.
 @Test func aNameWithPartInItIsNotMistakenForASplitArchive() {
