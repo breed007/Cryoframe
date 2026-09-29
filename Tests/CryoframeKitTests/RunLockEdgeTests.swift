@@ -44,7 +44,7 @@ private final class LockfHolder {
 
     func release() {
         try? stdin.fileHandleForWriting.close()
-        process.waitUntilExit()
+        waitBounded(process)
     }
 }
 
@@ -56,8 +56,7 @@ private func lockfCanTake(_ file: URL) throws -> Int32 {
     p.arguments = ["-k", "-t", "0", file.path, "/usr/bin/true"]
     p.standardError = FileHandle.nullDevice
     try p.run()
-    p.waitUntilExit()
-    return p.terminationStatus
+    return waitBounded(p) ?? -1
 }
 
 // MARK: - the lock folder

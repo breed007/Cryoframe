@@ -72,7 +72,7 @@ private let madeAt = Date(timeIntervalSince1970: 1_782_907_200)
     #expect(exists(w.appendingPathComponent("extract/file")))       // still alive: kept
 
     kill(opener.processIdentifier, SIGKILL)
-    opener.waitUntilExit()
+    waitBounded(opener)
     ArchiveReader.sweepStaleOpens(in: base)
     #expect(!exists(w))                                             // no day's wait once it's gone
 }
@@ -97,7 +97,7 @@ private let madeAt = Date(timeIntervalSince1970: 1_782_907_200)
     ditto.arguments = ["-x", "-k", zip.path, extract.path]
     try ditto.run()
     let owner = ProcessIdentity.of(pid: ditto.processIdentifier)
-    ditto.waitUntilExit()
+    waitBounded(ditto)
     let gone = owner ?? ProcessIdentity(pid: ditto.processIdentifier, startedAt: 1)
     try JSONEncoder().encode(gone).write(to: w.appendingPathComponent(OpenedArchive.ownerFileName))
     #expect(exists(extract.appendingPathComponent("a.txt")))

@@ -113,7 +113,7 @@ private struct Books {
     #expect(backend.unmounted.isEmpty && backend.deleted.isEmpty)      // still running
 
     kill(agent.processIdentifier, SIGKILL)
-    agent.waitUntilExit()
+    waitBounded(agent)
     let report = b.reconcile(backend)
     #expect(report.unmounted == [r.mount] && report.deletedSnapshots == [r.snapshot])
     #expect(b.owners.snapshotOwner(r.snapshot) == nil && b.owners.mountOwner(r.mount) == nil)
@@ -191,7 +191,7 @@ private let madeAt = Date(timeIntervalSince1970: 1_782_907_200)
     let stdin = Pipe()
     other.standardInput = stdin
     try other.run()
-    defer { try? stdin.fileHandleForWriting.close(); other.waitUntilExit() }
+    defer { try? stdin.fileHandleForWriting.close(); waitBounded(other) }
     for _ in 0..<50 where locks.holder(of: "b") == nil { try await Task.sleep(nanoseconds: 50_000_000) }
 
     let outcome = await LeftoverCleanup.run(helper: helper, locks: locks, jobIDs: ["a", "b"])
