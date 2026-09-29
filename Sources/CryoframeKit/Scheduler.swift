@@ -59,4 +59,14 @@ public struct Scheduler: Sendable {
     public func dueJobs(_ state: ScheduleState, now: Date, calendar: Calendar = .current) -> [BackupJob] {
         state.jobs.filter { $0.enabled && isDue($0, lastRun: state.lastRun[$0.id], now: now, calendar: calendar) }
     }
+
+    /// the jobs a scheduled pass starts: due, and not already running here or in the
+    /// app (that run records the result and moves the schedule on). Nor a job whose
+    /// interrupted transfer the user stopped earlier in this pass: the new run would
+    /// clear that Stop and back the whole job up again, straight after being told not to.
+    public func jobsToStart(_ state: ScheduleState, now: Date, running: Set<String>,
+                            stoppedThisPass: Set<String>, calendar: Calendar = .current) -> [BackupJob] {
+        dueJobs(state, now: now, calendar: calendar)
+            .filter { !running.contains($0.id) && !stoppedThisPass.contains($0.id) }
+    }
 }

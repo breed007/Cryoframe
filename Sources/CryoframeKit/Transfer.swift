@@ -160,15 +160,34 @@ public struct ChunkedShipper: Sendable {
 /// resumes interrupted transfers whose target is reachable again. Call on app
 /// launch and on each scheduled tick — the same reconnect pattern as snapshot reconcile.
 public enum TransferResumer {
+    /// what one pass over the pending transfers did.
+    public struct Pass: Sendable, Equatable {
+        /// pending-transfer records finished this pass
+        public var resumed: [String] = []
+        /// jobs whose resume was stopped this pass. Stop means "not now": the same pass
+        /// must not go on to start a full run of the job instead.
+        public var stoppedJobIDs: Set<String> = []
+    }
+
     @discardableResult
     public static func resumeAll(store: PendingTransferStore,
-                                 reachable: @Sendable (String) -> Bool = {
-                                     var dir: ObjCBool = false
-                                     return FileManager.default.fileExists(atPath: $0, isDirectory: &dir)
-                                         && FileManager.default.isWritableFile(atPath: $0)
-                                 },
+                                 reachable: @Sendable (String) -> Bool = TransferResumer.isReachable,
                                  locks: RunLocks? = nil,
                                  afterPart: (@Sendable (RunLease) -> Void)? = nil) -> [String] {
+        resume(store: store, reachable: reachable, locks: locks, afterPart: afterPart).resumed
+    }
+
+    @Sendable public static func isReachable(_ path: String) -> Bool {
+        var dir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &dir)
+            && FileManager.default.isWritableFile(atPath: path)
+    }
+
+    /// resume every interrupted transfer whose destination is reachable again.
+    public static func resume(store: PendingTransferStore,
+                              reachable: @Sendable (String) -> Bool = TransferResumer.isReachable,
+                              locks: RunLocks? = nil,
+                              afterPart: (@Sendable (RunLease) -> Void)? = nil) -> Pass {
         var resumed: [String] = []
         var stopped = Set<String>()          // jobs whose resume was stopped: none of theirs this pass
         let fm = FileManager.default
@@ -213,7 +232,7 @@ public enum TransferResumer {
                 // target dropped again — leave the record, retry next launch/tick
             }
         }
-        return resumed
+        return Pass(resumed: resumed, stoppedJobIDs: stopped)
     }
 
     /// the job a pending transfer belongs to: records are keyed `<job>:<dest>:<lib>`

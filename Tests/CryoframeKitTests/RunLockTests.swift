@@ -334,6 +334,42 @@ private func lockfCanTake(_ file: URL) throws -> Int32 {
     #expect(TransferResumer.resumeAll(store: store, reachable: { _ in true }, locks: locks) == ["job:dest:lib"])
 }
 
+// Stop pressed on a transfer the agent was resuming used to be followed, in the same
+// pass, by a full scheduled run of that job: the resume ended, the lock came free, and
+// the new run cleared the Stop as stale. The job whose resume was stopped sits this
+// pass out; other due jobs still run.
+@Suite struct ScheduledPass {
+@Test func aJobWhoseResumeWasStoppedIsNotStartedInTheSamePass() throws {
+    let base = tempDir("resume-stop-due"); defer { try? FileManager.default.removeItem(at: base) }
+    let buildDir = base.appendingPathComponent("scratch/job/build/lib", isDirectory: true)
+    try FileManager.default.createDirectory(at: buildDir, withIntermediateDirectories: true)
+    let src = buildDir.appendingPathComponent("Lib.dmg")
+    try Data(repeating: 7, count: 5_000).write(to: src)
+    let dest = base.appendingPathComponent("dest")
+    try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+    let store = PendingTransferStore(url: base.appendingPathComponent("pending.json"))
+    store.save(PendingTransfer(jobID: "job:dest:lib", sourceFile: src.path, baseName: "Lib.dmg",
+                               totalBytes: 5_000, chunkSize: 1_000, targetDir: dest.path, format: .sealedDMG, encrypted: false))
+    let locks = RunLocks(directory: base.appendingPathComponent("locks"))
+
+    let pass = TransferResumer.resume(store: store, reachable: { _ in true }, locks: locks,
+                                      afterPart: { _ in _ = locks.requestStop(jobID: "job") })
+    #expect(pass.resumed.isEmpty)
+    #expect(pass.stoppedJobIDs == ["job"])
+
+    let target = Target.localVolume(id: "t", name: "Disk", dir: dest)
+    let created = Date(timeIntervalSinceNow: -3 * 24 * 3600)
+    let stopped = BackupJob(id: "job", name: "stopped", libraries: [.photos], target: target,
+                            format: .sealedDMG, frequency: .everyHours(1), createdAt: created)
+    let other = BackupJob(id: "other", name: "other", libraries: [.photos], target: target,
+                          format: .sealedDMG, frequency: .everyHours(1), createdAt: created)
+    let state = ScheduleState(jobs: [stopped, other], lastRun: [:])
+    let start = Scheduler().jobsToStart(state, now: Date(), running: locks.runningJobIDs(among: ["job", "other"]),
+                                        stoppedThisPass: pass.stoppedJobIDs)
+    #expect(start.map(\.id) == ["other"])
+}
+}
+
 // MARK: - chores aren't runs
 
 @Test func aJobHeldForAChoreIsNotRunning() throws {

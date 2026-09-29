@@ -18,14 +18,17 @@ enum AgentMain {
         let store = JobStore.standard()
         let locks = RunLocks.standard()
         cleanUpLeftovers(jobIDs: store.load().jobs.map(\.id), locks: locks)
-        TransferResumer.resumeAll(store: PendingTransferStore.standard(), locks: locks)   // finish interrupted transfers first
+        // finish interrupted transfers first
+        let resumes = TransferResumer.resume(store: PendingTransferStore.standard(), locks: locks)
 
         // a due job the app is running right now is the app's run: it records the
         // result and moves the schedule on. Not due here, and not a deferral either.
         // A chore holding the lock (a tidy, a transfer finishing) isn't a run; the
-        // acquire below waits it out or records why the job waited.
+        // acquire below waits it out or records why the job waited. A job whose
+        // transfer was just stopped from the app waits for the next pass.
         let running = locks.runningJobIDs(among: store.load().jobs.map(\.id))
-        var due = Scheduler().dueJobs(store.load(), now: Date()).filter { !running.contains($0.id) }
+        var due = Scheduler().jobsToStart(store.load(), now: Date(), running: running,
+                                          stoppedThisPass: resumes.stoppedJobIDs)
         var alerts: [RunRecord] = []      // deferrals, delivered once the run loop is done
 
         // Unattended work on a dying laptop battery is how a Mac ends up flat. Hold
