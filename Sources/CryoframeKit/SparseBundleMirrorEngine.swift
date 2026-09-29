@@ -231,7 +231,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// read as damage and refused the restore of a healthy mirror.
     private func compact(_ bundle: URL, stdin: Data?) {
         MirrorSeal.withdrawBands(in: bundle.deletingLastPathComponent())
-        var args = ["compact", bundle.path]
+        // -puppetstrings: progress lines as it goes, which the tool watchdog counts
+        // (the disk-image daemon does the work, and hdiutil itself can sit idle)
+        var args = ["compact", "-puppetstrings", bundle.path]
         if passphrase != nil { args.append("-stdinpass") }
         _ = try? runner.forTeardown.run("/usr/bin/hdiutil", args, stdin: stdin)
     }

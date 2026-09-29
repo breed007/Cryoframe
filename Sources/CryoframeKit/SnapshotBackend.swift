@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import os
 import CryoframeShared
 
 /// Per-operation privileged snapshot primitives. All calls assume the caller is
@@ -148,11 +149,19 @@ public extension CommandRunner {
 }
 
 /// Real runner over Foundation `Process`. Used by the helper at runtime. When a
-/// `RunControl` is attached, a cancel terminates the in-flight process.
+/// `RunControl` is attached, a cancel terminates the in-flight process. Every tool is
+/// watched, and stopped if it makes no progress for `quietLimit` seconds (see
+/// ToolWatchdog): the run's, from its RunControl; the default otherwise.
 public struct ProcessCommandRunner: CommandRunner {
     public let control: RunControl?
-    public init(control: RunControl? = nil) { self.control = control }
-    public var forTeardown: CommandRunner { ProcessCommandRunner() }
+    public let quietLimit: TimeInterval
+    public init(control: RunControl? = nil, quietLimit: TimeInterval? = nil) {
+        self.control = control
+        self.quietLimit = quietLimit ?? control?.quietLimit ?? ToolWatchdog.defaultQuietLimit
+    }
+    /// no Stop (teardown must work after one), the same watchdog: a detach that hangs
+    /// on a dead drive is as stuck as anything else
+    public var forTeardown: CommandRunner { ProcessCommandRunner(quietLimit: quietLimit) }
 
     public func run(_ launchPath: String, _ args: [String], stdin: Data? = nil) throws -> CommandResult {
         let p = Process()
@@ -166,33 +175,59 @@ public struct ProcessCommandRunner: CommandRunner {
         control?.waitWhilePaused()                  // don't launch the next command while paused
         if let control, !control.attach(p) { throw CancelledError() }
         try p.run()
+        let watch = ToolWatch(p, limit: quietLimit, control: control)
+        watch.start()
         if let inPipe, let stdin {                  // feed the passphrase, then EOF
             inPipe.fileHandleForWriting.write(stdin)
             try? inPipe.fileHandleForWriting.close()
         }
-        // Drain both pipes at once, and before waitUntilExit. Reading stdout to EOF
-        // and only then stderr deadlocks as soon as a tool fills stderr's 64 KB
+        // Drain both pipes at once, and before waiting for the exit. Reading stdout to
+        // EOF and only then stderr deadlocks as soon as a tool fills stderr's 64 KB
         // buffer first: it blocks writing, we block reading, forever. rsync writes a
         // line per file it could not read, so a library with a few hundred of them
-        // hung a mirror run with the snapshot held.
-        nonisolated(unsafe) var errData = Data()
-        let errDrained = DispatchSemaphore(value: 0)
-        let errHandle = err.fileHandleForReading
-        DispatchQueue.global(qos: .utility).async {
-            errData = errHandle.readDataToEndOfFile()
-            errDrained.signal()
+        // hung a mirror run with the snapshot held. Each read also tells the watchdog
+        // the tool is alive.
+        let outData = Drained(), errData = Drained()
+        let drained = DispatchGroup()
+        for (handle, sink) in [(out.fileHandleForReading, outData), (err.fileHandleForReading, errData)] {
+            drained.enter()
+            Thread.detachNewThread {
+                while true {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { break }
+                    sink.append(chunk)
+                    watch.printed(chunk.count)
+                }
+                drained.leave()
+            }
         }
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
-        errDrained.wait()
-        let status = p.waitForExit()           // not waitUntilExit: see ProcessWait
+        // Wait for the output to end, as long as the tool runs. Once the watchdog has
+        // stopped it, not much longer: a process stuck inside the kernel on a share
+        // that stopped answering can't be killed until the kernel lets go, and the run
+        // has cleanup to do.
+        let patience = ToolWatchdog.termGrace + ToolWatchdog.abandonAfter
+        while drained.wait(timeout: .now() + 1) == .timedOut {
+            if let stoppedAt = watch.stoppedAt, ProcessInfo.processInfo.systemUptime - stoppedAt > patience { break }
+        }
+        watch.finish()
+        // not waitUntilExit: see ProcessWait
+        let status = watch.stoppedAt == nil ? p.waitForExit() : p.waitForExit(giveUpAfter: patience)
         control?.detach()
         if control?.isCancelled == true { throw CancelledError() }
+        if let quiet = watch.stalledAfter { throw ToolStalled(tool: (launchPath as NSString).lastPathComponent, quiet: quiet) }
         return CommandResult(
             status: status,
-            stdout: String(decoding: outData, as: UTF8.self),
-            stderr: String(decoding: errData, as: UTF8.self)
+            stdout: String(decoding: outData.data, as: UTF8.self),
+            stderr: String(decoding: errData.data, as: UTF8.self)
         )
     }
+}
+
+/// what one pipe of a tool printed, gathered by its reader thread
+final class Drained: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock(initialState: Data())
+    func append(_ d: Data) { lock.withLock { $0.append(d) } }
+    var data: Data { lock.withLock { $0 } }
 }
 
 public enum SnapshotBackendError: Error, Equatable {

@@ -21,12 +21,18 @@ extension Process {
     /// the process first but never says so, gives up waiting on the notice after five
     /// seconds and reports the status as unknown (a failure) rather than hang. A tool
     /// that is genuinely still running is waited for as long as it runs.
-    func waitForExit() -> Int32 {
+    ///
+    /// `giveUpAfter`, for a tool already killed that may not die (stuck in the kernel
+    /// on a share that stopped answering): stop waiting then, and report the status as
+    /// unknown.
+    func waitForExit(giveUpAfter: TimeInterval? = nil) -> Int32 {
         let pid = processIdentifier
         var pause: useconds_t = 500
         var reapedElsewhereAt: TimeInterval?
+        let deadline = giveUpAfter.map { ProcessInfo.processInfo.systemUptime + $0 }
         while true {
             if !isRunning { return terminationStatus }
+            if let deadline, ProcessInfo.processInfo.systemUptime > deadline { return Self.unknownExitStatus }
             if let since = reapedElsewhereAt {
                 if ProcessInfo.processInfo.systemUptime - since > 5 { return Self.unknownExitStatus }
             } else {

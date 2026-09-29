@@ -35,8 +35,11 @@ public final class RunControl: @unchecked Sendable {
     private var cancelled = false
     private var paused = false
     private var current: Process?
+    /// how long a tool of this run may make no progress before it is stopped (see
+    /// ToolWatchdog); shorter in tests
+    public let quietLimit: TimeInterval
 
-    public init() {}
+    public init(quietLimit: TimeInterval = ToolWatchdog.defaultQuietLimit) { self.quietLimit = quietLimit }
 
     public var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
     public var isPaused: Bool { lock.lock(); defer { lock.unlock() }; return paused }
