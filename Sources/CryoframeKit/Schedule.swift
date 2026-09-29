@@ -14,6 +14,19 @@ public enum BackupFrequency: Codable, Sendable, Equatable {
     case everyHours(Int)
     case daily(hour: Int, minute: Int)
 
+    /// the time between scheduled runs, for a job that repeats; nil for one that runs
+    /// only when asked, or once
+    public var interval: TimeInterval? {
+        switch self {
+        case .everyHours(let hours): return TimeInterval(max(1, hours)) * 3600
+        case .daily: return 86_400
+        case .manual, .oneTime: return nil
+        }
+    }
+
+    /// runs on a repeating schedule
+    public var isRecurring: Bool { interval != nil }
+
     /// the next scheduled instant strictly after `after`. nil if none (manual,
     /// or a one-time job already past `after`).
     public func nextFireDate(after reference: Date, calendar: Calendar = .current) -> Date? {

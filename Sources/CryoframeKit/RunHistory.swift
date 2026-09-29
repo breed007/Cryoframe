@@ -12,6 +12,10 @@ import Foundation
 
 public enum RunOutcomeKind: String, Codable, Sendable {
     case verified, completed, partial, deferred, failed, cancelled
+
+    /// a run that backed up everything it covers. Not a partial one (part of it
+    /// wasn't), and not one stopped or put off (nothing new was kept).
+    public var isGood: Bool { self == .verified || self == .completed }
 }
 
 public struct RunSummary: Sendable, Equatable {
@@ -174,11 +178,31 @@ public final class RunHistoryStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         var list = decode()
         list.insert(record, at: 0)
-        if list.count > cap { list = Array(list.prefix(cap)) }
-        write(list)
+        write(trimmed(list))
     }
 
     public func latest(forJob jobID: String) -> RunRecord? { all().first { $0.jobID == jobID } }
+
+    /// when each job last finished a good run (verified or completed)
+    public func lastGood() -> [String: Date] {
+        var out: [String: Date] = [:]
+        for r in all() where r.outcome.isGood && r.finishedAt > (out[r.jobID] ?? .distantPast) { out[r.jobID] = r.finishedAt }
+        return out
+    }
+
+    /// The newest `cap` records, and each job's newest good run however old: that is
+    /// what says how long a job has gone without one, and a job failing for weeks
+    /// alongside busier ones would otherwise lose it and read as never backed up.
+    private func trimmed(_ list: [RunRecord]) -> [RunRecord] {
+        guard list.count > cap else { return list }
+        var keep = Set(list.prefix(cap).map(\.id))
+        var newestGood: [String: RunRecord] = [:]
+        for r in list where r.outcome.isGood && r.finishedAt > (newestGood[r.jobID]?.finishedAt ?? .distantPast) {
+            newestGood[r.jobID] = r
+        }
+        keep.formUnion(newestGood.values.map(\.id))
+        return list.filter { keep.contains($0.id) }
+    }
 
     private func decode() -> [RunRecord] {
         guard let data = try? Data(contentsOf: url) else { return [] }

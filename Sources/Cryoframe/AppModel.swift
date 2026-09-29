@@ -31,6 +31,9 @@ final class AppModel: ObservableObject {
     @Published var targets: [Target] = []
     @Published var activity: [String] = []
     @Published var lastRecords: [String: RunRecord] = [:]   // latest run per job (persisted)
+    @Published var lastGood: [String: Date] = [:]           // when each job last finished a good run
+    @Published var clock = Date()                           // moves every few minutes, so "overdue" arrives on its own
+    @Published var scheduleOn = true                        // the scheduled agent is switched on
     @Published var lastHealth: [String: HealthRecord] = [:] // latest archive health check per job
     @Published var healthRecords: [HealthRecord] = []       // full history, newest first — drives per-version "verified" badges
     @Published var verifyingJobIDs: Set<String> = []        // jobs whose archives are being re-verified
@@ -107,6 +110,7 @@ final class AppModel: ObservableObject {
         var latest: [String: RunRecord] = [:]
         for r in history.all() where latest[r.jobID] == nil { latest[r.jobID] = r }   // newest-first → first wins
         lastRecords = latest
+        lastGood = history.lastGood()
     }
 
     /// recent runs across all jobs, newest first, for the History view.
@@ -512,10 +516,18 @@ final class AppModel: ObservableObject {
     /// kernel drops a dead process's lock). Only looks; never takes a lock.
     private func watchOtherRuns() {
         runWatch?.cancel()
+        scheduleOn = schedule.isEnabled
         runWatch = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 self.refreshOtherRuns()
+                // a job falls overdue with nothing happening; the schedule can be
+                // switched off in Settings or System Settings
+                if Date().timeIntervalSince(self.clock) >= 30 {
+                    self.clock = Date()
+                    let on = self.schedule.isEnabled
+                    if on != self.scheduleOn { self.scheduleOn = on }
+                }
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -646,6 +658,7 @@ final class AppModel: ObservableObject {
     private func apply(_ record: RunRecord) {
         history.append(record)
         lastRecords[record.jobID] = record
+        if record.outcome.isGood { lastGood[record.jobID] = record.finishedAt }
         if let w = record.warning { log("⚠︎ \(w)") }
         logFinished(record)
         maybeNotify(record)

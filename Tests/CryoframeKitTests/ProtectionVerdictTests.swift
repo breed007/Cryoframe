@@ -32,11 +32,13 @@ private func health(_ job: BackupJob, passed: Bool) -> HealthRecord {
 }
 
 private func verdict(_ jobs: [BackupJob], runs: [RunRecord] = [], health: [HealthRecord] = [],
-                     running: Int = 0) -> ProtectionVerdict {
+                     running: Int = 0, lastGood: [String: Date] = [:], now: TimeInterval = 2_000,
+                     scheduleOn: Bool = true) -> ProtectionVerdict {
     ProtectionVerdict.compute(jobs: jobs,
                               lastRecords: Dictionary(runs.map { ($0.jobID, $0) }, uniquingKeysWith: { a, _ in a }),
                               lastHealth: Dictionary(health.map { ($0.jobID, $0) }, uniquingKeysWith: { a, _ in a }),
-                              runningCount: running)
+                              runningCount: running, lastGood: lastGood, now: Date(timeIntervalSince1970: now),
+                              scheduleOn: scheduleOn)
 }
 
 // MARK: - the verdict
@@ -94,13 +96,117 @@ private func verdict(_ jobs: [BackupJob], runs: [RunRecord] = [], health: [Healt
     #expect(v.subtitle.hasSuffix(" · nothing needs your attention. 1 haven't run yet."))
 }
 
-// This is today's behavior, pinned so the move changes nothing. The honest-status
-// work in 1.6 is meant to change it: a stopped or deferred run is not a success.
-@Test func todayAStoppedOrDeferredRunCountsAsProtected() {
+// Pinned in 1.6's first milestone as it was: a stopped or deferred run counted as
+// protected, and the dashboard said "2 jobs healthy · never". Neither kept anything.
+@Test func aStoppedOrDeferredRunIsNotASuccess() {
     let (a, b) = (job("a"), job("b"))
     let v = verdict([a, b], runs: [run(a, .cancelled), run(b, .deferred)])
+    #expect(v.level == .attention)
+    #expect(v.title == "2 jobs need attention")
+    #expect(v.subtitle == "Job a was stopped before it finished — open it to fix. 0 of 2 jobs are fully healthy.")
+    // put off, with nothing good behind it
+    let put = verdict([b], runs: [run(b, .deferred)])
+    #expect(put.subtitle.hasPrefix("Job b hasn't finished a backup yet (put off"))
+}
+
+// MARK: - honest about time
+
+private let hour: TimeInterval = 3600, day: TimeInterval = 86_400
+
+private func scheduled(_ id: String, _ frequency: BackupFrequency = .daily(hour: 2, minute: 0),
+                       created: TimeInterval = 0, enabled: Bool = true) -> BackupJob {
+    var j = job(id)
+    j.frequency = frequency
+    j.createdAt = Date(timeIntervalSince1970: created)
+    j.enabled = enabled
+    return j
+}
+
+// A nightly job is overdue once two nights pass without a good run, and critical
+// after a week. Its latest record alone doesn't say: a job put off every night for a
+// week still had "put off" as its latest record, which used to count as fine.
+@Test func aScheduledJobIsOverdueAtTwiceItsIntervalAndCriticalAtAWeek() {
+    let a = scheduled("a")
+    let lastGood = ["a": Date(timeIntervalSince1970: 10 * day)]
+    #expect(verdict([a], runs: [run(a, .verified, at: 10 * day)], lastGood: lastGood, now: 11.9 * day).level == .protected)
+    let late = verdict([a], runs: [run(a, .deferred, at: 12 * day)], lastGood: lastGood, now: 12.1 * day)
+    #expect(late.level == .attention)
+    #expect(late.subtitle.hasPrefix("Job a hasn't had a good backup in 2 days (put off"), "\(late.subtitle)")
+    let week = verdict([a], runs: [run(a, .deferred, at: 17 * day)], lastGood: lastGood, now: 17 * day)
+    #expect(week.level == .critical)
+    #expect(week.title == "1 backup is overdue")
+    #expect(week.subtitle.hasPrefix("Job a hasn't had a good backup in 7 days"))
+    // an hourly job: overdue after two hours, but critical only after a week
+    let h = scheduled("h", .everyHours(1))
+    let hourly = verdict([h], runs: [run(h, .completed, at: 100 * day)], lastGood: ["h": Date(timeIntervalSince1970: 100 * day)],
+                         now: 100 * day + 3 * hour)
+    #expect(hourly.level == .attention)
+    // a weekly one: not overdue until two weeks, and then critical at once
+    let w = scheduled("w", .everyHours(168))
+    let good = ["w": Date(timeIntervalSince1970: 100 * day)]
+    #expect(verdict([w], runs: [run(w, .completed, at: 100 * day)], lastGood: good, now: 113 * day).level == .protected)
+    #expect(verdict([w], runs: [run(w, .completed, at: 100 * day)], lastGood: good, now: 114 * day).level == .critical)
+}
+
+// A job that has never finished a good run is judged from when it was set up.
+@Test func aScheduledJobThatNeverFinishedIsOverdueFromItsCreation() {
+    let a = scheduled("a", created: 100 * day)
+    #expect(verdict([a], now: 100 * day + hour).level == .idle)            // new: ready to back up
+    let v = verdict([a], runs: [run(a, .cancelled, at: 101 * day)], now: 103 * day)
+    #expect(v.level == .attention)
+    #expect(v.subtitle.hasPrefix("Job a hasn't finished a backup since it was set up 3 days ago (its last run was stopped)"), "\(v.subtitle)")
+    #expect(verdict([a], now: 108 * day).level == .critical)
+}
+
+// Only verified and completed runs are good ones. A partial run left part of the job
+// behind; a job partial every night for a week is critical.
+@Test func aPartialRunDoesNotResetTheClock() {
+    let a = scheduled("a")
+    let v = verdict([a], runs: [run(a, .partial, at: 20 * day)], lastGood: ["a": Date(timeIntervalSince1970: 12 * day)], now: 20 * day)
+    #expect(v.level == .critical)
+    #expect(v.subtitle.contains("(its last run was partial)"))
+}
+
+// A paused job is flagged, and doesn't turn overdue: it was paused on purpose.
+@Test func aPausedJobIsFlaggedButNotOverdue() {
+    let a = scheduled("a", enabled: false), b = scheduled("b")
+    let good = ["a": Date(timeIntervalSince1970: 0), "b": Date(timeIntervalSince1970: 30 * day)]
+    let v = verdict([a, b], runs: [run(a, .verified, at: 0), run(b, .verified, at: 30 * day)], lastGood: good, now: 30 * day + hour)
+    #expect(v.level == .attention)
+    #expect(v.subtitle == "Job a is paused, so its schedule doesn't run it — open it to fix. 1 of 2 jobs are fully healthy.")
+}
+
+// With the scheduled agent switched off nothing runs on its own.
+@Test func aSwitchedOffScheduleIsFlagged() {
+    let a = scheduled("a"), m = job("m")
+    let good = ["a": Date(timeIntervalSince1970: 30 * day)]
+    let v = verdict([a, m], runs: [run(a, .verified, at: 30 * day), run(m, .verified, at: 30 * day)], lastGood: good,
+                    now: 30 * day + hour, scheduleOn: false)
+    #expect(v.level == .attention && v.title == "Scheduled backups are off")
+    #expect(v.subtitle.hasPrefix("1 job won't run on its schedule"))
+    // manual jobs alone don't need it
+    #expect(verdict([m], runs: [run(m, .verified, at: 30 * day)], now: 30 * day + hour, scheduleOn: false).level == .protected)
+    // a failure still says so first
+    #expect(verdict([a], runs: [run(a, .failed, at: 30 * day)], now: 30 * day + hour, scheduleOn: false).level == .critical)
+}
+
+// A job you run by hand has no schedule to fall behind: after a month it is worth a
+// look, never critical for its age.
+@Test func aManualJobIsFlaggedAfterAMonthAndNeverCritical() {
+    let m = job("m")
+    let good = ["m": Date(timeIntervalSince1970: 0)]
+    #expect(verdict([m], runs: [run(m, .completed, at: 0)], lastGood: good, now: 29 * day).level == .protected)
+    let v = verdict([m], runs: [run(m, .completed, at: 0)], lastGood: good, now: 400 * day)
+    #expect(v.level == .attention)
+    #expect(v.subtitle.hasPrefix("Job m hasn't been backed up in 400 days; it runs only when you press Run now"))
+}
+
+// The latest record may be a deferral while an older good run is still recent.
+@Test func aDeferralWithinTheScheduleIsFine() {
+    let a = scheduled("a")
+    let v = verdict([a], runs: [run(a, .deferred, at: 10 * day + hour)], lastGood: ["a": Date(timeIntervalSince1970: 10 * day)],
+                    now: 10 * day + 2 * hour)
     #expect(v.level == .protected)
-    #expect(v.subtitle.hasPrefix("2 jobs healthy · never · "))
 }
 
 // MARK: - dashboard figures
