@@ -193,11 +193,19 @@ enum MirrorCopy {
 
     /// extended attributes (resource fork included) and ACL, onto a copy that is
     /// read-only like its source: made writable for the moment it takes.
+    ///
+    /// Writing a resource fork updates the file's modification date, so the library's
+    /// dates go back on afterwards: without that the copy's date drifted (the read-back
+    /// caught it), and rsync sent the file again on every run.
     static func copyAttributes(from src: URL, to dst: URL) throws {
-        var st = stat()
-        guard lstat(dst.path, &st) == 0 else { return }
+        var st = stat(), times = stat()
+        guard lstat(dst.path, &st) == 0, lstat(src.path, &times) == 0 else { return }
         chmod(dst.path, (st.st_mode & 0o7777) | S_IWUSR)
-        defer { chmod(dst.path, st.st_mode & 0o7777) }
+        defer {
+            var ts = [times.st_atimespec, times.st_mtimespec]
+            _ = utimensat(AT_FDCWD, dst.path, &ts, AT_SYMLINK_NOFOLLOW)
+            chmod(dst.path, st.st_mode & 0o7777)
+        }
         guard copyfile(src.path, dst.path, nil, copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL)) == 0 else {
             throw ArchiveError.toolFailed(tool: "copyfile", status: errno,
                                           stderr: "\(src.lastPathComponent): couldn't copy its attributes (\(String(cString: strerror(errno))))")

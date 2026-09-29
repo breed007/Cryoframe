@@ -416,8 +416,10 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
         let copy = mnt.appendingPathComponent("Lib/objects/a*b [1]?")
         #expect(tree(mnt.appendingPathComponent("Lib")) == tree(src))
         #expect(!fm.fileExists(atPath: mnt.appendingPathComponent("Lib/objects/gone").path), "a deleted read-only file stayed in the mirror")
-        var st = stat()
+        var st = stat(), orig = stat()
         #expect(lstat(copy.path, &st) == 0 && st.st_mode & 0o777 == 0o444)
+        // writing the resource fork moves the date; the library's goes back on
+        #expect(lstat(odd.path, &orig) == 0 && st.st_mtimespec.tv_sec == orig.st_mtimespec.tv_sec, "the read-only file's date changed")
         var buf = [UInt8](repeating: 0, count: 16)
         #expect(getxattr(copy.path, "com.example.tag", &buf, 16, 0, 0) == 2)
         #expect(getxattr(copy.path, "com.apple.ResourceFork", &buf, 16, 0, 0) == 4)
