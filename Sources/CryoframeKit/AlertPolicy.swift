@@ -53,6 +53,15 @@ public enum AlertPolicy {
                        high: false, tags: "hourglass")
     }
 
+    /// A scheduled job gone twice its interval without a good run. The agent decides
+    /// how often to repeat it (see AlertThrottle); this decides what it says.
+    public static func payload(forOverdue job: BackupJob, standing: ProtectionVerdict.Standing, now: Date) -> Payload? {
+        guard case .overdue(_, _, let critical, _) = standing else { return nil }
+        return Payload(title: "Cryoframe — \(job.name) is overdue",
+                       body: "\(critical ? "⚠️" : "⏰") \(job.name) \(standing.reason(now: now)).",
+                       high: critical, tags: critical ? "warning" : "alarm_clock")
+    }
+
     /// A destination about to run out. Only the "no room for the next run" case is
     /// sent: a job quietly keeping every version is worth showing in the app, but it
     /// is not worth a notification on someone's phone.
@@ -88,3 +97,33 @@ public enum AlertPolicy {
     }
 }
 
+/// Remembers when an alert about something was last sent, so the hourly agent says it
+/// once a day rather than every time it looks. Kept in `defaults` under `key`, by
+/// subject (a job id, a destination).
+public struct AlertThrottle: @unchecked Sendable {
+    let defaults: UserDefaults
+    let key: String
+    let interval: TimeInterval
+
+    public init(defaults: UserDefaults = .standard, key: String, interval: TimeInterval = 24 * 60 * 60) {
+        self.defaults = defaults; self.key = key; self.interval = interval
+    }
+
+    public func shouldSend(_ subject: String, now: Date) -> Bool {
+        guard let last = (defaults.dictionary(forKey: key) as? [String: Double])?[subject] else { return true }
+        return now.timeIntervalSince1970 - last >= interval || now.timeIntervalSince1970 < last
+    }
+
+    public func recordSent(_ subject: String, now: Date) {
+        var map = defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
+        map[subject] = now.timeIntervalSince1970
+        defaults.set(map, forKey: key)
+    }
+
+    /// forget a subject that is fine again, so its next trouble is told at once
+    public func clear(_ subject: String) {
+        var map = defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
+        guard map.removeValue(forKey: subject) != nil else { return }
+        defaults.set(map, forKey: key)
+    }
+}

@@ -94,4 +94,42 @@ private func record(_ job: BackupJob, _ outcome: RunOutcomeKind, at t: TimeInter
         }
         #expect(sent == [AlertPolicy.deferralsBeforeAlert])
     }
+
+    @Test func anOverdueJobAlertsAndACriticalOneLoudly() {
+        let a = job("a")
+        let now = Date(timeIntervalSince1970: 10 * 86_400)
+        let late = ProtectionVerdict.standing(of: a, latest: record(a, .deferred, at: 9.5 * 86_400),
+                                              lastGood: Date(timeIntervalSince1970: 7 * 86_400), health: nil, now: now)
+        let p = AlertPolicy.payload(forOverdue: a, standing: late, now: now)
+        #expect(p?.title == "Cryoframe — Job a is overdue")
+        #expect(p?.high == false)
+        #expect(p?.body.hasPrefix("⏰ Job a hasn't had a good backup in 3 days (put off") == true, "\(p?.body ?? "")")
+        let week = ProtectionVerdict.standing(of: a, latest: nil, lastGood: Date(timeIntervalSince1970: 2 * 86_400), health: nil, now: now)
+        #expect(AlertPolicy.payload(forOverdue: a, standing: week, now: now)?.high == true)
+        let fine = ProtectionVerdict.standing(of: a, latest: record(a, .verified, at: 9.9 * 86_400),
+                                              lastGood: Date(timeIntervalSince1970: 9.9 * 86_400), health: nil, now: now)
+        #expect(AlertPolicy.payload(forOverdue: a, standing: fine, now: now) == nil)
+        // a job run by hand is never overdue, however old its copy
+        let m = job("m", .manual)
+        let later = Date(timeIntervalSince1970: 400 * 86_400)
+        let old = ProtectionVerdict.standing(of: m, latest: nil, lastGood: Date(timeIntervalSince1970: 0), health: nil, now: later)
+        #expect(AlertPolicy.payload(forOverdue: m, standing: old, now: later) == nil)
+    }
+
+    // The agent looks every hour; an overdue job is told once a day.
+    @Test func theThrottleSaysSoOnceADay() throws {
+        let suite = "cf-throttle-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let t = AlertThrottle(defaults: defaults, key: "overdue")
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        #expect(t.shouldSend("a", now: t0))
+        t.recordSent("a", now: t0)
+        #expect(!t.shouldSend("a", now: t0.addingTimeInterval(3600)))
+        #expect(t.shouldSend("b", now: t0.addingTimeInterval(3600)), "each subject on its own")
+        #expect(t.shouldSend("a", now: t0.addingTimeInterval(24 * 3600)))
+        #expect(t.shouldSend("a", now: t0.addingTimeInterval(-3600)), "a clock set back doesn't silence it for good")
+        t.clear("a")
+        #expect(t.shouldSend("a", now: t0.addingTimeInterval(60)))
+    }
 }

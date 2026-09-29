@@ -33,7 +33,7 @@ enum AgentMain {
         var due = Scheduler().jobsToStart(store.load(), now: Date(), running: running,
                                           stoppedThisPass: resumes.stoppedJobIDs)
         var alerts: [RunRecord] = []      // failures to start, delivered once the run loop is done
-        var notices: [AlertPolicy.Payload] = []     // deferrals that have gone on
+        var notices: [AlertPolicy.Payload] = []     // deferrals that have gone on, overdue jobs
         let historyStore = RunHistoryStore.standard()
         // One history record per run of deferrals, kept up to date, rather than one
         // every hour (see RunHistoryStore.recordDeferral); an alert once it has
@@ -122,6 +122,7 @@ enum AgentMain {
             storage: StorageReporter.report(store.load().jobs),
             retention: Dictionary(uniqueKeysWithValues: store.load().jobs.map { ($0.id, $0.retention) })
         ).filter { $0.kind == .tight && StorageNag.shouldWarn($0.destination, now: Date()) }
+        let overdue = overdueNotices(jobs: store.load().jobs, history: historyStore, now: Date())
         sleepGuard.end()
 
         // Send everything before exiting. This process is the ONLY thing that will
@@ -133,6 +134,9 @@ enum AgentMain {
         Task {
             for record in alerts { await RemoteAlert.deliver(for: record) }
             for p in notices { await RemoteAlert.deliverPayload(p) }
+            for (p, sent) in overdue {
+                if await RemoteAlert.deliverPayload(p) { sent() }
+            }
             for record in healthRecords { await RemoteAlert.deliverHealth(for: record) }
             for finding in pressure {
                 await RemoteAlert.deliverStorage(for: finding)
@@ -143,6 +147,34 @@ enum AgentMain {
         }
         sem.wait()
         exit(0)
+    }
+
+    /// Scheduled jobs gone twice their interval without a good run, as alerts: once a
+    /// day each while it lasts, and again at once when one turns critical. Each comes
+    /// with what to call once it is sent, so an alert that couldn't go (none set up)
+    /// is told when one can. A job that is fine again is forgotten, so its next
+    /// trouble is told at once. A job that failed is left to the failure alert its run
+    /// sent; a paused one was paused on purpose.
+    private static func overdueNotices(jobs: [BackupJob], history: RunHistoryStore,
+                                       now: Date) -> [(AlertPolicy.Payload, @Sendable () -> Void)] {
+        let throttle = AlertThrottle(key: "overdue.lastAlerted")
+        let lastGood = history.lastGood()
+        var latest: [String: RunRecord] = [:]
+        for r in history.all() where latest[r.jobID] == nil { latest[r.jobID] = r }
+        var out: [(AlertPolicy.Payload, @Sendable () -> Void)] = []
+        for job in jobs where job.enabled && job.frequency.isRecurring {
+            let standing = ProtectionVerdict.standing(of: job, latest: latest[job.id], lastGood: lastGood[job.id],
+                                                      health: nil, now: now)
+            guard case .overdue(_, _, let critical, _) = standing,
+                  let p = AlertPolicy.payload(forOverdue: job, standing: standing, now: now) else {
+                throttle.clear(job.id); throttle.clear(job.id + ".critical")
+                continue
+            }
+            let subject = critical ? job.id + ".critical" : job.id
+            guard throttle.shouldSend(subject, now: now) else { continue }
+            out.append((p, { throttle.recordSent(subject, now: now) }))
+        }
+        return out
     }
 
     /// Ask the helper to clean up after crashed runs before any run of ours starts.
