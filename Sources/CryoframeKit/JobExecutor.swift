@@ -610,10 +610,14 @@ public struct JobExecutor: Sendable {
                         runner: CommandRunner, passphrase: String?,
                         onStage: @escaping @Sendable (BackupStage) -> Void) throws -> LibraryRunResult {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        // the mirror engine writes its own manifest: it has to re-seal the image after
+        // a run that stops part-way, too (see MirrorSeal)
         let archive = try EngineFactory.engine(for: job.format, target: target, runner: runner,
                                                passphrase: passphrase).archive(source, to: dest)
-        onStage(.checksumming)
-        try ArchiveManifest.write(try ArchiveManifest.build(for: archive, encrypted: passphrase != nil), toDir: dest)
+        if archive.format != .liveMirror {
+            onStage(.checksumming)
+            try ArchiveManifest.write(try ArchiveManifest.build(for: archive, encrypted: passphrase != nil), toDir: dest)
+        }
         var verified: Bool?
         if job.verification == .mountAndOpen {
             onStage(.verifying)

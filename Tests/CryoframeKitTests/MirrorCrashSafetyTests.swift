@@ -222,6 +222,80 @@ private struct DiesMidRsync: CommandRunner {
     }
 }
 
+/// A mirror's manifest describes the image at rest. A run that stops part-way has
+/// already changed the image (new bands, a staging copy), so the checksum no longer
+/// matched and the restore, drill and rehearsal all refused the complete previous
+/// copy inside it until the job next ran successfully.
+@Suite(.serialized) struct InterruptedMirrorRestores {
+
+    /// what JobExecutor writes after a mirror run (the engine does it itself now).
+    private func sealLikeTheExecutor(_ result: ArchiveResult, in dir: URL) throws {
+        try ArchiveManifest.write(try ArchiveManifest.build(for: result), toDir: dir)
+    }
+
+    @Test func aMirrorWhoseRunWasStoppedStillRestoresThePreviousCopy() throws {
+        let src = try library(files: 20)
+        let out = tempDir("int"), base = tempDir("base"), back = tempDir("back")
+        defer { for d in [out, base, back, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let result = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        try sealLikeTheExecutor(result, in: out)
+        let before = tree(src)
+
+        try editEverything(src, files: 20)
+        _ = try? SparseBundleMirrorEngine(sizeGB: 1, runner: DiesMidRsync(), mountBase: base)
+            .archive(ArchiveSource(name: "Lib", root: src), to: out)
+
+        let archive = try #require(RestoreDiscovery.archive(at: out))
+        let restored = try RestoreEngine().restore(archive, to: back, verify: true)
+        #expect(tree(restored) == before)
+        let check = try ChecksumVerifier().reverify(archiveDir: out)
+        #expect(check.passed, "\(check.details)")
+    }
+
+    // A run killed outright leaves the image attached and nothing re-sealed. The
+    // launch sweep detaches it; the restore then opens the previous copy, and the
+    // checksum pass says it didn't check rather than calling the mirror corrupt.
+    @Test func aMirrorWhoseRunCrashedRestoresAfterTheLaunchSweep() throws {
+        let src = try library(files: 12)
+        let dest = tempDir("crash"), base = tempDir("base"), back = tempDir("back")
+        let out = dest.appendingPathComponent("Lib")           // <destination>/<library>, as a job lays it out
+        defer { for d in [dest, base, back, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let result = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        try sealLikeTheExecutor(result, in: out)
+        let before = tree(src)
+
+        // the crashed run: marked open, attached at its own directory, half-written
+        try MirrorSeal.markOpen(out)
+        let work = base.appendingPathComponent(MirrorMounts.prefix + "crashed")
+        let mnt = work.appendingPathComponent("mnt")
+        try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
+        let me = ProcessIdentity.current!
+        try JSONEncoder().encode(ProcessIdentity(pid: me.pid, startedAt: me.startedAt - 1))
+            .write(to: work.appendingPathComponent(OpenedArchive.ownerFileName))
+        let r = try DiskImageGate.serialized {
+            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", result.artifacts[0].path, "-mountpoint", mnt.path, "-nobrowse"])
+        }
+        try #require(r.ok, "\(r.stderr)")
+        defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
+        let staging = mnt.appendingPathComponent("\(MirrorCopy.stagingName)/Lib")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        for i in 0..<200 { try Data(repeating: 1, count: 64 * 1024).write(to: staging.appendingPathComponent("half\(i).bin")) }
+
+        ArchiveReader.sweepStaleOpens(in: base)
+        #expect(!MountPoint.isMounted(mnt))
+
+        let archive = try #require(RestoreDiscovery.archive(at: out))
+        let restored = try RestoreEngine().restore(archive, to: back, verify: true)
+        #expect(tree(restored) == before)
+
+        let job = BackupJob(id: "j", name: "j", libraries: [.genericFolder(id: "l", displayName: "Lib", path: .home("Lib"))],
+                            target: .localVolume(id: "t", name: "Disk", dir: dest),
+                            format: .liveMirror(sizeGB: 1), frequency: .manual, createdAt: Date())
+        let health = HealthChecker().check(job: job)
+        #expect(health.checks.first?.skipped == true, "\(health.checks)")
+    }
+}
+
 /// presses Stop once rsync has written a new file into the staging copy.
 private final class StopOnceCopying: CommandRunner, @unchecked Sendable {
     let inner: ProcessCommandRunner
