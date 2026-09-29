@@ -128,6 +128,11 @@ public struct ChunkedShipper: Sendable {
             var remaining = Int(min(state.chunkSize, state.totalBytes - UInt64(index) * state.chunkSize))
             var hasher = SHA256()
             while remaining > 0 {
+                // a part can be gigabytes on a slow share; don't make Stop wait it out
+                if control?.isCancelled == true {
+                    try? writer.close(); try? fm.removeItem(at: tmpURL)
+                    throw CancelledError()
+                }
                 let chunk = try reader.read(upToCount: min(bufferSize, remaining)) ?? Data()
                 if chunk.isEmpty { break }
                 hasher.update(data: chunk)
@@ -162,22 +167,36 @@ public enum TransferResumer {
                                      return FileManager.default.fileExists(atPath: $0, isDirectory: &dir)
                                          && FileManager.default.isWritableFile(atPath: $0)
                                  },
-                                 locks: RunLocks? = nil) -> [String] {
+                                 locks: RunLocks? = nil,
+                                 afterPart: (@Sendable (RunLease) -> Void)? = nil) -> [String] {
         var resumed: [String] = []
+        var stopped = Set<String>()          // jobs whose resume was stopped: none of theirs this pass
         let fm = FileManager.default
         for pending in store.all() {
-            guard fm.fileExists(atPath: pending.sourceFile), reachable(pending.targetDir) else { continue }
+            guard fm.fileExists(atPath: pending.sourceFile), reachable(pending.targetDir),
+                  !stopped.contains(jobID(of: pending)) else { continue }
             // A job that is running right now, here or in the other process, is
             // shipping its own transfers; resuming alongside it writes the same parts
             // twice at once. Leave it to the run, or to the next pass.
-            var lease: RunLease?
+            let lease: RunLease?
             if let locks {
                 guard let held = try? locks.acquire(jobID: jobID(of: pending), trigger: .resume) else { continue }
                 lease = held
+            } else {
+                lease = nil
             }
             defer { lease?.release() }
+            // Stop, pressed in the app, reaches a resume like any run: the transfer
+            // stops at the next block and its record stays for the next pass.
+            let control = RunControl()
+            lease?.onStopRequest { control.cancel() }
             do {
-                _ = try ChunkedShipper().ship(pending, persist: { store.save($0) })
+                _ = try ChunkedShipper().ship(pending, persist: { state in
+                    store.save(state)
+                    guard let lease else { return }
+                    afterPart?(lease)                        // tests: act between parts
+                    if lease.stopRequested { control.cancel() }
+                }, control: control)
                 store.remove(jobID: pending.jobID)
                 // a multi-destination job stages ONE build for several resumable copies,
                 // so several pendings can share a sourceFile. Only delete the scratch
@@ -188,6 +207,8 @@ public enum TransferResumer {
                     try? fm.removeItem(at: URL(fileURLWithPath: pending.sourceFile).deletingLastPathComponent())
                 }
                 resumed.append(pending.jobID)
+            } catch is CancelledError {
+                stopped.insert(jobID(of: pending))
             } catch {
                 // target dropped again — leave the record, retry next launch/tick
             }

@@ -486,11 +486,14 @@ final class AppModel: ObservableObject {
 
     func stopJob(_ id: String) {
         queue.removeAll { $0 == id }
-        if controls[id] == nil, externalRuns[id] != nil {
+        if controls[id] == nil, let holder = externalRuns[id] {
             // the scheduled agent is running it: ask that process to stop its own run,
             // so its teardown (snapshot, mounts, tools) happens where they live
             let name = jobs.first { $0.id == id }?.name ?? "Job"
-            if runLocks.requestStop(jobID: id) {
+            if holder.trigger == .cleanup {
+                // a scratch tidy holds the lock for a moment and listens for nothing
+                log("⏸ \(name): tidying up leftovers — done in a moment")
+            } else if runLocks.requestStop(jobID: id) {
                 stoppingJobIDs.insert(id)
                 log("⏹ \(name): asked the scheduled run to stop")
             } else {

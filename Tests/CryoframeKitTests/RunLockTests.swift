@@ -297,3 +297,29 @@ private func lockfCanTake(_ file: URL) throws -> Int32 {
     #expect(status == 75, "another process could take the lock of a job that is still running")
 }
 
+// MARK: - Stop reaches a resumed transfer
+
+@Test func stopReachesAResumedTransfer() throws {
+    let base = tempDir("resume-stop"); defer { try? FileManager.default.removeItem(at: base) }
+    let buildDir = base.appendingPathComponent("scratch/job/build/lib", isDirectory: true)
+    try FileManager.default.createDirectory(at: buildDir, withIntermediateDirectories: true)
+    let src = buildDir.appendingPathComponent("Lib.dmg")
+    try Data(repeating: 7, count: 5_000).write(to: src)
+    let dest = base.appendingPathComponent("dest")
+    try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+    let store = PendingTransferStore(url: base.appendingPathComponent("pending.json"))
+    store.save(PendingTransfer(jobID: "job:dest:lib", sourceFile: src.path, baseName: "Lib.dmg",
+                               totalBytes: 5_000, chunkSize: 1_000, targetDir: dest.path, format: .sealedDMG, encrypted: false))
+    let locks = RunLocks(directory: base.appendingPathComponent("locks"))
+
+    // Stop pressed in the other process while the first part is shipping
+    let resumed = TransferResumer.resumeAll(store: store, reachable: { _ in true }, locks: locks,
+                                            afterPart: { _ in _ = locks.requestStop(jobID: "job") })
+
+    #expect(resumed.isEmpty)
+    #expect(store.all().first?.completed.count == 1)        // stopped after the part in hand
+    #expect(locks.holder(of: "job") == nil)
+    // stopped, not abandoned: the next pass finishes it
+    #expect(TransferResumer.resumeAll(store: store, reachable: { _ in true }, locks: locks) == ["job:dest:lib"])
+}
+
