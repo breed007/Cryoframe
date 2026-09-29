@@ -65,14 +65,16 @@ private struct StopBefore: CommandRunner {
     #expect(throws: CancelledError.self) {
         try SparseBundleMirrorEngine(sizeGB: 1, runner: stopper).archive(ArchiveSource(name: "Lib", root: src), to: out)
     }
-    #expect(!MountPoint.isMounted(out.appendingPathComponent(".Lib.mirror-mnt")), "the stopped run left the mirror attached")
+    #expect(MirrorMounts.mountPoints(of: bundle, runner: ProcessCommandRunner()).isEmpty, "the stopped run left the mirror attached")
     #expect(try filesInMirror(bundle) == 30, "stopping the run destroyed the mirror")
 }
 
-// A run that crashed leaves the image attached at the mirror's mountpoint. The next
-// run cleared that directory with a recursive remove, which emptied the image before
-// attaching it again, so everything then depended on that run's rsync finishing. Here
-// the next run is stopped before rsync: the mirror has to come through it whole.
+// Before 1.6 a run attached the image inside the destination, at .<name>.mirror-mnt,
+// and one that crashed left it attached there. The next run cleared that directory
+// with a recursive remove, which emptied the image before attaching it again, so
+// everything then depended on that run's rsync finishing. A 1.6 run still clears that
+// old location first. Here it is stopped before rsync: the mirror has to come through
+// it whole.
 @Test func aMirrorLeftAttachedByACrashIsDetachedNotEmptied() throws {
     let src = try library(files: 12)
     let out = tempDir("crash")
@@ -109,8 +111,11 @@ private struct StopBefore: CommandRunner {
     #expect(throws: (any Error).self) {
         try SparseBundleMirrorEngine(sizeGB: 1).archive(ArchiveSource(name: "Lib", root: src), to: out)
     }
-    let stray = out.appendingPathComponent(".Lib.mirror-mnt/Lib")
-    #expect(!FileManager.default.fileExists(atPath: stray.path), "rsync wrote the library into the destination folder, outside the image")
+    let beside = try FileManager.default.contentsOfDirectory(atPath: out.path).filter { $0 != "Lib.sparsebundle" && $0 != ArchiveManifest.sidecarName }
+    #expect(beside.isEmpty, "the run wrote into the destination folder, outside the image: \(beside)")
+    let runDirs = (try? FileManager.default.contentsOfDirectory(atPath: MirrorMounts.defaultBase.path)) ?? []
+    #expect(!runDirs.contains { $0.hasPrefix(MirrorMounts.prefix) && FileManager.default.fileExists(atPath: MirrorMounts.defaultBase.appendingPathComponent($0).appendingPathComponent("mnt/Lib").path) },
+            "rsync wrote the library onto the startup disk, outside the image")
 }
 
 // The mirror's size was fixed when it was created; editing it did nothing. A larger

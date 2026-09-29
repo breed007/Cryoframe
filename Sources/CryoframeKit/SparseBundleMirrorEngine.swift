@@ -15,10 +15,13 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     let bandSectors: Int          // 16384 sectors * 512 = 8 MiB bands
     let runner: CommandRunner
     let passphrase: String?       // AES-256 encryption when set
+    let mountBase: URL            // where the image is attached while a run updates it (see MirrorMounts)
 
     public init(sizeGB: Int, bandSectors: Int = 16384,
-                runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil) {
+                runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil,
+                mountBase: URL = MirrorMounts.defaultBase) {
         self.sizeGB = sizeGB; self.bandSectors = bandSectors; self.runner = runner; self.passphrase = passphrase
+        self.mountBase = mountBase
     }
 
     public func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
@@ -34,15 +37,19 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let encrypted = passphrase != nil
         let bundle = destinationDir.appendingPathComponent(source.name + ".sparsebundle", isDirectory: true)
 
-        // attach at a private mountpoint, mirror, detach — no namespace parsing.
+        // The image is attached at a directory of this run's own on the boot volume,
+        // never inside the destination: macOS won't mount on a volume that ignores
+        // ownership, which external drives do by default (see MirrorMounts).
         //
-        // The mountpoint is where the only copy of the mirror appears, so it is never
-        // removed recursively (see MountPoint). A leftover from a crashed or stopped
-        // run may still have the image attached there; that is detached, not deleted
-        // through. Teardown uses a runner that still works after Stop.
-        let mountpoint = destinationDir.appendingPathComponent(".\(source.name).mirror-mnt")
+        // That mountpoint is where the only copy of the mirror appears, so it is never
+        // removed recursively (see MountPoint). A crashed or stopped run may have left
+        // the image attached; that is detached, not deleted through. Teardown uses a
+        // runner that still works after Stop.
         let teardown = runner.forTeardown
-        try MountPoint.clear(mountpoint, runner: teardown)
+        // before 1.6 a run attached inside the destination; a crash there left it so
+        let legacy = destinationDir.appendingPathComponent(".\(source.name).mirror-mnt")
+        if fm.fileExists(atPath: legacy.path) { try MountPoint.clear(legacy, runner: teardown) }
+        MirrorMounts.releaseAbandoned(bundle, runner: teardown)
 
         if !fm.fileExists(atPath: bundle.path) {
             try execute(ArchivePlan.sparseBundleCreate(output: bundle, name: source.name,
@@ -52,13 +59,18 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             try growIfSmallerThanRequested(bundle, stdin: stdin)
         }
 
+        let work = try MirrorMounts.makeWork(in: mountBase)
+        let mountpoint = work.appendingPathComponent("mnt", isDirectory: true)
+        defer {
+            MountPoint.detach(mountpoint, runner: teardown)
+            OpenedArchive.removeWork(work)          // only once nothing is mounted there
+        }
         try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
-        defer { MountPoint.detach(mountpoint, runner: teardown) }
 
         try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
         // hdiutil answers 0 when the image is already attached somewhere else (the
         // restore window browsing it, say), and then nothing is mounted here: rsync
-        // would write into the destination disk beside the image instead of into it.
+        // would write onto the startup disk instead of into the image.
         // Refuse rather than detach someone else's open copy.
         guard MountPoint.isMounted(mountpoint) else {
             throw ArchiveError.toolFailed(tool: "hdiutil", status: 0,

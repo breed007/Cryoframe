@@ -199,15 +199,17 @@ public struct ArchiveReader: Sendable {
         _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", mnt.path])
     }
 
-    /// on launch, force-detach and remove any archive a crashed process left open.
-    /// Only those: an archive a live process has open (the agent verifying a run, a
-    /// drill, a rehearsal, another window browsing) is still in use.
+    /// on launch, force-detach and remove any archive a crashed process left open,
+    /// and any mirror a crashed run left attached. Only those: an archive a live
+    /// process has open (the agent verifying a run, a drill, a rehearsal, another
+    /// window browsing, a mirror run) is still in use.
     public static func sweepStaleOpens(in directory: URL = FileManager.default.temporaryDirectory,
                                        runner: CommandRunner = ProcessCommandRunner(), now: Date = Date(),
                                        isAlive: (ProcessIdentity) -> Bool = { $0.isAlive }) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-        for e in entries where e.lastPathComponent.hasPrefix("cf-open-") {
+        // a mirror run's attach (MirrorMounts) follows the same rules as an open archive
+        for e in entries where e.lastPathComponent.hasPrefix("cf-open-") || e.lastPathComponent.hasPrefix(MirrorMounts.prefix) {
             guard OpenedArchive.isAbandoned(e, now: now, isAlive: isAlive) else { continue }
             let mnt = e.appendingPathComponent("mnt")
             if MountPoint.isMounted(mnt) { _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path]) }
