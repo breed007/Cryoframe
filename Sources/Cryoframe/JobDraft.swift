@@ -24,9 +24,7 @@ final class JobDraft: ObservableObject {
     init(model: AppModel, editing: BackupJob? = nil) {
         self.model = model
         let d = UserDefaults.standard
-        let defaults = JobDraftState.Defaults(mirrorValue: d.integer(forKey: Prefs.mirrorGB),
-                                              mirrorUnit: d.string(forKey: Prefs.mirrorUnit),
-                                              formatKind: d.string(forKey: Prefs.format),
+        let defaults = JobDraftState.Defaults(formatKind: d.string(forKey: Prefs.format),
                                               verification: d.string(forKey: Prefs.verify),
                                               runPolicy: d.string(forKey: Prefs.runPolicy))
         state = JobDraftState(editing: editing, libraries: model.registry.types, targets: model.targets,

@@ -19,15 +19,11 @@ public struct JobDraftState: Sendable, Equatable {
     /// the remembered choices a new job starts from (the app reads them from its
     /// preferences). nil means "use the built-in default".
     public struct Defaults: Sendable, Equatable {
-        public var mirrorValue: Int?
-        public var mirrorUnit: String?
         public var formatKind: String?
         public var verification: String?
         public var runPolicy: String?
-        public init(mirrorValue: Int? = nil, mirrorUnit: String? = nil, formatKind: String? = nil,
-                    verification: String? = nil, runPolicy: String? = nil) {
-            self.mirrorValue = mirrorValue; self.mirrorUnit = mirrorUnit; self.formatKind = formatKind
-            self.verification = verification; self.runPolicy = runPolicy
+        public init(formatKind: String? = nil, verification: String? = nil, runPolicy: String? = nil) {
+            self.formatKind = formatKind; self.verification = verification; self.runPolicy = runPolicy
         }
     }
 
@@ -38,8 +34,6 @@ public struct JobDraftState: Sendable, Equatable {
     public var selectedTargetIDs: [String] = []        // ordered; first is primary
 
     public var formatKind = "mirror"                   // "mirror" | "zip" | "dmg"
-    public var mirrorValue = 500
-    public var mirrorUnit = "GB"
 
     public var verification: VerificationPolicy = .checksumOnly
     public var runPolicy: RunPolicy = .proceed
@@ -65,7 +59,7 @@ public struct JobDraftState: Sendable, Equatable {
     // edit context
     public let editingID: String?
     public let editingEncrypted: Bool
-    public let editingMirrorGB: Int?     // the size the existing mirror image was made at
+    public let editingMirrorGB: Int?     // the size an existing mirror job recorded (see FormatChoice.liveMirror)
     public let editingEnabled: Bool
     public let editingCreatedAt: Date?
     public var isEditing: Bool { editingID != nil }
@@ -89,9 +83,14 @@ public struct JobDraftState: Sendable, Equatable {
 
     // MARK: derived
 
-    public var mirrorGB: Int { mirrorUnit == "TB" ? mirrorValue * 1000 : mirrorValue }
+    /// There is no mirror size to choose: the image is sized from its destination. A
+    /// job keeps the size it recorded, so an older version reading it still works.
     public var format: FormatChoice {
-        switch formatKind { case "dmg": .sealedDMG; case "zip": .sealedZip; default: .liveMirror(sizeGB: mirrorGB) }
+        switch formatKind {
+        case "dmg": .sealedDMG
+        case "zip": .sealedZip
+        default: .liveMirror(sizeGB: editingMirrorGB ?? FormatChoice.legacyMirrorGB)
+        }
     }
     public var isSealed: Bool { formatKind != "mirror" }
     public var selectedLibraries: [ContentType] { libraries.filter { selectedLibraryIDs.contains($0.id) } }
@@ -139,15 +138,6 @@ public struct JobDraftState: Sendable, Equatable {
     /// key history. Until then: create a new job.
     public var encryptionLocked: Bool { isEditing }
 
-    /// A mirror image can be grown in place on its next run but not shrunk.
-    public var mirrorShrinkRequested: Bool {
-        guard isEditing, formatKind == "mirror", let was = editingMirrorGB else { return false }
-        return mirrorGB < was
-    }
-    public var editingMirrorSizeText: String? {
-        editingMirrorGB.map { $0 >= 1000 && $0 % 1000 == 0 ? "\($0 / 1000) TB" : "\($0) GB" }
-    }
-
     /// a new encrypted job needs a passphrase, entered twice and matching.
     public var encryptionValid: Bool {
         if encryptionLocked { return true }
@@ -188,7 +178,7 @@ public struct JobDraftState: Sendable, Equatable {
     public func isValid(existing: [BackupJob]) -> Bool {
         !selectedLibraries.isEmpty && !dedupedTargets.isEmpty && encryptionValid
             && destinationConflicts(existing: existing).isEmpty
-            && libraryNameClashes.isEmpty && !mirrorShrinkRequested
+            && libraryNameClashes.isEmpty
     }
 
     public var defaultName: String {
@@ -248,8 +238,6 @@ public struct JobDraftState: Sendable, Equatable {
 
     private mutating func seed(_ d: Defaults) {
         selectedTargetIDs = targets.first.map { [$0.id] } ?? []
-        if let v = d.mirrorValue, v > 0 { mirrorValue = v }
-        if let u = d.mirrorUnit { mirrorUnit = u }
         formatKind = d.formatKind ?? "mirror"
         if let v = d.verification, let p = VerificationPolicy(rawValue: v) { verification = p }
         if let r = d.runPolicy, let p = RunPolicy(rawValue: r) { runPolicy = p }
@@ -264,9 +252,8 @@ public struct JobDraftState: Sendable, Equatable {
         switch job.format {
         case .sealedDMG: formatKind = "dmg"
         case .sealedZip: formatKind = "zip"
-        case .liveMirror(let g):
+        case .liveMirror:
             formatKind = "mirror"
-            if g >= 1000, g % 1000 == 0 { mirrorValue = g / 1000; mirrorUnit = "TB" } else { mirrorValue = g; mirrorUnit = "GB" }
         }
         verification = job.verification; runPolicy = job.runPolicy; encrypt = job.encrypted
         switch job.retention {

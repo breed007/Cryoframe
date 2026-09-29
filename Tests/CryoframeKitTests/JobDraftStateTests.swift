@@ -52,7 +52,7 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
     let d = draft()
     #expect(!d.isEditing)
     #expect(d.formatKind == "mirror")
-    #expect(d.mirrorGB == 500)
+    #expect(d.format == .liveMirror(sizeGB: FormatChoice.legacyMirrorGB))
     #expect(d.selectedTargetIDs == ["t7"])
     #expect(d.retentionPolicy == .keepLast(7))
     #expect(d.frequency(calendar: utc) == .daily(hour: 2, minute: 0))
@@ -61,16 +61,13 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
 }
 
 @Test func aNewDraftTakesTheRememberedChoices() {
-    let d = draft(defaults: .init(mirrorValue: 2, mirrorUnit: "TB", formatKind: "dmg",
-                                  verification: "mountAndOpen", runPolicy: "warnIfRunning"))
-    #expect(d.mirrorValue == 2 && d.mirrorUnit == "TB" && d.mirrorGB == 2000)
+    let d = draft(defaults: .init(formatKind: "dmg", verification: "mountAndOpen", runPolicy: "warnIfRunning"))
     #expect(d.formatKind == "dmg" && d.isSealed)
     #expect(d.verification == .mountAndOpen && d.runPolicy == .warnIfRunning)
 }
 
 @Test func unusableRememberedChoicesFallBackToTheBuiltInDefaults() {
-    let d = draft(defaults: .init(mirrorValue: 0, verification: "bogus", runPolicy: "bogus"))
-    #expect(d.mirrorValue == 500)
+    let d = draft(defaults: .init(verification: "bogus", runPolicy: "bogus"))
     #expect(d.verification == .checksumOnly && d.runPolicy == .proceed)
 }
 
@@ -80,12 +77,11 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
     #expect(d.primaryTarget == nil)
 }
 
-// MARK: - format and size
+// MARK: - format
 
 @Test func formatKindMapsToTheFormatSaved() {
     var d = draft()
-    d.mirrorValue = 3; d.mirrorUnit = "TB"
-    #expect(d.format == .liveMirror(sizeGB: 3000) && !d.isSealed)
+    #expect(d.format == .liveMirror(sizeGB: FormatChoice.legacyMirrorGB) && !d.isSealed)
     d.formatKind = "zip";  #expect(d.format == .sealedZip && d.isSealed)
     d.formatKind = "dmg";  #expect(d.format == .sealedDMG && d.isSealed)
 }
@@ -175,35 +171,26 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
     #expect(e.makeJob(id: sealedAway.id).encrypted == true)
 }
 
-// MARK: - mirror size on edit
+// MARK: - mirror size
 
-@Test func aMirrorCanGrowOnEditButNotShrink() {
+// There is no mirror size to choose any more: the image is sized from its drive.
+// An edited mirror job keeps whatever size it recorded, so a version before 1.6
+// reading it still has one, and editing can't be refused over a size.
+@Test func editingAMirrorKeepsItsRecordedSizeAndIsNeverRefusedOverIt() {
     let mirror = job(format: .liveMirror(sizeGB: 2000))
     var d = draft(editing: mirror)
-    #expect(d.mirrorValue == 2 && d.mirrorUnit == "TB")
-    #expect(d.editingMirrorSizeText == "2 TB")
-    #expect(!d.mirrorShrinkRequested)
-    d.mirrorUnit = "GB"; d.mirrorValue = 1500
-    #expect(d.mirrorShrinkRequested)
     d.selectedLibraryIDs = [photos.id]
-    #expect(!d.isValid(existing: [mirror]))
-    d.mirrorValue = 3000
-    #expect(!d.mirrorShrinkRequested)
-    d.mirrorValue = 100; d.formatKind = "dmg"       // no longer a mirror: size is moot
-    #expect(!d.mirrorShrinkRequested)
+    #expect(d.format == .liveMirror(sizeGB: 2000))
+    #expect(d.isValid(existing: [mirror]))
+    #expect(d.makeJob(id: mirror.id, now: now, calendar: utc).format == .liveMirror(sizeGB: 2000))
+    d.formatKind = "dmg"
+    #expect(d.format == .sealedDMG)
 }
 
-@Test func mirrorSizeTextOnlyUsesTBForWholeTerabytes() {
-    #expect(draft(editing: job(format: .liveMirror(sizeGB: 1500))).editingMirrorSizeText == "1500 GB")
-    #expect(draft(editing: job(format: .liveMirror(sizeGB: 1000))).editingMirrorSizeText == "1 TB")
-    #expect(draft(editing: job(format: .sealedDMG)).editingMirrorSizeText == nil)
-    #expect(draft().editingMirrorSizeText == nil)
-}
-
-@Test func aNewMirrorIsNeverAShrink() {
-    var d = draft()
-    d.mirrorValue = 1
-    #expect(!d.mirrorShrinkRequested)
+@Test func aSealedJobTurnedIntoAMirrorRecordsTheLegacySize() {
+    var d = draft(editing: job(format: .sealedDMG))
+    d.formatKind = "mirror"
+    #expect(d.format == .liveMirror(sizeGB: FormatChoice.legacyMirrorGB))
 }
 
 // MARK: - conflicts and clashes

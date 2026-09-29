@@ -12,8 +12,6 @@ enum Prefs {
     static let verify = "default.verify"          // VerificationPolicy.rawValue
     static let runPolicy = "default.runPolicy"    // RunPolicy.rawValue
     static let archiveDir = "default.archiveDir"  // absolute path
-    static let mirrorGB = "default.mirrorGB"      // Int — mirror size value (paired with mirrorUnit)
-    static let mirrorUnit = "default.mirrorUnit"  // "GB" | "TB", default "GB"
     static let libraryOverrides = "library.overrides"  // [contentTypeID: absolute path]
     static let rehearsalCadence = "rehearsal.cadence"   // "off" | "monthly" (default monthly)
     static let lastRehearsal = "rehearsal.last"        // epoch seconds

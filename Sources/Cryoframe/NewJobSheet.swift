@@ -166,22 +166,6 @@ struct NewJobSheet: View {
                 if !draft.encrypt { Text("Sealed zip").tag("zip") }
                 Text("Sealed DMG").tag("dmg")
             }
-            if draft.formatKind == "mirror" {
-                HStack {
-                    Text("Mirror size"); Spacer()
-                    TextField("", value: $draft.mirrorValue, format: .number).textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing).frame(width: 64)
-                        .onChange(of: draft.mirrorValue) { _, v in if v < 1 { draft.mirrorValue = 1 } }
-                    Picker("", selection: $draft.mirrorUnit) { Text("GB").tag("GB"); Text("TB").tag("TB") }.labelsHidden().frame(width: 72)
-                        .accessibilityLabel("Mirror size unit")
-                }
-                if let was = draft.editingMirrorSizeText {
-                    Text(draft.mirrorShrinkRequested
-                         ? "The mirror was made at \(was) and can't be made smaller. Keep \(was) or more."
-                         : "A larger size is applied to the existing mirror on its next run.")
-                        .font(.caption).foregroundStyle(draft.mirrorShrinkRequested ? .cryoWarn : .secondary)
-                }
-            }
         }
     }
 
