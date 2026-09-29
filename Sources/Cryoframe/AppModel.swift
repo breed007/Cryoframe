@@ -87,7 +87,10 @@ final class AppModel: ObservableObject {
         startHistoryWatch()                     // catch scheduled runs while resident in the menu bar
         refreshDiskAccess()
         revalidate()
-        Task { await helper.reloadIfStale() }   // pick up a new helper binary after an app update
+        Task {
+            await helper.reloadIfStale()        // pick up a new helper binary after an app update
+            await cleanUpLeftovers()            // then snapshots and mounts a crashed run left behind
+        }
         Task.detached { ArchiveReader.sweepStaleOpens() }   // clean any browse mounts a crash left attached
         let locks = runLocks
         Task.detached { JobExecutor.sweepOrphanedScratch(scratchBase: TransferConfig.scratchBase(),
@@ -526,6 +529,22 @@ final class AppModel: ObservableObject {
             reloadHistory()                         // the agent recorded the result as it finished
             refreshProtectedSize(force: true)
             armWake()                               // lastRun moved
+        }
+    }
+
+    /// clean up snapshots and mounts a crashed run left behind. The helper keeps
+    /// anything a live process owns; LeftoverCleanup adds that it only asks while no
+    /// job is running and only a helper new enough to keep them.
+    private func cleanUpLeftovers() async {
+        guard helper.isEnabled else { return }
+        let ids = jobs.map(\.id), locks = runLocks
+        let outcome = await Task.detached {
+            let xpc = XPCPrivilegedHelper()
+            defer { xpc.invalidate() }
+            return await LeftoverCleanup.run(helper: xpc, locks: locks, jobIDs: ids)
+        }.value
+        if case .cleaned(let r) = outcome, !(r.unmounted.isEmpty && r.deletedSnapshots.isEmpty) {
+            log("🧹 cleaned up after an interrupted backup: \(r.unmounted.count) snapshot mount\(r.unmounted.count == 1 ? "" : "s"), \(r.deletedSnapshots.count) snapshot\(r.deletedSnapshots.count == 1 ? "" : "s")")
         }
     }
 

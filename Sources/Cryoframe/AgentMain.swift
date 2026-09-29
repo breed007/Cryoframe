@@ -2,10 +2,10 @@
 //  AgentMain.swift
 //  Cryoframe (app) — headless scheduled run
 //
-//  Launched periodically by the LaunchAgent. Resumes interrupted transfers,
-//  then runs any due jobs (up to the concurrency limit) through the same
-//  JobExecutor the GUI uses, then exits. Every run holds its job's run lock, so a
-//  job the app is already running is left to the app.
+//  Launched periodically by the LaunchAgent. Cleans up after crashed runs,
+//  resumes interrupted transfers, then runs any due jobs (up to the concurrency
+//  limit) through the same JobExecutor the GUI uses, then exits. Every run holds
+//  its job's run lock, so a job the app is already running is left to the app.
 //
 
 import Foundation
@@ -15,6 +15,7 @@ enum AgentMain {
     static func run() {
         let store = JobStore.standard()
         let locks = RunLocks.standard()
+        cleanUpLeftovers(jobIDs: store.load().jobs.map(\.id), locks: locks)
         TransferResumer.resumeAll(store: PendingTransferStore.standard(), locks: locks)   // finish interrupted transfers first
 
         // a due job the app is running right now is the app's run: it records the
@@ -128,4 +129,17 @@ enum AgentMain {
         exit(0)
     }
 
+    /// Ask the helper to clean up after crashed runs before any run of ours starts.
+    /// Bounded: if the helper doesn't answer, the backups matter more than the
+    /// tidying, and the helper keeps anything a live process owns either way.
+    private static func cleanUpLeftovers(jobIDs: [String], locks: RunLocks) {
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            let helper = XPCPrivilegedHelper()
+            _ = await LeftoverCleanup.run(helper: helper, locks: locks, jobIDs: jobIDs)
+            helper.invalidate()
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 60)
+    }
 }
