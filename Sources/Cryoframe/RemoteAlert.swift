@@ -62,6 +62,15 @@ enum RemoteAlert {
         await deliver(p)
     }
 
+    /// deliver a payload the caller built (an overdue job, a run of deferrals),
+    /// awaiting the request. False when alerts aren't set up, so nothing was sent.
+    @discardableResult
+    static func deliverPayload(_ p: AlertPolicy.Payload) async -> Bool {
+        guard isConfigured else { return false }
+        await deliver(p)
+        return true
+    }
+
     private static func deliver(_ p: AlertPolicy.Payload) async {
         guard let req = request(title: p.title, body: p.body, high: p.high, tags: p.tags) else { return }
         _ = try? await URLSession.shared.data(for: req)

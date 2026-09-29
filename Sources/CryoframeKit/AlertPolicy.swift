@@ -39,6 +39,20 @@ public enum AlertPolicy {
                        tags: attention ? "warning" : "white_check_mark")
     }
 
+    /// How many scheduled passes in a row may put a job off before that is worth an
+    /// alert. One is routine (an hour on battery); three in a row is a backup that
+    /// isn't happening.
+    public static let deferralsBeforeAlert = 3
+
+    /// nil unless this is the deferral that makes `deferralsBeforeAlert` in a row. Sent
+    /// once per run of deferrals: the count only passes that number once.
+    public static func payload(forDeferral record: RunRecord, count: Int) -> Payload? {
+        guard record.outcome == .deferred, count == deferralsBeforeAlert else { return nil }
+        return Payload(title: "Cryoframe — \(record.jobName) isn't running",
+                       body: "⏸ Put off: \(record.summary)",
+                       high: false, tags: "hourglass")
+    }
+
     /// A destination about to run out. Only the "no room for the next run" case is
     /// sent: a job quietly keeping every version is worth showing in the app, but it
     /// is not worth a notification on someone's phone.
@@ -73,3 +87,4 @@ public enum AlertPolicy {
         return Payload(title: "Cryoframe — archive health", body: body, high: true, tags: "warning")
     }
 }
+

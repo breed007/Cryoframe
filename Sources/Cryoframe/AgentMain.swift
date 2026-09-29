@@ -32,7 +32,16 @@ enum AgentMain {
         let running = locks.runningJobIDs(among: store.load().jobs.map(\.id))
         var due = Scheduler().jobsToStart(store.load(), now: Date(), running: running,
                                           stoppedThisPass: resumes.stoppedJobIDs)
-        var alerts: [RunRecord] = []      // deferrals, delivered once the run loop is done
+        var alerts: [RunRecord] = []      // failures to start, delivered once the run loop is done
+        var notices: [AlertPolicy.Payload] = []     // deferrals that have gone on
+        let historyStore = RunHistoryStore.standard()
+        // One history record per run of deferrals, kept up to date, rather than one
+        // every hour (see RunHistoryStore.recordDeferral); an alert once it has
+        // happened several times in a row.
+        func deferred(_ job: BackupJob, _ reason: String) {
+            let (record, count) = historyStore.recordDeferral(job: job, reason: reason, at: Date())
+            if let p = AlertPolicy.payload(forDeferral: record, count: count) { notices.append(p) }
+        }
 
         // Unattended work on a dying laptop battery is how a Mac ends up flat. Hold
         // the run for the next hourly check (it may be plugged in by then), and
@@ -43,14 +52,7 @@ enum AgentMain {
         if floor > 0, !due.isEmpty,
            BatteryPolicy.shouldDeferScheduledRun(power, minimumPercent: floor) {
             let reason = BatteryPolicy.deferralReason(power)
-            let historyStore = RunHistoryStore.standard()
-            let now = Date()
-            for job in due {
-                let record = RunRecord.make(job: job, outcome: .deferred(reason),
-                                            startedAt: now, finishedAt: now, trigger: "scheduled")
-                historyStore.append(record)
-                alerts.append(record)
-            }
+            for job in due { deferred(job, reason) }
             due = []
         }
 
@@ -60,7 +62,6 @@ enum AgentMain {
         if !due.isEmpty {
             let executor = TransferConfig.makeExecutor(detector: WorkspaceProcessDetector(), store: store)
             let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
-            let historyStore = RunHistoryStore.standard()       // so scheduled runs leave a record
             let limit = DispatchSemaphore(value: TransferConfig.maxConcurrentJobs())
             let group = DispatchGroup()
 
@@ -74,13 +75,7 @@ enum AgentMain {
                 } catch RunLockError.alreadyRunning(let holder) {
                     // a run started elsewhere since we looked: it records the result.
                     // A chore still holding it after the wait: say why this one waited.
-                    if let reason = holder.deferralReason {
-                        let now = Date()
-                        let record = RunRecord.make(job: job, outcome: .deferred(reason),
-                                                    startedAt: now, finishedAt: now, trigger: "scheduled")
-                        historyStore.append(record)
-                        alerts.append(record)
-                    }
+                    if let reason = holder.deferralReason { deferred(job, reason) }
                     limit.signal(); continue
                 } catch {
                     // can't tell whether it's running: say so rather than skip quietly
@@ -137,6 +132,7 @@ enum AgentMain {
         let sem = DispatchSemaphore(value: 0)
         Task {
             for record in alerts { await RemoteAlert.deliver(for: record) }
+            for p in notices { await RemoteAlert.deliverPayload(p) }
             for record in healthRecords { await RemoteAlert.deliverHealth(for: record) }
             for finding in pressure {
                 await RemoteAlert.deliverStorage(for: finding)

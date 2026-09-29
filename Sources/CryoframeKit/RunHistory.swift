@@ -116,6 +116,9 @@ public struct RunRecord: Codable, Sendable, Identifiable {
     public var libraries: [LibraryOutcome]
     public var bytes: UInt64
     public var warning: String?
+    /// for a deferral: how many times in a row the job was put off (see
+    /// RunHistoryStore.recordDeferral); nil otherwise, and in records before 1.6
+    public var deferrals: Int?
 
     public var duration: TimeInterval { max(0, finishedAt.timeIntervalSince(startedAt)) }
 
@@ -188,6 +191,37 @@ public final class RunHistoryStore: @unchecked Sendable {
         var out: [String: Date] = [:]
         for r in all() where r.outcome.isGood && r.finishedAt > (out[r.jobID] ?? .distantPast) { out[r.jobID] = r.finishedAt }
         return out
+    }
+
+    /// Record that a scheduled run of `job` was put off, and return the record and how
+    /// many times in a row that has now happened.
+    ///
+    /// The agent looks every hour, so a job held back for a day (on battery, or behind
+    /// a long transfer the app is finishing) wrote a history line every hour: 24 a
+    /// day, pushing real runs out of the capped history. A run of deferrals is now one
+    /// record, brought up to date each time (latest reason, finish time, count), until
+    /// the job next runs.
+    @discardableResult
+    public func recordDeferral(job: BackupJob, reason: String, at now: Date,
+                               trigger: String = "scheduled") -> (record: RunRecord, count: Int) {
+        lock.lock(); defer { lock.unlock() }
+        var list = decode()
+        if let i = list.firstIndex(where: { $0.jobID == job.id }), list[i].outcome == .deferred {
+            var r = list.remove(at: i)
+            let count = (r.deferrals ?? 1) + 1
+            r.finishedAt = now
+            r.summary = "\(reason) (\(count) times in a row since \(r.startedAt.formatted(date: .abbreviated, time: .shortened)))"
+            r.jobName = job.name
+            r.deferrals = count
+            list.insert(r, at: 0)
+            write(trimmed(list))
+            return (r, r.deferrals ?? 1)
+        }
+        var r = RunRecord.make(job: job, outcome: .deferred(reason), startedAt: now, finishedAt: now, trigger: trigger)
+        r.deferrals = 1
+        list.insert(r, at: 0)
+        write(trimmed(list))
+        return (r, 1)
     }
 
     /// The newest `cap` records, and each job's newest good run however old: that is
