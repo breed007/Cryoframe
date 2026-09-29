@@ -15,6 +15,7 @@ enum Prefs {
     static let libraryOverrides = "library.overrides"  // [contentTypeID: absolute path]
     static let rehearsalCadence = "rehearsal.cadence"   // "off" | "monthly" (default monthly)
     static let lastRehearsal = "rehearsal.last"        // epoch seconds
+    static let rehearsalPending = "rehearsal.pending"  // [jobID] skipped because a run held the job; retried next pass
     static let knownTargets = "targets.known"        // destinations you've chosen, remembered between launches
     static let coverageDismissed = "coverage.dismissed"  // [contentTypeID] the user waved off in the advisor
     static let batteryFloor = "schedule.batteryFloor"    // Int % — hold scheduled runs below this on battery; 0 = never hold
@@ -27,6 +28,7 @@ enum Prefs {
     static let notifyPolicy = "run.notifyPolicy"           // "never" | "failure" | "all", default "failure"
     static let healthInterval = "health.interval"          // "off" | "weekly" | "monthly", default "off"
     static let lastHealthCheck = "health.lastCheck"        // Double epoch — when the agent last re-verified
+    static let healthPending = "health.pending"            // [jobID] skipped because a run held the job; retried next pass
     static let healthScope = "health.scope"                // "latest" | "all", default "latest"
     static let healthDepth = "health.depth"                // "checksum" | "drill", default "checksum"
     static let verifyCloudArchives = "health.verifyCloud"  // Bool, default false — download evicted cloud archives to check them

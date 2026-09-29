@@ -192,10 +192,11 @@ final class AppModel: ObservableObject {
         log("🎯 \(job.name): rehearsing a recovery…")
         let store = JobStore.standard()
         Task.detached {
-            let records = RehearsalSchedule.run(store: store, now: Date(), only: job.id)
+            let (records, busy) = RehearsalSchedule.run(store: store, now: Date(), jobs: [job.id])
             await MainActor.run {
                 self.verifyingJobIDs.remove(job.id)
                 for r in records { self.applyHealth(r) }
+                if !busy.isEmpty { self.log(Self.busyCheckLine(job.name)) }
             }
         }
     }
@@ -208,14 +209,31 @@ final class AppModel: ObservableObject {
         let resolved = job.resolvingLibraries(in: registry)
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
+        let locks = runLocks
         Task.detached {
-            let report = HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud)
-            let record = HealthRecord.from(job: resolved, report: report, at: Date())
+            let checked = locks.whileChecking(jobID: job.id) {
+                HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud)
+            }
             await MainActor.run {
                 self.verifyingJobIDs.remove(job.id)
-                self.applyHealth(record)
+                self.applyChecked(checked, job: resolved, kind: "checksum")
             }
         }
+    }
+
+    /// record a check done under the job's lock, or say why it wasn't done
+    private func applyChecked(_ checked: CheckUnderLock<HealthReport>, job: BackupJob, kind: String) {
+        switch checked {
+        case .done(let report): applyHealth(HealthRecord.from(job: job, report: report, at: Date(), kind: kind))
+        case .busy: log(Self.busyCheckLine(job.name))
+        case .unavailable(let why): log("⚠︎ \(job.name): its archives weren't checked — \(why)")
+        }
+    }
+
+    /// A check reads the newest version, so it waits for a run writing one: while a
+    /// run holds the job, the check isn't made.
+    static func busyCheckLine(_ name: String) -> String {
+        "⏸ \(name): a backup of this job is running, so its archives weren't checked — check again once it's done"
     }
 
     /// run a restore drill: reassemble, mount/extract, and reopen each archive — proves
@@ -229,12 +247,14 @@ final class AppModel: ObservableObject {
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
         let passphrase = job.encrypted ? KeychainArchiveKey.load(jobID: job.id) : nil
+        let locks = runLocks
         Task.detached {
-            let report = RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase, materializeCloud: materializeCloud)
-            let record = HealthRecord.from(job: resolved, report: report, at: Date(), kind: "drill")
+            let checked = locks.whileChecking(jobID: job.id) {
+                RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase, materializeCloud: materializeCloud)
+            }
             await MainActor.run {
                 self.verifyingJobIDs.remove(job.id)
-                self.applyHealth(record)
+                self.applyChecked(checked, job: resolved, kind: "drill")
             }
         }
     }
@@ -299,13 +319,15 @@ final class AppModel: ObservableObject {
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
         log("🔍 verifying \(resolved.count) job\(resolved.count == 1 ? "" : "s")…")
+        let locks = runLocks
         Task.detached {
             for job in resolved {
-                let report = HealthChecker().check(job: job, latestOnly: latestOnly, materializeCloud: materializeCloud)
-                let record = HealthRecord.from(job: job, report: report, at: Date())
+                let checked = locks.whileChecking(jobID: job.id) {
+                    HealthChecker().check(job: job, latestOnly: latestOnly, materializeCloud: materializeCloud)
+                }
                 await MainActor.run {
                     self.verifyingJobIDs.remove(job.id)
-                    self.applyHealth(record)
+                    self.applyChecked(checked, job: job, kind: "checksum")
                 }
             }
         }
@@ -462,6 +484,8 @@ final class AppModel: ObservableObject {
     func isQueued(_ id: String) -> Bool { queue.contains(id) }
     /// every running job, whether this app or the scheduled agent is running it.
     var allRunningJobIDs: Set<String> { runningJobIDs.union(externalRuns.keys) }
+    /// jobs being backed up right now, here or elsewhere: not a check of their archives
+    var backingUpJobIDs: Set<String> { runningJobIDs.union(externalRuns.filter { $0.value.trigger != .check }.keys) }
 
     /// what a running job's badge says: its stage when this app runs it (only this
     /// process sees the stages), otherwise who is running it.
@@ -497,6 +521,9 @@ final class AppModel: ObservableObject {
             if holder.trigger == .cleanup {
                 // a scratch tidy holds the lock for a moment and listens for nothing
                 log("⏸ \(name): tidying up leftovers — done in a moment")
+            } else if holder.trigger == .check {
+                // checks and drills can't be stopped part-way yet
+                log("⏸ \(name): its archives are being checked — that can't be stopped part-way; it ends on its own")
             } else if runLocks.requestStop(jobID: id) {
                 stoppingJobIDs.insert(id)
                 log("⏹ \(name): asked the scheduled run to stop")

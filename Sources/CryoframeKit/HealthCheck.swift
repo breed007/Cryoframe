@@ -281,3 +281,15 @@ public enum ArchiveAssurance {
         }
     }
 }
+
+/// Which jobs a scheduled pass of checks (health checks, rehearsals) looks at.
+///
+/// Each job is checked holding its run lock, and one a run holds is skipped. It is
+/// remembered, and looked at on the agent's next hourly pass, instead of going
+/// unchecked until the next week or month.
+public enum CheckRound {
+    /// every job when the pass is due; otherwise only those skipped last time
+    public static func jobs(_ all: [BackupJob], due: Bool, pending: Set<String>) -> [BackupJob] {
+        due ? all : all.filter { pending.contains($0.id) }
+    }
+}

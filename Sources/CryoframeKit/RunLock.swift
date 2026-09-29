@@ -28,6 +28,7 @@ public struct RunHolder: Codable, Sendable, Equatable {
         case scheduled    // the launchd agent
         case resume       // finishing an interrupted transfer
         case cleanup      // tidying the job's leftovers while nothing runs
+        case check        // verifying, drilling or rehearsing the job's archives
         case unknown      // held, but the holder hasn't said who it is (yet)
     }
 
@@ -51,6 +52,7 @@ public struct RunHolder: Codable, Sendable, Equatable {
         switch trigger {
         case .resume:  "an interrupted transfer of this job is still finishing — it runs at the next check"
         case .cleanup: "this job's leftovers were being tidied — it runs at the next check"
+        case .check:   "this job's archives were being checked — it runs at the next check"
         case .manual, .scheduled, .unknown: nil
         }
     }
@@ -64,6 +66,7 @@ public struct RunHolder: Codable, Sendable, Equatable {
         case .scheduled: "running (scheduled)"
         case .resume:    "resuming a transfer"
         case .cleanup:   "tidying up"
+        case .check:     "checking its archives"
         case .manual, .unknown: "running"
         }
     }
@@ -81,6 +84,7 @@ extension RunLockError: LocalizedError {
             switch h.trigger {
             case .scheduled: "already running (scheduled)"
             case .resume:    "already running (resuming an interrupted transfer)"
+            case .check:     "its archives are being checked — run it again once that's done"
             case .cleanup, .manual, .unknown: "already running"
             }
         case .unavailable(let why): "couldn't check whether this job is already running — \(why)"
@@ -352,7 +356,33 @@ final class HeldHere: @unchecked Sendable {
     func remove(_ path: String) { lock.lock(); held[path] = nil; lock.unlock() }
 }
 
+/// How a check of a job's archives went, given the job's run lock.
+public enum CheckUnderLock<T> {
+    case done(T)
+    /// a run (or another check) held the job throughout the wait
+    case busy(RunHolder)
+    /// the lock couldn't be opened, so nobody can say whether a run is writing
+    case unavailable(String)
+}
+
 extension RunLocks {
+    /// Check a job's archives holding its lock, as a chore (a scheduled run that finds
+    /// it held waits for the next pass). Verifications, drills and rehearsals read the
+    /// newest version; without the lock they could read one a run was still writing
+    /// and report a good backup as broken. Waits up to `wait` for a run to finish.
+    public func whileChecking<T>(jobID: String, wait: TimeInterval = 0, _ body: () throws -> T) rethrows -> CheckUnderLock<T> {
+        let lease: RunLease
+        do {
+            lease = try acquire(jobID: jobID, trigger: .check, wait: wait)
+        } catch RunLockError.alreadyRunning(let holder) {
+            return .busy(holder)
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
+        defer { lease.release() }
+        return .done(try body())
+    }
+
     /// Run `body` holding the job's lock, releasing it however `body` ends. Throws
     /// RunLockError.alreadyRunning, without running `body`, when the job is busy.
     public func withLock<T>(jobID: String, trigger: RunHolder.Trigger, wait: TimeInterval = 0,
