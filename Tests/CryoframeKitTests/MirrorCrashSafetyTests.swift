@@ -602,6 +602,22 @@ extension ReadOnlyFilesInAMirror {
 
     // Two of our own jobs mirroring to one drive would each size their image to the
     // room the other is about to use. They take turns instead.
+    // A drive that reports 0 free from the start (some NAS and FUSE file systems)
+    // doesn't report free space; one that reported room and then 0 has filled.
+    @Test func aDriveThatReportsNoFreeSpaceIsntADip() {
+        let never = DriveWatch(watching: URL(fileURLWithPath: "/"), floor: 100, read: { 0 })
+        never.sample(); never.sample()
+        #expect(!never.dipped)
+        #expect(never.isBlind)
+
+        final class Readings: @unchecked Sendable { var values: [UInt64] = [5_000, 0] }
+        let readings = Readings()
+        let filled = DriveWatch(watching: URL(fileURLWithPath: "/"), floor: 100, read: { readings.values.removeFirst() })
+        filled.sample(); filled.sample()
+        #expect(filled.dipped)
+        #expect(!filled.isBlind)
+    }
+
     @Test func mirrorRunsToTheSameDriveTakeTurns() throws {
         let dir = tempDir("turns"), base = tempDir("base")
         defer { for d in [dir, base] { try? FileManager.default.removeItem(at: d) } }

@@ -42,8 +42,21 @@ final class DriveWatch: @unchecked Sendable {
     private var watching = false
     private let interval: TimeInterval
 
-    init(watching dir: URL, floor: UInt64, interval: TimeInterval = 0.05) {
+    /// the drive's free space now; nil when it can't be read
+    private let read: @Sendable () -> UInt64?
+    /// the drive reported no free space at the outset: it doesn't report free space
+    private var blind = false
+    private var sampled = false
+
+    init(watching dir: URL, floor: UInt64, interval: TimeInterval = 0.05,
+         read: (@Sendable () -> UInt64?)? = nil) {
         self.path = dir.path; self.floor = floor; self.interval = interval
+        let path = dir.path
+        self.read = read ?? {
+            var s = statfs()
+            guard statfs(path, &s) == 0 else { return nil }
+            return UInt64(s.f_bavail) * UInt64(s.f_bsize)
+        }
     }
 
     func start() {
@@ -66,13 +79,24 @@ final class DriveWatch: @unchecked Sendable {
 
     private var isWatching: Bool { lock.lock(); defer { lock.unlock() }; return watching }
 
-    /// read the drive's free space now
+    /// Read the drive's free space now.
+    ///
+    /// A drive that reports 0 free from the first reading doesn't report free space
+    /// (some network shares and FUSE file systems), and the rest of the app already
+    /// reads 0 as "unknown" (JobExecutor.freeSpace). Taken at face value it failed every
+    /// mirror run to such a drive as a dip. The watch is blind there instead; what
+    /// protects those runs is the read-back of the new copy before the swap. A drive
+    /// that reported room and later reports 0 has filled, and that counts.
     func sample() {
-        var s = statfs()
-        guard statfs(path, &s) == 0 else { return }
-        let free = UInt64(s.f_bavail) * UInt64(s.f_bsize)
-        lock.lock(); lowest = min(lowest, free); lock.unlock()
+        guard let free = read() else { return }
+        lock.lock(); defer { lock.unlock() }
+        if !sampled { sampled = true; blind = free == 0 }
+        guard !blind else { return }
+        lowest = min(lowest, free)
     }
+
+    /// the watch can't see this drive's free space
+    var isBlind: Bool { lock.lock(); defer { lock.unlock() }; return blind }
 
     var lowestFree: UInt64 { lock.lock(); defer { lock.unlock() }; return lowest }
     var dipped: Bool { lowestFree < floor }
