@@ -93,7 +93,9 @@ enum MirrorCopy {
         // NUL-separated (-0), so no name can break a line; excludes anchored to the
         // top of the transfer, with rsync's pattern characters escaped
         try Data(readOnly.map { "/" + escapedPattern($0) + "\0" }.joined().utf8).write(to: exclude)
-        try Data(readOnly.map { $0 + "\0" }.joined().utf8).write(to: files)
+        // "./" first: openrsync reads a --files-from line starting with "#" or ";" as a
+        // comment, even NUL-separated, and skipped those files without a word
+        try Data(readOnly.map { "./" + $0 + "\0" }.joined().utf8).write(to: files)
 
         try execute(ArchivePlan.rsync(root: source, into: next, extra: ["-0", "--exclude-from=\(exclude.path)"]))
         try execute(Command("/usr/bin/rsync", ["-a", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
