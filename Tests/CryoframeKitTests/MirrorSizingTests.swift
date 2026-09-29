@@ -48,6 +48,15 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
     return mnt
 }
 
+// The image is sized to what is free now: on the startup disk "available for
+// important usage" counts purgeable space the system frees only on demand.
+@Test func theImageIsSizedToWhatIsFreeNowNotWhatCouldBePurged() throws {
+    let tmp = FileManager.default.temporaryDirectory
+    let now = try #require(JobExecutor.freeNow(for: tmp))
+    let eventually = try #require(JobExecutor.freeSpace(for: tmp))
+    #expect(now <= eventually + (64 << 20), "free now \(now) is more than free after purging \(eventually)")
+}
+
 @Test func theImageSizeComesFromTheDrive() {
     #expect(MirrorSizing.fromDestination.imageGB(destinationCapacity: 2_000_000_000_000) == 1862)
     #expect(MirrorSizing.fromDestination.imageGB(destinationCapacity: nil) == MirrorSizing.unknownCapacityGB)
@@ -122,7 +131,7 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
         _ = try EngineFactory.engine(for: .liveMirror(sizeGB: 1), target: target).archive(ArchiveSource(name: "Lib", root: src), to: out)
         // as big as the drive, or as the room the drive has left, whichever is less
         let capacity = try #require(StorageReporter.volume(of: dest).total)
-        let free = try #require(JobExecutor.freeSpace(for: dest))
+        let free = try #require(JobExecutor.freeNow(for: dest))
         #expect(try imageBytes(bundle) + (2 << 30) > min(capacity, free), "the mirror wasn't grown to its drive")
     }
 

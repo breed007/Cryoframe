@@ -496,6 +496,25 @@ public struct JobExecutor: Sendable {
         return nil
     }
 
+    /// Free space at `url`'s volume right now, not counting what the system could purge
+    /// (local snapshots, caches). `freeSpace` counts purgeable space on the startup
+    /// disk, which is right for "will this fit eventually" but not for sizing a disk
+    /// image: purging happens on demand, after a write needs the room, and a sparse
+    /// image whose band write finds no room loses it. nil when the volume won't say.
+    public static func freeNow(for url: URL) -> UInt64? {
+        var dir = url
+        for _ in 0..<8 {
+            dir.removeAllCachedResourceValues()
+            if let v = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityKey]) {
+                return v.volumeAvailableCapacity.flatMap { $0 > 0 ? UInt64($0) : nil }
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent == dir { break }
+            dir = parent
+        }
+        return nil
+    }
+
     /// pick a trustworthy free-space figure: APFS "important usage" when it's a real
     /// number, else plain available capacity, else nil. A reported 0 means "this
     /// filesystem doesn't answer," so we keep walking to the parent / give up rather

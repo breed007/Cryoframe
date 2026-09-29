@@ -220,7 +220,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 
         let capacity = StorageReporter.volume(of: destinationDir).total
         let ceiling = Self.sectors(gb: sizing.imageGB(destinationCapacity: capacity)) * 512
-        let free = JobExecutor.freeSpace(for: destinationDir)
+        // what is free now, not what could be purged later (see JobExecutor.freeNow)
+        let free = JobExecutor.freeNow(for: destinationDir)
         let reserve = MirrorSizing.reserve(capacity: capacity)
         var imageBytes: UInt64
         if !fm.fileExists(atPath: bundle.path) {
