@@ -131,7 +131,7 @@ public enum ArchivePlan {
     /// the DEFAULT format the one lossy path in the app: sealed zip goes through
     /// ditto and sealed DMG through a filesystem image, both faithful, while the
     /// mirror quietly discarded Finder tags and every resource fork on every run.
-    public static func rsync(root: URL, into destination: URL) -> Command {
-        Command("/usr/bin/rsync", ["-aE", "--delete", "--partial", root.path + "/", destination.path + "/"])
+    public static func rsync(root: URL, into destination: URL, extra: [String] = []) -> Command {
+        Command("/usr/bin/rsync", ["-aE", "--delete", "--partial"] + extra + [root.path + "/", destination.path + "/"])
     }
 }

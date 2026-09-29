@@ -51,7 +51,7 @@ enum MirrorCopy {
         }
 
         do {
-            try execute(ArchivePlan.rsync(root: source, into: next))
+            try sync(source, into: next, runner: runner, execute: execute)
         } catch ArchiveError.toolFailed(_, _, let stderr) where stderr.localizedCaseInsensitiveContains("No space left on device") {
             // Updating beside the previous copy needs room for everything that changed
             // as well as the library. When the drive runs out, the staging copy is what
@@ -66,6 +66,77 @@ enum MirrorCopy {
         guard MountPoint.isMounted(volume) else { throw MirrorCopyError.imageWentAway(volume.path) }
         try putInPlace(next, current)
         removeStaging(staging, runner: runner)
+    }
+
+    /// rsync `source` into `next`, carrying extended attributes, resource forks and
+    /// ACLs (-E) for every file, including read-only ones.
+    ///
+    /// openrsync's -E fails on any file its owner can't write ("openat: Permission
+    /// denied") and gives up on the whole run: measured with and without -p, --chmod,
+    /// --inplace and -W, from a read-write and a read-only volume. Every git
+    /// repository keeps its objects 0444, so a folder holding one never mirrored at
+    /// all. There is no other rsync on macOS 26. So when the source holds read-only
+    /// files, they are left out of the -E pass, copied by a plain -a pass (which
+    /// handles them), and given their attributes and ACL with copyfile(3).
+    static func sync(_ source: URL, into next: URL, runner: CommandRunner,
+                     execute: (Command) throws -> Void) throws {
+        let readOnly = readOnlyFiles(in: source)
+        guard !readOnly.isEmpty else {
+            try execute(ArchivePlan.rsync(root: source, into: next))
+            return
+        }
+        let fm = FileManager.default
+        let lists = fm.temporaryDirectory.appendingPathComponent("cf-rsync-\(UUID().uuidString)")
+        try fm.createDirectory(at: lists, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: lists) }
+        let exclude = lists.appendingPathComponent("exclude"), files = lists.appendingPathComponent("files")
+        // NUL-separated (-0), so no name can break a line; excludes anchored to the
+        // top of the transfer, with rsync's pattern characters escaped
+        try Data(readOnly.map { "/" + escapedPattern($0) + "\0" }.joined().utf8).write(to: exclude)
+        try Data(readOnly.map { $0 + "\0" }.joined().utf8).write(to: files)
+
+        try execute(ArchivePlan.rsync(root: source, into: next, extra: ["-0", "--exclude-from=\(exclude.path)"]))
+        try execute(Command("/usr/bin/rsync", ["-a", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
+        for (i, rel) in readOnly.enumerated() {
+            if i % 256 == 0, runner.control?.isCancelled == true { throw CancelledError() }
+            try copyAttributes(from: source.appendingPathComponent(rel), to: next.appendingPathComponent(rel))
+        }
+    }
+
+    /// regular files under `root` their owner can't write, relative to it.
+    static func readOnlyFiles(in root: URL) -> [String] {
+        guard let walker = FileManager.default.enumerator(atPath: root.path) else { return [] }
+        var out: [String] = []
+        while let rel = walker.nextObject() as? String {
+            var st = stat()
+            guard lstat(root.appendingPathComponent(rel).path, &st) == 0,
+                  st.st_mode & S_IFMT == S_IFREG, st.st_mode & S_IWUSR == 0 else { continue }
+            out.append(rel)
+        }
+        return out
+    }
+
+    /// `name` as an rsync pattern that matches only itself.
+    static func escapedPattern(_ name: String) -> String {
+        var out = ""
+        for c in name {
+            if "*?[]\\".contains(c) { out.append("\\") }
+            out.append(c)
+        }
+        return out
+    }
+
+    /// extended attributes (resource fork included) and ACL, onto a copy that is
+    /// read-only like its source: made writable for the moment it takes.
+    static func copyAttributes(from src: URL, to dst: URL) throws {
+        var st = stat()
+        guard lstat(dst.path, &st) == 0 else { return }
+        chmod(dst.path, (st.st_mode & 0o7777) | S_IWUSR)
+        defer { chmod(dst.path, st.st_mode & 0o7777) }
+        guard copyfile(src.path, dst.path, nil, copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL)) == 0 else {
+            throw ArchiveError.toolFailed(tool: "copyfile", status: errno,
+                                          stderr: "\(src.lastPathComponent): couldn't copy its attributes (\(String(cString: strerror(errno))))")
+        }
     }
 
     /// An APFS clone of the whole tree. clonefile(2) on a directory is atomic (all of

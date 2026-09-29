@@ -347,3 +347,47 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
         return (UInt64(s.f_blocks) - UInt64(s.f_bfree)) * UInt64(s.f_bsize)
     }
 }
+
+/// openrsync's -E gives up on any file its owner can't write, and every git
+/// repository keeps its objects that way. Those files now take another path through
+/// the run; it has to be as faithful as -E and keep --delete's promise.
+@Suite(.serialized) struct ReadOnlyFilesInAMirror {
+
+    @Test func aReadOnlyFileKeepsItsAttributesForkAndACLAndGoesWhenDeleted() throws {
+        let src = try library(files: 4)
+        let fm = FileManager.default
+        let odd = src.appendingPathComponent("objects/a*b [1]?")
+        let gone = src.appendingPathComponent("objects/gone")
+        try fm.createDirectory(at: odd.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for f in [odd, gone] { try Data("blob \(f.lastPathComponent)".utf8).write(to: f) }
+        #expect(setxattr(odd.path, "com.example.tag", "v1", 2, 0, 0) == 0)
+        #expect(setxattr(odd.path, "com.apple.ResourceFork", "FORK", 4, 0, 0) == 0)
+        let acl = try ProcessCommandRunner().run("/bin/chmod", ["+a", "everyone deny write", odd.path])
+        try #require(acl.ok, "\(acl.stderr)")
+        for f in [odd, gone] { chmod(f.path, 0o444) }
+        let out = tempDir("ro"), base = tempDir("base")
+        defer {
+            _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "-N", src.path])
+            for d in [out, base, src.deletingLastPathComponent()] { try? fm.removeItem(at: d) }
+        }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        let bundle = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        chmod(gone.path, 0o644); try fm.removeItem(at: gone)
+        _ = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out)
+
+        let mnt = tempDir("ro-look")
+        defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? fm.removeItem(at: mnt) }
+        let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
+        try #require(r.ok, "\(r.stderr)")
+        let copy = mnt.appendingPathComponent("Lib/objects/a*b [1]?")
+        #expect(tree(mnt.appendingPathComponent("Lib")) == tree(src))
+        #expect(!fm.fileExists(atPath: mnt.appendingPathComponent("Lib/objects/gone").path), "a deleted read-only file stayed in the mirror")
+        var st = stat()
+        #expect(lstat(copy.path, &st) == 0 && st.st_mode & 0o777 == 0o444)
+        var buf = [UInt8](repeating: 0, count: 16)
+        #expect(getxattr(copy.path, "com.example.tag", &buf, 16, 0, 0) == 2)
+        #expect(getxattr(copy.path, "com.apple.ResourceFork", &buf, 16, 0, 0) == 4)
+        let ls = try ProcessCommandRunner().run("/bin/ls", ["-le", copy.path])
+        #expect(ls.stdout.contains("deny write"), "the read-only file lost its ACL:\n\(ls.stdout)")
+    }
+}
