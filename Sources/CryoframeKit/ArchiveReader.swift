@@ -55,15 +55,43 @@ public struct OpenedArchive: Sendable {
 public struct ArchiveReader: Sendable {
     let runner: CommandRunner
     let workBase: URL
+    let transientSettle: TimeInterval
     public init(runner: CommandRunner = ProcessCommandRunner(),
-                workBase: URL = FileManager.default.temporaryDirectory) {
-        self.runner = runner; self.workBase = workBase
+                workBase: URL = FileManager.default.temporaryDirectory,
+                transientSettle: TimeInterval = 5) {
+        self.runner = runner; self.workBase = workBase; self.transientSettle = transientSettle
     }
 
     /// open `result` into a fresh temp work dir. A non-nil `passphrase` mounts an
     /// AES-256 encrypted dmg/sparsebundle (via `hdiutil -stdinpass`). The caller
     /// MUST `close()` the returned handle to detach the mount and clean up.
+    ///
+    /// A disk-image system that stays busy through every retry of the attach gets one
+    /// more attempt, from scratch. The retries all run with whatever the first failed
+    /// attach left behind still in place, and a leftover device is exactly what makes
+    /// the next attach fail; the failed open has cleared those by the time it throws.
+    /// Without this a drill, a rehearsal or a run's verification reported a good
+    /// archive as unopenable whenever Time Machine or another job held the disk-image
+    /// system for a few seconds too long, and a scheduled check turned that into an
+    /// alert. A second failure is reported as before: busy, not broken.
     public func open(_ result: ArchiveResult, passphrase: String? = nil) throws -> OpenedArchive {
+        do {
+            return try openOnce(result, passphrase: passphrase)
+        } catch let error as ArchiveError where Self.isTransient(error) {
+            if runner.control?.isCancelled == true { throw CancelledError() }
+            Thread.sleep(forTimeInterval: transientSettle)
+            return try openOnce(result, passphrase: passphrase)
+        }
+    }
+
+    /// a tool failure the disk-image system reports while it is saturated, as opposed
+    /// to one that says something about the archive.
+    static func isTransient(_ error: ArchiveError) -> Bool {
+        guard case .toolFailed(_, _, let stderr) = error else { return false }
+        return ProcessCommandRunner.isTransient(stderr)
+    }
+
+    private func openOnce(_ result: ArchiveResult, passphrase: String?) throws -> OpenedArchive {
         let fm = FileManager.default
         let work = workBase.appendingPathComponent("cf-open-\(UUID().uuidString)")
         try fm.createDirectory(at: work, withIntermediateDirectories: true)

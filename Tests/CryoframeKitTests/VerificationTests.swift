@@ -136,7 +136,7 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
     let made = try runner.run("/usr/bin/hdiutil", ["create", "-srcfolder", dir.path, "-format", "UDRW", "-ov", dmg.path])
     try #require(made.ok, "\(made.stderr)")
     let rw = tempDir()
-    let attached = try runner.run("/usr/bin/hdiutil", ["attach", dmg.path, "-mountpoint", rw.path, "-nobrowse", "-owners", "on"])
+    let attached = try DiskImageGate.serialized { try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach", dmg.path, "-mountpoint", rw.path, "-nobrowse", "-owners", "on"]) }
     try #require(attached.ok, "\(attached.stderr)")
     try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: rw.appendingPathComponent("locked.txt").path)
     MountPoint.detach(rw, runner: runner)
@@ -194,6 +194,28 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
     #expect(ScriptedCommandRunner.isTransient("Resource Temporarily Unavailable"))
     #expect(ScriptedCommandRunner.isTransient("hdiutil: attach failed - resource busy"))
     #expect(!ScriptedCommandRunner.isTransient("image not recognized"))
+}
+
+// The second attempt is one attempt. A disk-image system that stays busy through it
+// is still reported as busy, which the rehearsal and drill say plainly, rather than
+// retried until the check looks hung.
+@Test func anArchiveThatStaysBusyIsReportedBusyAfterOneMoreAttempt() throws {
+    let src = tempDir(); defer { try? FileManager.default.removeItem(at: src) }
+    let out = tempDir(); defer { try? FileManager.default.removeItem(at: out) }
+    try Data("x".utf8).write(to: src.appendingPathComponent("a.txt"))
+    let result = try SealedArchiveEngine(.dmg).archive(ArchiveSource(name: "Busy", root: src), to: out)
+
+    let busy = BusyForAWhile(failures: .max)
+    let work = tempDir(); defer { try? FileManager.default.removeItem(at: work) }
+    #expect {
+        _ = try ArchiveReader(runner: busy, workBase: work, transientSettle: 0.1).open(result)
+    } throws: { error in
+        guard let e = error as? ArchiveError else { return false }
+        return ArchiveReader.isTransient(e)
+    }
+    #expect(busy.attaches == 16)                      // two full rounds of retries, no more
+    #expect((try? FileManager.default.contentsOfDirectory(atPath: work.path))?.isEmpty == true,
+            "a failed open left its work folder behind")
 }
 
 /// tiny thread-safe counter — the runner closure is @Sendable.

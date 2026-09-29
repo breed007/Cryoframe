@@ -26,19 +26,51 @@ private func tempDir() -> URL {
 @discardableResult
 private func writeArchive(_ dest: URL, library: String, day: Int, passphrase: String? = nil,
                           format: SealedArchiveEngine.Sealed = .zip) throws -> URL {
-    let src = tempDir().appendingPathComponent(library)
+    let scratch = tempDir(); defer { try? FileManager.default.removeItem(at: scratch) }
+    let src = scratch.appendingPathComponent(library)
     try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
     try Data("content for \(library) day \(day)".utf8).write(to: src.appendingPathComponent("file.txt"))
     let versionDir = dest.appendingPathComponent(library, isDirectory: true)
         .appendingPathComponent("2026-07-\(String(format: "%02d", day))-020000", isDirectory: true)
     try FileManager.default.createDirectory(at: versionDir, withIntermediateDirectories: true)
-    let result = try SealedArchiveEngine(.dmg, passphrase: passphrase)
+    let result = try SealedArchiveEngine(format, passphrase: passphrase)
         .archive(ArchiveSource(name: library, root: src), to: versionDir)
     try ArchiveManifest.write(try ArchiveManifest.build(for: result, encrypted: passphrase != nil), toDir: versionDir)
     return versionDir
 }
 
+/// hdiutil attach answers "busy" for the first `failures` attaches, then behaves.
+final class BusyForAWhile: CommandRunner, @unchecked Sendable {
+    private let inner = ProcessCommandRunner()
+    private let lock = NSLock()
+    private var left: Int
+    private(set) var attaches = 0
+    init(failures: Int) { left = failures }
+    func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+        if (launchPath as NSString).lastPathComponent == "hdiutil", args.first == "attach" {
+            lock.lock(); attaches += 1; let fail = left > 0; if fail { left -= 1 }; lock.unlock()
+            if fail { return CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - Resource temporarily unavailable\n") }
+        }
+        return try inner.run(launchPath, args, stdin: stdin)
+    }
+}
+
 @Suite(.serialized) struct RecoveryRehearsals {
+
+    // A scheduled rehearsal ran while something else held the disk-image system for
+    // longer than the attach's own retries, and reported the library as unopenable.
+    // One more attempt, after the failed one has cleaned up, gets past it.
+    @Test func aDiskImageSystemBusyThroughEveryRetryIsTriedOnceMore() throws {
+        let dest = tempDir(); defer { try? FileManager.default.removeItem(at: dest) }
+        try writeArchive(dest, library: "Photos", day: 20, format: .dmg)
+
+        let busy = BusyForAWhile(failures: 8)          // outlasts every retry of one attach
+        let r = RecoveryRehearsal(runner: busy).rehearse(destination: dest, expecting: ["Photos"])
+        let dump = r.outcomes.map { "\($0.library): \($0.detail)" }.joined(separator: " | ")
+        #expect(r.passed, "\(dump)")
+        #expect(r.openedCount == 1, "\(dump)")
+        #expect(busy.attaches == 9)
+    }
 
     @Test func rehearsingOpensEveryLibraryARecoveryWouldFind() throws {
         let dest = tempDir(); defer { try? FileManager.default.removeItem(at: dest) }

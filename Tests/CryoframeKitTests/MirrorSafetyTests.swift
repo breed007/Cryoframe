@@ -27,7 +27,7 @@ private func library(files n: Int) throws -> URL {
 private func filesInMirror(_ bundle: URL) throws -> Int {
     let mnt = tempDir("count")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
-    let r = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
+    let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
     try #require(r.ok, "couldn't attach the mirror to count it: \(r.stderr)")
     var n = 0
     let walker = FileManager.default.enumerator(at: mnt, includingPropertiesForKeys: [.isRegularFileKey])
@@ -81,7 +81,7 @@ private struct StopBefore: CommandRunner {
 
     let mnt = out.appendingPathComponent(".Lib.mirror-mnt")
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-    let r = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse"])
+    let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse"]) }
     try #require(r.ok && MountPoint.isMounted(mnt), "couldn't stage the leftover attach: \(r.stderr)")
 
     let stopper = StopBefore(inner: ProcessCommandRunner(control: RunControl()), tool: "rsync")
@@ -103,7 +103,7 @@ private struct StopBefore: CommandRunner {
 
     let browsing = tempDir("browse")
     defer { MountPoint.detach(browsing, runner: ProcessCommandRunner()) }
-    let r = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", browsing.path, "-nobrowse", "-readonly"])
+    let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", browsing.path, "-nobrowse", "-readonly"]) }
     try #require(r.ok, "couldn't stage the other open copy: \(r.stderr)")
 
     #expect(throws: (any Error).self) {
