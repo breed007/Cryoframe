@@ -97,8 +97,23 @@ enum MirrorCopy {
         // comment, even NUL-separated, and skipped those files without a word
         try Data(readOnly.map { "./" + $0 + "\0" }.joined().utf8).write(to: files)
 
-        try execute(ArchivePlan.rsync(root: source, into: next, extra: ["-0", "--exclude-from=\(exclude.path)"]))
-        try execute(Command("/usr/bin/rsync", ["-a", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
+        if readOnly.contains(where: { $0.contains("\\") }) {
+            // openrsync's filters can't match a backslash, escaped or not, so such a
+            // file can't be left out of the -E pass. Then no filter at all: a plain -a
+            // pass for everything (content, modes, deletions), and -E for everything
+            // but the read-only files, named one by one and without recursing (-a's -r,
+            // or naming the library folder itself, would reach them again). The
+            // library folder's own attributes and ACL go by copyfile, as the read-only
+            // files' do. Slower, and only for this.
+            let others = lists.appendingPathComponent("others")
+            try Data(everythingBut(readOnly, in: source).map { "./" + $0 + "\0" }.joined().utf8).write(to: others)
+            try execute(Command("/usr/bin/rsync", ["-a", "--delete", "--partial", source.path + "/", next.path + "/"]))
+            try execute(Command("/usr/bin/rsync", ["-lptgoDE", "-0", "--files-from=\(others.path)", source.path + "/", next.path + "/"]))
+            try copyAttributes(from: source, to: next)
+        } else {
+            try execute(ArchivePlan.rsync(root: source, into: next, extra: ["-0", "--exclude-from=\(exclude.path)"]))
+            try execute(Command("/usr/bin/rsync", ["-a", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
+        }
         for (i, rel) in readOnly.enumerated() {
             if i % 256 == 0, runner.control?.isCancelled == true { throw CancelledError() }
             try copyAttributes(from: source.appendingPathComponent(rel), to: next.appendingPathComponent(rel))
@@ -118,7 +133,16 @@ enum MirrorCopy {
         return out
     }
 
-    /// `name` as an rsync pattern that matches only itself.
+    /// every entry under `root` (folders, links, files) except those in `excluded`
+    static func everythingBut(_ excluded: [String], in root: URL) -> [String] {
+        let skip = Set(excluded)
+        guard let walker = FileManager.default.enumerator(atPath: root.path) else { return [] }
+        var out: [String] = []
+        while let rel = walker.nextObject() as? String { if !skip.contains(rel) { out.append(rel) } }
+        return out
+    }
+
+    /// `name` as an rsync pattern that matches only itself (no backslash: see sync).
     static func escapedPattern(_ name: String) -> String {
         var out = ""
         for c in name {

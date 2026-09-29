@@ -496,3 +496,44 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
         #expect(!rehearsal.passed, "a mirror a restore would find nothing in passed the rehearsal: \(rehearsal.outcomes.map(\.detail))")
     }
 }
+
+extension ReadOnlyFilesInAMirror {
+    // The path taken when a read-only name holds a backslash (no filters at all) has
+    // to be as faithful as the usual one: the library folder's own ACL, a writable
+    // file's attributes, the read-only files' modes and attributes, and deletions.
+    @Test func theBackslashPathKeepsEverythingTheUsualPathKeeps() throws {
+        let src = try library(files: 4)
+        let fm = FileManager.default
+        let bs = src.appendingPathComponent("sub/back\\slash.txt")
+        try Data("bs".utf8).write(to: bs)
+        #expect(setxattr(bs.path, "com.example.tag", "v1", 2, 0, 0) == 0)
+        chmod(bs.path, 0o444)
+        let tagged = src.appendingPathComponent("tagged.txt")
+        try Data("t".utf8).write(to: tagged)
+        #expect(setxattr(tagged.path, "com.example.tag", "v1", 2, 0, 0) == 0)
+        let acl = try ProcessCommandRunner().run("/bin/chmod", ["+a", "everyone deny delete", src.path])
+        try #require(acl.ok, "\(acl.stderr)")
+        let out = tempDir("bs"), base = tempDir("base")
+        defer {
+            _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "-N", src.path])
+            for d in [out, base, src.deletingLastPathComponent()] { try? fm.removeItem(at: d) }
+        }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        let bundle = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        try fm.removeItem(at: src.appendingPathComponent("f0.txt"))
+        _ = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out)
+
+        let mnt = tempDir("bs-look")
+        defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? fm.removeItem(at: mnt) }
+        let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
+        try #require(r.ok, "\(r.stderr)")
+        let lib = mnt.appendingPathComponent("Lib")
+        #expect(tree(lib) == tree(src))
+        var buf = [UInt8](repeating: 0, count: 8), st = stat()
+        #expect(getxattr(lib.appendingPathComponent("sub/back\\slash.txt").path, "com.example.tag", &buf, 8, 0, 0) == 2)
+        #expect(lstat(lib.appendingPathComponent("sub/back\\slash.txt").path, &st) == 0 && st.st_mode & 0o777 == 0o444)
+        #expect(getxattr(lib.appendingPathComponent("tagged.txt").path, "com.example.tag", &buf, 8, 0, 0) == 2)
+        let ls = try ProcessCommandRunner().run("/bin/ls", ["-led", lib.path])
+        #expect(ls.stdout.contains("deny delete"), "the library folder lost its ACL:\n\(ls.stdout)")
+    }
+}
