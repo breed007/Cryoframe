@@ -140,6 +140,80 @@ private func inMirror<T>(_ bundle: URL, _ rel: String, _ body: (String) -> T) th
 }
 
 extension MirrorAttributeReadBackTests {
+    // A resource fork whose write is lost after the run has finished writing: the
+    // read-back reads it from the drive, finds it neither the old fork nor the new,
+    // and nothing is put in place.
+    @Test func aResourceForkLostAfterTheWritesIsCaught() throws {
+        let src = attrDir("forksrc").appendingPathComponent("Lib")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        let doc = src.appendingPathComponent("doc.txt")
+        try Data("body".utf8).write(to: doc)
+        let fork = [UInt8](repeating: 1, count: 4096)
+        #expect(setxattr(doc.path, "com.apple.ResourceFork", fork, fork.count, 0, 0) == 0)
+        let out = attrDir("fork"), base = attrDir("base")
+        defer { for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let bundle = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        let fork2 = [UInt8](repeating: 2, count: 4096)
+        #expect(setxattr(doc.path, "com.apple.ResourceFork", fork2, fork2.count, 0, 0) == 0)
+        let loses = LosesAfterRsync { staging in
+            let path = staging.appendingPathComponent("doc.txt").path
+            let date = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+            let junk = [UInt8](repeating: 9, count: 4096)
+            guard setxattr(path, "com.apple.ResourceFork", junk, junk.count, 0, 0) == 0, let date else { return false }
+            try? FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: path)
+            return true
+        }
+        var failure: Error?
+        do { _ = try SparseBundleMirrorEngine(sizeGB: 1, runner: loses, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out) }
+        catch { failure = error }
+        try #require(loses.lost, "no fork was lost, so this proves nothing")
+        guard case .readBackMismatch(_, let examples)? = failure as? MirrorCopyError else {
+            Issue.record("a lost fork wasn't caught: \(String(describing: failure))"); return
+        }
+        #expect(examples == ["doc.txt has a different resource fork"])
+        let inMirror = try inMirror(bundle, "Lib/doc.txt") { MirrorCopy.attributeValue($0, "com.apple.ResourceFork") }
+        #expect(inMirror == fork, "the previous copy wasn't kept")
+    }
+
+    // openrsync -E sends a file's attributes as an AppleDouble file, and a file with
+    // none has nothing to send, so a Finder tag or an access list taken off the
+    // library's last one stayed on the copy, and the read-back then failed every run
+    // (on the CI runners, whose files carry no provenance attribute). Here the copy
+    // holds what the library no longer has, on a plain file, a read-only file and a
+    // folder; after the pass it holds exactly what the library does, dates kept.
+    @Test func theCopyLosesAttributesAndAccessListsTheLibraryNoLongerHas() throws {
+        let fm = FileManager.default
+        let lib = attrDir("matchsrc"), copy = attrDir("matchdst")
+        defer {
+            _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "u+w", lib.path, copy.path])
+            for d in [lib, copy] { try? fm.removeItem(at: d) }
+        }
+        for root in [lib, copy] {
+            try fm.createDirectory(at: root.appendingPathComponent("Folder"), withIntermediateDirectories: true)
+            for f in ["plain.txt", "locked.txt", "kept.txt"] { try Data("x".utf8).write(to: root.appendingPathComponent(f)) }
+        }
+        #expect(setTag(lib.appendingPathComponent("kept.txt").path, "Green") == 0)
+        #expect(setTag(copy.appendingPathComponent("kept.txt").path, "Green") == 0)
+        for rel in ["plain.txt", "locked.txt", "Folder"] {
+            #expect(setTag(copy.appendingPathComponent(rel).path, "Red") == 0)
+            #expect(try ProcessCommandRunner().run("/bin/chmod", ["+a", "everyone deny delete", copy.appendingPathComponent(rel).path]).ok)
+        }
+        for root in [lib, copy] { chmod(root.appendingPathComponent("locked.txt").path, 0o444) }
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try fm.setAttributes([.modificationDate: date], ofItemAtPath: copy.appendingPathComponent("locked.txt").path)
+        try fm.setAttributes([.modificationDate: date], ofItemAtPath: lib.appendingPathComponent("locked.txt").path)
+
+        try MirrorCopy.matchAttributes(from: lib, to: copy, control: nil)
+        for rel in ["plain.txt", "locked.txt", "kept.txt", "Folder"] {
+            #expect(MirrorCopy.differentAttributes(lib.appendingPathComponent(rel).path, copy.appendingPathComponent(rel).path) == nil,
+                    "\(rel): \(MirrorCopy.differentAttributes(lib.appendingPathComponent(rel).path, copy.appendingPathComponent(rel).path) ?? "")")
+        }
+        #expect(tag(copy.appendingPathComponent("kept.txt").path) == "Green")
+        let locked = try fm.attributesOfItem(atPath: copy.appendingPathComponent("locked.txt").path)
+        #expect(locked[.modificationDate] as? Date == date)
+        #expect((locked[.posixPermissions] as? Int) == 0o444)
+    }
+
     // A file the read-back can't open used to be reported as "doesn't match the
     // library", the same as lost data. It says which it was now.
     @Test func theReadBackSaysWhetherBytesDifferOrAFileCouldNotBeRead() throws {
@@ -168,19 +242,21 @@ extension MirrorAttributeReadBackTests {
     }
 }
 
-/// after the first rsync pass succeeds, `lose` damages the staging copy the way a lost
-/// write would (and says whether it did)
+/// Damages the staging copy the way a lost write would (and says whether it did), at
+/// the last moment before the read-back: when the run detaches the image to attach it
+/// again, after every rsync pass and the attribute pass are done.
 private final class LosesAfterRsync: CommandRunner, @unchecked Sendable {
     let inner = ProcessCommandRunner()
     let lose: (URL) -> Bool
+    private var staging: URL?
     private(set) var lost = false
-    var forTeardown: CommandRunner { inner }
+    var forTeardown: CommandRunner { self }      // the run detaches through its teardown runner
     init(_ lose: @escaping (URL) -> Bool) { self.lose = lose }
     func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+        let tool = (launchPath as NSString).lastPathComponent
+        if tool == "hdiutil", args.first == "detach", !lost, let staging { lost = lose(staging) }
         let r = try inner.run(launchPath, args, stdin: stdin)
-        if (launchPath as NSString).lastPathComponent == "rsync", !lost, r.ok, let dest = args.last {
-            lost = lose(URL(fileURLWithPath: dest))
-        }
+        if tool == "rsync", r.ok, staging == nil, let dest = args.last { staging = URL(fileURLWithPath: dest) }
         return r
     }
 }

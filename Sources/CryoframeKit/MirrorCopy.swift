@@ -327,6 +327,7 @@ enum MirrorCopy {
         let readOnly = readOnlyFiles(in: source)
         guard !readOnly.isEmpty else {
             try execute(ArchivePlan.rsync(root: source, into: next))
+            try matchAttributes(from: source, to: next, control: runner.control)
             return
         }
         let fm = FileManager.default
@@ -362,7 +363,36 @@ enum MirrorCopy {
             if i % 256 == 0, runner.control?.isCancelled == true { throw CancelledError() }
             try copyAttributes(from: source.appendingPathComponent(rel), to: next.appendingPathComponent(rel))
         }
+        try matchAttributes(from: source, to: next, control: runner.control)
         restoreFolderModes(from: source, to: next)
+    }
+
+    /// Give every file and folder of the copy the library's extended attributes and
+    /// access list where rsync left them different.
+    ///
+    /// openrsync's -E sends a file's attributes as an AppleDouble ("._") file, and a
+    /// file with no attributes at all has none to send. So when a file's last
+    /// attribute or its access list is removed from the library (a Finder tag taken
+    /// off, say), nothing tells the copy, and the copy kept it on every run after.
+    /// It went unseen on this Mac only because macOS gives every file this session's
+    /// processes write a provenance attribute, so every file had something to send;
+    /// files written by other processes (older files, files from another Mac, the
+    /// CI runners') have none. The read-back then failed every run.
+    static func matchAttributes(from source: URL, to next: URL, control: RunControl?) throws {
+        var rels = [""]
+        if let walker = FileManager.default.enumerator(atPath: source.path) {
+            while let rel = walker.nextObject() as? String { rels.append(rel) }
+        }
+        for (i, rel) in rels.enumerated() {
+            if i % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+            let from = rel.isEmpty ? source : source.appendingPathComponent(rel)
+            let to = rel.isEmpty ? next : next.appendingPathComponent(rel)
+            var a = stat(), b = stat()
+            guard lstat(from.path, &a) == 0, lstat(to.path, &b) == 0 else { continue }
+            let type = a.st_mode & S_IFMT
+            guard type == b.st_mode & S_IFMT, type == S_IFREG || type == S_IFDIR else { continue }
+            if differentAttributes(from.path, to.path) != nil { try copyAttributes(from: from, to: to) }
+        }
     }
 
     /// Put every folder's mode back as the library has it. A --files-from pass makes
@@ -420,7 +450,8 @@ enum MirrorCopy {
     }
 
     /// extended attributes (resource fork included) and ACL, onto a copy that is
-    /// read-only like its source: made writable for the moment it takes.
+    /// read-only like its source: made writable for the moment it takes. Attributes
+    /// and an access list the source no longer has are taken off the copy.
     ///
     /// Writing a resource fork updates the file's modification date, so the library's
     /// dates go back on afterwards: without that the copy's date drifted (the read-back
@@ -438,6 +469,12 @@ enum MirrorCopy {
             throw ArchiveError.toolFailed(tool: "copyfile", status: errno,
                                           stderr: "\(src.lastPathComponent): couldn't copy its attributes (\(String(cString: strerror(errno))))")
         }
+        if let kept = attributeNames(src.path).map(Set.init) {      // unreadable: leave the copy's alone
+            for name in attributeNames(dst.path) ?? [] where !kept.contains(name) {
+                _ = removexattr(dst.path, name, XATTR_NOFOLLOW)
+            }
+        }
+        if accessList(src.path) == nil, accessList(dst.path) != nil { clearACL(dst.path) }
     }
 
     /// push everything written to the image down to its bands on the drive: rsync's
