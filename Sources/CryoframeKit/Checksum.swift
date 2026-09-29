@@ -26,23 +26,40 @@ public enum Checksum {
     /// sorted list of inner file paths + sizes) for a directory like a sparsebundle.
     /// Full content-hashing a mirror's bands every run would defeat its incremental
     /// nature, so the structural digest catches dropped/added/resized bands cheaply.
+    ///
+    /// Paths are taken relative to the directory as the enumerator hands them out,
+    /// whatever spelling `url` has. They used to be cut from full paths, and when the
+    /// enumerator's spelling differed from the caller's (/var vs /private/var, a
+    /// destination reached through a symlink) every line fell back to a bare file
+    /// name: the same bundle hashed two ways, and a mirror written through a symlink
+    /// failed its checksum everywhere a scan found it.
     public static func digest(of url: URL) throws -> String {
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         guard isDir.boolValue else { return try sha256(of: url) }
+        return hash(lines(in: url) { "/" + $0 })
+    }
 
-        var hasher = SHA256()
-        let base = url.path
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
+    /// what `digest` gave a directory reached through a spelling the enumerator
+    /// didn't share: bare file names. Manifests written that way still verify.
+    static func nameOnlyDigest(of url: URL) -> String {
+        hash(lines(in: url) { ($0 as NSString).lastPathComponent })
+    }
+
+    /// "<path>\t<size>" for every regular file under `url`, sorted.
+    private static func lines(in url: URL, path: (String) -> String) -> [String] {
         var lines: [String] = []
-        if let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
-            for case let u as URL in e {
-                guard let v = try? u.resourceValues(forKeys: keys), v.isRegularFile == true else { continue }
-                let rel = u.path.hasPrefix(base) ? String(u.path.dropFirst(base.count)) : u.lastPathComponent
-                lines.append("\(rel)\t\(v.fileSize ?? 0)")
-            }
+        guard let e = FileManager.default.enumerator(atPath: url.path) else { return lines }
+        while let rel = e.nextObject() as? String {
+            guard let attrs = e.fileAttributes, attrs[.type] as? FileAttributeType == .typeRegular else { continue }
+            lines.append("\(path(rel))\t\((attrs[.size] as? NSNumber)?.uint64Value ?? 0)")
         }
-        for line in lines.sorted() { hasher.update(data: Data(line.utf8)); hasher.update(data: Data([0x0a])) }
+        return lines.sorted()
+    }
+
+    private static func hash(_ lines: [String]) -> String {
+        var hasher = SHA256()
+        for line in lines { hasher.update(data: Data(line.utf8)); hasher.update(data: Data([0x0a])) }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 

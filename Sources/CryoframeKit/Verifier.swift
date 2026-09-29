@@ -39,7 +39,8 @@ public struct ChecksumVerifier: Sendable {
             let url = dir.appendingPathComponent(a.name)
             guard FileManager.default.fileExists(atPath: url.path) else { failures.append("missing: \(a.name)"); continue }
             if unsealed { continue }
-            if try Checksum.digest(of: url) != a.sha256 { failures.append("checksum mismatch: \(a.name)") }
+            if try Checksum.digest(of: url) != a.sha256,
+               !Self.matchesLegacyDirectoryDigest(url, a.sha256) { failures.append("checksum mismatch: \(a.name)") }
         }
         if unsealed, failures.isEmpty {
             return report(.checksum, true, MirrorSeal.uncheckedDetail)
@@ -47,6 +48,14 @@ public struct ChecksumVerifier: Sendable {
         return report(.checksum, failures.isEmpty,
                       failures.isEmpty ? "\(manifest.artifacts.count) artifact(s) verified" : failures.joined(separator: "; "),
                       failures)
+    }
+
+    /// a directory's manifest written through a symlink before 1.6 holds the digest
+    /// taken with bare file names (see Checksum.digest)
+    static func matchesLegacyDirectoryDigest(_ url: URL, _ expected: String) -> Bool {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else { return false }
+        return Checksum.nameOnlyDigest(of: url) == expected
     }
 
     /// the periodic-re-verify entry point: read the sidecar manifest and re-hash.

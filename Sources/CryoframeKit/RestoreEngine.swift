@@ -77,11 +77,17 @@ public enum RestoreDiscovery {
     }
 
     private static func walk(_ dir: URL, depth: Int, maxDepth: Int, into out: inout [RestorableArchive]) {
+        // listing a symlink lists nothing: follow it (depth still bounds a loop)
+        let dir = (try? dir.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+            ? dir.resolvingSymlinksInPath() : dir
         if let a = archive(at: dir) { out.append(a); return }      // a manifest dir is a leaf
         guard depth < maxDepth else { return }
         let fm = FileManager.default
         for entry in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey])) ?? [] {
-            if (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            // fileExists follows a symlink: a destination can be one, or be reached
+            // through one (a folder in the home folder pointing at a drive)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue {
                 walk(entry, depth: depth + 1, maxDepth: maxDepth, into: &out)
             }
         }

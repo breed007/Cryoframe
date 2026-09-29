@@ -391,3 +391,49 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
         #expect(ls.stdout.contains("deny write"), "the read-only file lost its ACL:\n\(ls.stdout)")
     }
 }
+
+/// A destination reached through a symlink: a folder in the home folder pointing at
+/// an external drive, or a destination that is itself a link.
+@Suite(.serialized) struct SymlinkedDestinations {
+
+    @Test func aDestinationThatIsItselfASymlinkIsScanned() throws {
+        let src = try library(files: 4)
+        let real = tempDir("real"), links = tempDir("links"), base = tempDir("base"), back = tempDir("back")
+        defer { for d in [real, links, base, back, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        _ = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: real.appendingPathComponent("Lib"))
+        let dest = links.appendingPathComponent("Backups")
+        try FileManager.default.createSymbolicLink(at: dest, withDestinationURL: real)
+
+        // the destination itself is the link, and a folder holding it links to it
+        for place in [dest, links] {
+            let found = RestoreDiscovery.scan(place)
+            #expect(found.map(\.libraryName) == ["Lib"], "scanning \(place.lastPathComponent) found \(found.map(\.libraryName))")
+            if let archive = found.first {
+                let check = try ChecksumVerifier().reverify(archiveDir: archive.dir)
+                #expect(check.passed, "\(check.details)")
+            }
+        }
+        let restored = try RestoreEngine().restore(try #require(RestoreDiscovery.scan(dest).first), to: back, verify: true)
+        #expect(tree(restored) == tree(src))
+    }
+
+    // A manifest written through a symlink before this fix holds the digest taken
+    // with bare file names (the fallback when the spellings differed). It must still
+    // check out, or every mirror written that way fails its checksum on upgrade.
+    @Test func aManifestWrittenThroughASymlinkBeforeTheFixStillChecksOut() throws {
+        let dir = tempDir("legacy")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundle = dir.appendingPathComponent("Lib.sparsebundle")
+        try FileManager.default.createDirectory(at: bundle.appendingPathComponent("bands"), withIntermediateDirectories: true)
+        for (name, size) in [("bands/0", 10), ("bands/1", 20), ("Info.plist", 5)] {
+            try Data(count: size).write(to: bundle.appendingPathComponent(name))
+        }
+        let legacy = Checksum.nameOnlyDigest(of: bundle)
+        let manifest = VerificationManifest(format: .liveMirror, artifacts: [
+            ArtifactDigest(name: "Lib.sparsebundle", size: Checksum.byteSize(of: bundle), sha256: legacy)])
+        #expect(legacy != (try Checksum.digest(of: bundle)))
+        #expect(try ChecksumVerifier().verify(manifest, in: dir).passed)
+        try Data(count: 1).write(to: bundle.appendingPathComponent("bands/2"))
+        #expect(try !ChecksumVerifier().verify(manifest, in: dir).passed, "a changed bundle passed on the legacy digest")
+    }
+}
