@@ -417,6 +417,8 @@ public enum MirrorCopyError: Error, Equatable {
     case imageDamaged(String)
     /// what a previous run left in the image couldn't be removed
     case stagingStuck(String)
+    /// an earlier run found the image damaged, and it still isn't sound
+    case imageRecordedDamaged(image: String, why: String)
     /// the new copy, read back from the image, didn't match the library
     case readBackMismatch(count: Int, examples: [String])
 }
@@ -438,6 +440,8 @@ extension MirrorCopyError: LocalizedError {
         case .readBackMismatch(let count, let examples):
             let list = examples.joined(separator: "; ")
             return "the new copy of the mirror didn't read back the same as the library (\(count) item\(count == 1 ? "" : "s"): \(list)). Data was lost on its way to the drive, so it wasn't put in place: nothing was updated and the previous copy is intact. Run again; if this repeats, check the drive."
+        case .imageRecordedDamaged(let image, let why):
+            return "the mirror's disk image (\(image)) was found damaged after an earlier run whose drive filled (\(why)), and it still is. Its backup can't be trusted and may not open. To start this mirror afresh, move that image out of the way (keep it until the new mirror is complete) and run again."
         case .stagingStuck(let path):
             return "an unfinished copy a previous run left inside the mirror (\(path)) couldn't be removed, and it can't be trusted, so nothing was updated. The previous copy is intact; run again, and if this repeats, start this mirror afresh."
         case .swapFailed(let why):

@@ -101,6 +101,18 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 
         let result = ArchiveResult(artifacts: [bundle], format: .liveMirror)
 
+        // An image found damaged after an earlier run may not even mount. Unless a
+        // check now finds it sound (someone repaired it), say so plainly rather than
+        // fail on whatever hdiutil makes of it.
+        if let why = MirrorSeal.damage(in: destinationDir), fm.fileExists(atPath: bundle.path) {
+            if MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty,
+               MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown) == .sound {
+                MirrorSeal.clearDamaged(destinationDir)
+            } else {
+                throw MirrorCopyError.imageRecordedDamaged(image: bundle.path, why: why)
+            }
+        }
+
         // The manifest describes the image at rest, and a run changes the image from
         // the moment it attaches. Mark it open first, so a run that dies anywhere
         // after this leaves a mirror whose checksum is known not to apply (see
@@ -132,6 +144,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             }
             switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown) {
             case .damaged(let why):
+                MirrorSeal.markDamaged(destinationDir, why: why)  // so restore, health and the next run say so
                 throw MirrorCopyError.imageDamaged(why)          // stays marked; not compacted, not sealed
             case .unknown:
                 throw MirrorCopyError.driveFilledByAnother(swapped: watch.swapped)   // unchecked: stays marked
@@ -468,6 +481,7 @@ public enum MirrorSeal {
         manifest.sealedBands = result.artifacts.first.map { bandRanges(bands(of: $0)) }
         try ArchiveManifest.write(manifest, toDir: dir)
         clearOpen(dir)
+        clearDamaged(dir)           // only a run whose image checked out gets this far
     }
 
     // MARK: the bands a sealed mirror had
@@ -518,6 +532,35 @@ public enum MirrorSeal {
         guard var manifest = try? ArchiveManifest.read(url), manifest.sealedBands != nil else { return }
         manifest.sealedBands = nil
         _ = try? ArchiveManifest.write(manifest, toDir: dir)
+    }
+
+    // MARK: an image found damaged
+    //
+    // After a run whose drive filled, fsck can find the image's file system damaged.
+    // The open mark alone then read as "not compared", the restore window gave no
+    // warning, and the next run failed on raw hdiutil text ("no mountable file
+    // systems"). The damage is recorded beside the manifest instead, with fsck's reason.
+
+    static let damagedMarkerName = ".cryoframe-mirror-damaged"
+
+    /// why the image in `dir` was found damaged, or nil if it wasn't
+    public static func damage(in dir: URL) -> String? {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent(damagedMarkerName)) else { return nil }
+        let why = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return why.isEmpty ? "reason not recorded" : why
+    }
+
+    static func markDamaged(_ dir: URL, why: String) {
+        try? Data(why.utf8).write(to: dir.appendingPathComponent(damagedMarkerName), options: .atomic)
+    }
+
+    static func clearDamaged(_ dir: URL) {
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(damagedMarkerName))
+    }
+
+    /// what a check says about a mirror recorded as damaged
+    public static func damagedDetail(_ why: String) -> String {
+        "the mirror's disk image was found damaged after a run whose drive filled (\(why)); the backup in it can't be trusted and may not open. The job's next run says how to start the mirror afresh."
     }
 
     static func clearOpen(_ dir: URL) {

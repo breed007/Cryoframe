@@ -32,6 +32,9 @@ public struct ChecksumVerifier: Sendable {
 
     public func verify(_ manifest: VerificationManifest, in dir: URL) throws -> VerificationReport {
         var failures: [String] = []
+        if manifest.format == .liveMirror, let why = MirrorSeal.damage(in: dir) {
+            return report(.checksum, false, MirrorSeal.damagedDetail(why), ["damaged image"])
+        }
         // a mirror a run has open, or one that died with it open, has changed since its
         // manifest was written; the copy inside is still whole (see MirrorSeal)
         let unsealed = manifest.format == .liveMirror && MirrorSeal.isOpen(dir)

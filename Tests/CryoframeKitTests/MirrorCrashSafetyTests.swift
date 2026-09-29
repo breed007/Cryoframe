@@ -761,3 +761,55 @@ extension MirrorCrashSafety {
     }
 }
 
+/// An image found damaged after a run whose drive filled: recorded, so every place
+/// that looks at the mirror says so plainly.
+@Suite(.serialized) struct ADamagedMirrorImage {
+
+    @Test func aDamagedImageIsSaidToBeDamagedEverywhereItIsChecked() throws {
+        let src = try library(files: 4)
+        let dest = tempDir("dmg"), base = tempDir("base"), back = tempDir("back")
+        let out = dest.appendingPathComponent("Lib")
+        defer { for d in [dest, base, back, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let bundle = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        try MirrorSeal.markOpen(out)
+        MirrorSeal.markDamaged(out, why: "error: apfs_root: found zeroed-out block")
+        // and broken so it won't mount, as the worst of them were
+        try FileManager.default.removeItem(at: bundle.appendingPathComponent("bands/0"))
+
+        let check = try ChecksumVerifier().reverify(archiveDir: out)
+        #expect(!check.passed && check.details.contains("damaged"), "\(check.details)")
+        let archive = try #require(RestoreDiscovery.archive(at: out))
+        #expect {
+            _ = try RestoreEngine().restore(archive, to: back, verify: true)
+        } throws: { error in
+            guard case RestoreError.verificationFailed(let why) = error else { return false }
+            return why.contains("damaged")
+        }
+        let job = BackupJob(id: "j", name: "j", libraries: [.genericFolder(id: "l", displayName: "Lib", path: .home("Lib"))],
+                            target: .localVolume(id: "t", name: "Disk", dir: dest),
+                            format: .liveMirror(sizeGB: 1), frequency: .manual, createdAt: Date())
+        #expect(HealthChecker().check(job: job).checks.first.map { !$0.passed && !$0.skipped } == true)
+
+        #expect {
+            _ = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        } throws: { error in
+            guard case MirrorCopyError.imageRecordedDamaged = error else { return false }
+            return error.localizedDescription.contains("start this mirror afresh")
+        }
+    }
+
+    // One found damaged, then repaired (or the reading was wrong): the next run checks
+    // it again, and a sound image clears the record and is updated as usual.
+    @Test func anImageThatChecksOutAgainIsUsedAndTheRecordCleared() throws {
+        let src = try library(files: 4)
+        let out = tempDir("dmgok"), base = tempDir("base")
+        defer { for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        let bundle = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        MirrorSeal.markDamaged(out, why: "a reading since repaired")
+        try editEverything(src, files: 4)
+        _ = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out)
+        #expect(MirrorSeal.damage(in: out) == nil)
+        #expect(try insideMirror(bundle).library == tree(src))
+    }
+}
