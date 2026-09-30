@@ -239,6 +239,14 @@ public final class RunHistoryStore: @unchecked Sendable {
     /// The newest `cap` records, and each job's newest good run however old: that is
     /// what says how long a job has gone without one, and a job failing for weeks
     /// alongside busier ones would otherwise lose it and read as never backed up.
+    ///
+    /// Also each job's first and last run of each day that wrote something, over the
+    /// `evidenceDays` before the newest record. A 1.5 pair's other drive is known by a
+    /// version one of the job's runs made there (see LibraryFolders.holdsBackups), and
+    /// an hourly job beside it pushed those runs out within days, while that drive was
+    /// away. The last run of a day made the version a daily retention keeps; the
+    /// first, when the drives were swapped that day, one on the drive that left. At
+    /// most two records a day for each job.
     private func trimmed(_ list: [RunRecord]) -> [RunRecord] {
         guard list.count > cap else { return list }
         var keep = Set(list.prefix(cap).map(\.id))
@@ -247,8 +255,20 @@ public final class RunHistoryStore: @unchecked Sendable {
             newestGood[r.jobID] = r
         }
         keep.formUnion(newestGood.values.map(\.id))
+        let since = (list.map(\.startedAt).max() ?? .distantPast).addingTimeInterval(-Double(Self.evidenceDays) * 86_400)
+        var days: [String: (first: RunRecord, last: RunRecord)] = [:]
+        for r in list where r.startedAt >= since && r.libraries.contains(where: { $0.parts > 0 }) {
+            let day = "\(r.jobID) \(Calendar.current.startOfDay(for: r.startedAt).timeIntervalSince1970)"
+            let seen = days[day] ?? (r, r)
+            days[day] = (r.startedAt < seen.first.startedAt ? r : seen.first, r.startedAt > seen.last.startedAt ? r : seen.last)
+        }
+        keep.formUnion(days.values.flatMap { [$0.first.id, $0.last.id] })
         return list.filter { keep.contains($0.id) }
     }
+
+    /// how long a job's runs are kept as evidence of the drives they wrote to: longer
+    /// than a rotation's drive may be away (14 days unless changed)
+    static let evidenceDays = 31
 
     private func decode() -> [RunRecord] {
         guard let data = try? Data(contentsOf: url) else { return [] }
