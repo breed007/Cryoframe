@@ -40,19 +40,27 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
     /// versions the next run deletes, over all destinations and libraries
     public var deletes: Int
 
+    /// The go-ahead saving records (see AdoptedVersions.swift): for the versions the
+    /// next run takes over or moves in, and those adopted earlier that no one has said
+    /// yes to, each counted in `lines`.
+    public var consents: [AdoptionConsent] = []
+
     /// What saving `draft` over `base` (nil: a new job) does at the next run. Reads the
-    /// destinations that are connected; changes nothing. `pending`: the interrupted
+    /// destinations that are connected; changes nothing. `jobs`: every saved job (whose
+    /// a folder an earlier version of Cryoframe made is). `pending`: the interrupted
     /// transfers recorded (a folder one still writes into isn't renamed until it's done).
-    public static func of(draft: BackupJob, base: BackupJob?, volumes: VolumeTable = SystemVolumeTable(),
+    public static func of(draft: BackupJob, base: BackupJob?, jobs: [BackupJob] = [], volumes: VolumeTable = SystemVolumeTable(),
                           checks: [HealthRecord] = [], pending: [PendingTransfer] = [], now: Date = Date()) -> JobEditImpact {
         var lines: [Line] = []
         var deletes = 0
+        var consents: [AdoptionConsent] = []
         func say(_ kind: Line.Kind, _ text: String) { if !lines.contains(Line(kind: kind, text: text)) { lines.append(Line(kind: kind, text: text)) } }
         let resolver = DestinationResolver(volumes: volumes)
         let placed = resolver.resolve(draft)
         let labels = draft.destinationLabels
         func name(_ t: Target) -> String { labels[t.id] ?? t.displayName }
         let pendingDirs = pending.map { URL(fileURLWithPath: $0.targetDir, isDirectory: true) }
+        let others = jobs.filter { $0.id != draft.id }.map { resolver.resolve($0).job }
 
         // taken out of the job: nothing is deleted
         if let base {
@@ -70,77 +78,100 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
         for t in placed.job.targets {
             let before = base?.targets.first { $0.id == t.id }
             let here = placed.presence[t.id]?.url
-            // a destination new to the job
-            guard let before else {
+            if before == nil {
+                // a destination new to the job
                 if let here {
-                    for line in DestinationRules.preview(here, job: draft) { say(.creates, "At \(name(t)): \(line)") }
+                    for line in DestinationRules.previewLines(here, job: draft, jobs: others) { say(line.creates ? .creates : .keeps, "At \(name(t)): \(line.text)") }
                 } else {
                     say(.creates, "\(name(t)) gets its folders the first time it's connected.")
                 }
-                continue
-            }
-            // drives it now takes turns with under one name
-            let added = (t.otherVolumes ?? []).filter { v in !(before.otherVolumes ?? []).contains { $0.uuid == v.uuid } }
-            for v in added { say(.changes, "\(name(t)) takes turns with the other drive named “\(v.name)”, at the same folder.") }
-            let removed = (before.otherVolumes ?? []).filter { v in !(t.otherVolumes ?? []).contains { $0.uuid == v.uuid } }
-            for v in removed { say(.keeps, "\(name(t)) no longer takes turns with the other drive named “\(v.name)”. Nothing on it is deleted.") }
-            if t.rotation?.group != before.rotation?.group {
-                let partners = placed.job.targets.filter { $0.id != t.id && $0.rotation != nil && $0.rotation?.group == t.rotation?.group }
-                if t.rotation != nil, !partners.isEmpty {
-                    say(.changes, "\(RotationRules.name(of: [t] + partners)) take turns: each backup goes to whichever is connected.")
-                } else if before.rotation != nil {
-                    say(.changes, "\(name(t)) no longer takes turns: every backup has to reach it.")
+            } else if let before {
+                // drives it now takes turns with under one name
+                let added = (t.otherVolumes ?? []).filter { v in !(before.otherVolumes ?? []).contains { $0.uuid == v.uuid } }
+                for v in added { say(.changes, "\(name(t)) takes turns with the other drive named “\(v.name)”, at the same folder.") }
+                let removed = (before.otherVolumes ?? []).filter { v in !(t.otherVolumes ?? []).contains { $0.uuid == v.uuid } }
+                for v in removed { say(.keeps, "\(name(t)) no longer takes turns with the other drive named “\(v.name)”. Nothing on it is deleted.") }
+                if t.rotation?.group != before.rotation?.group {
+                    let partners = placed.job.targets.filter { $0.id != t.id && $0.rotation != nil && $0.rotation?.group == t.rotation?.group }
+                    if t.rotation != nil, !partners.isEmpty {
+                        say(.changes, "\(RotationRules.name(of: [t] + partners)) take turns: each backup goes to whichever is connected.")
+                    } else if before.rotation != nil {
+                        say(.changes, "\(name(t)) no longer takes turns: every backup has to reach it.")
+                    }
                 }
             }
 
             for lib in draft.libraries {
-                guard let old = base?.libraries.first(where: { $0.id == lib.id }) else {
-                    if let here, let line = DestinationRules.preview(here, job: BackupJob.only(lib, of: draft)).first {
-                        say(.creates, "At \(name(t)): \(line)")
-                    }
-                    continue
+                let old = before == nil ? nil : base?.libraries.first(where: { $0.id == lib.id })
+                if before != nil, old == nil, let here,
+                   let line = DestinationRules.previewLines(here, job: BackupJob.only(lib, of: draft), jobs: others).first {
+                    say(line.creates ? .creates : .keeps, "At \(name(t)): \(line.text)")
                 }
-                let folder = here.flatMap { LibraryFolders.folder(job: draft, library: lib, in: $0) }
-                // renamed
-                if !LibraryNames.same(old.displayName, lib.displayName) {
-                    if let here, let folder, !LibraryFolderName.fits(folder.lastPathComponent, name: lib.displayName,
-                                                                     key: LibraryIdentity.key(job: draft, library: lib)) {
-                        let busy = pendingDirs.contains { DestinationRules.contains(folder, $0) }
-                        say(.renames, "At \(name(t)), “\(folder.lastPathComponent)” is renamed “\(LibraryFolderName.choose(job: draft, library: lib, in: here))” "
-                            + (busy ? "once its interrupted upload has finished." : "at the next backup."))
-                    } else if here == nil {
-                        say(.renames, "At \(name(t)), \(old.displayName)'s folder is renamed the next time it's connected.")
+                var formatChanged = false
+                if let old, let base {
+                    let folder = here.flatMap { LibraryFolders.folder(job: draft, library: lib, in: $0) }
+                    // renamed
+                    if !LibraryNames.same(old.displayName, lib.displayName) {
+                        if let here, let folder, !LibraryFolderName.fits(folder.lastPathComponent, name: lib.displayName,
+                                                                         key: LibraryIdentity.key(job: draft, library: lib)) {
+                            let busy = pendingDirs.contains { DestinationRules.contains(folder, $0) }
+                            say(.renames, "At \(name(t)), “\(folder.lastPathComponent)” is renamed “\(LibraryFolderName.choose(job: draft, library: lib, in: here))” "
+                                + (busy ? "once its interrupted upload has finished." : "at the next backup."))
+                        } else if here == nil {
+                            say(.renames, "At \(name(t)), \(old.displayName)'s folder is renamed the next time it's connected.")
+                        }
+                    }
+                    // a format change holds on to what the other format made
+                    if let folder, base.format.isSealed != draft.format.isSealed {
+                        formatChanged = true
+                        if draft.format.isSealed, LibraryFolders.holdsMirror(folder) {
+                            say(.keeps, "At \(name(t)), the up-to-date copy of \(lib.displayName) stays, marked kept; dated versions go beside it.")
+                        } else if !draft.format.isSealed {
+                            let n = LibraryFolders.versionNames(in: folder).count
+                            if n > 0 { say(.keeps, "At \(name(t)), \(n) dated version\(n == 1 ? "" : "s") of \(lib.displayName) stay, marked kept.") }
+                        }
                     }
                 }
-                guard let folder, let base else { continue }
-                // a format change holds on to what the other format made
-                if base.format.isSealed != draft.format.isSealed {
-                    if draft.format.isSealed, LibraryFolders.holdsMirror(folder) {
-                        say(.keeps, "At \(name(t)), the up-to-date copy of \(lib.displayName) stays, marked kept; dated versions go beside it.")
-                    } else if !draft.format.isSealed {
-                        let n = LibraryFolders.versionNames(in: folder).count
-                        if n > 0 { say(.keeps, "At \(name(t)), \(n) dated version\(n == 1 ? "" : "s") of \(lib.displayName) stay, marked kept.") }
-                    }
-                    continue
+                guard let here, draft.format.isSealed, !formatChanged else { continue }
+
+                // What the next backup deletes there, counted by the rule retention runs
+                // (JobExecutor.prunePlan) over the folder as that backup leaves it ready
+                // (JobExecutor.nextShelf): the version it adds counts, and so do the
+                // versions it takes over or moves in, as saving says yes to them.
+                let (shelf, _) = JobExecutor.nextShelf(job: draft, library: lib, in: here, jobs: others)
+                let transferring = JobExecutor.transferring(draft, [t.id: [lib.id: shelf.folder]], records: { pending }, volumes: volumes)
+                let after = JobExecutor.prunePlan(shelves: [shelf], policy: draft.retention, checks: checks,
+                                                  transferring: transferring, upcoming: now)
+                // adopted, and not yet let follow the Keep rule: this save says yes
+                let asked = Set(shelf.entries.map(\.lastPathComponent)).intersection(shelf.adopted)
+                    .filter { shelf.identity?.holds($0) != true && base?.confirmsAdoption(of: $0, target: t.id, library: lib.id) != true }
+                if !asked.isEmpty {
+                    let n = asked.count
+                    let gone = after.versions.filter { asked.contains($0.url.lastPathComponent) }.count
+                    let unfinished = after.husks.filter { asked.contains($0.lastPathComponent) }.count
+                    deletes += gone
+                    var text = "At \(name(t)), \(n) earlier backup\(n == 1 ? "" : "s") of \(lib.displayName) that this job didn't make "
+                        + "(in “\(shelf.folder.lastPathComponent)”) now follow\(n == 1 ? "s" : "") its Keep rule: "
+                        + (gone == 0 ? "none are deleted at the next backup" : "\(gone) \(gone == 1 ? "is" : "are") deleted at the next backup")
+                    if unfinished > 0 { text += "; \(unfinished) that never finished \(unfinished == 1 ? "is" : "are") deleted too" }
+                    say(gone > 0 || unfinished > 0 ? .deletes : .keeps, text + ".")
+                    consents.append(AdoptionConsent(targetID: t.id, libraryID: lib.id, versions: asked.sorted(),
+                                                    deletes: gone + unfinished, confirmedAt: now))
                 }
-                // a Keep rule that keeps fewer
-                guard draft.format.isSealed, draft.retention != base.retention else { continue }
-                let transferring = JobExecutor.transferring(draft, [t.id: [lib.id: folder]], records: { pending }, volumes: volumes)
-                let plan = JobExecutor.prunePlan(folders: [(lib, folder)], policy: draft.retention, checks: checks,
-                                                 transferring: transferring,
-                                                 upcoming: now)
-                let was = JobExecutor.prunePlan(folders: [(lib, folder)], policy: base.retention, checks: checks,
-                                                transferring: transferring,
-                                                upcoming: now)
-                if plan.versions.count > was.versions.count {
-                    deletes += plan.versions.count
-                    let n = plan.versions.count
+                // a Keep rule that keeps fewer, over the job's own versions
+                guard let base, before != nil, old != nil, draft.retention != base.retention else { continue }
+                let own = after.versions.filter { !asked.contains($0.url.lastPathComponent) }
+                let was = JobExecutor.prunePlan(shelves: [shelf], policy: base.retention, checks: checks, transferring: transferring,
+                                                upcoming: now, confirmed: { _, v in base.confirmsAdoption(of: v, target: t.id, library: lib.id) })
+                if own.count > was.versions.count {
+                    deletes += own.count
+                    let n = own.count
                     say(.deletes, "At \(name(t)), \(n) version\(n == 1 ? "" : "s") of \(lib.displayName) \(n == 1 ? "is" : "are") deleted at the next backup, by the new Keep rule.")
                 }
             }
         }
         if lines.isEmpty, base != nil { say(.changes, "Nothing on the destinations changes; the next backup follows the new settings.") }
-        return JobEditImpact(lines: lines, deletes: deletes)
+        return JobEditImpact(lines: lines, deletes: deletes, consents: consents)
     }
 }
 

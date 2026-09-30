@@ -57,6 +57,12 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
     /// again. Cleared when the job is made a mirror job again: its runs update that
     /// same copy (the image is named after the folder being backed up).
     public var keptMirror: KeptMirror?
+    /// The version folders here the library's job didn't make: those a folder 1.5
+    /// wrote held when the job took it over, and those a run moved in from another
+    /// folder. The job's Keep rule deletes one only once the person has seen what
+    /// that does and said yes (see BackupJob.adoptionConsents); until then each is
+    /// left as it is.
+    public var adoptedVersions: [String]?
 
     public struct KeptMirror: Codable, Sendable, Equatable {
         /// the disk image's file name
@@ -105,12 +111,17 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
         out.heldVersions = previous.heldVersions
         out.ownHeldVersions = previous.ownHeldVersions
         out.keptMirror = previous.keptMirror
+        out.adoptedVersions = previous.adoptedVersions
         return out
     }
 
     /// whether `version`, a version folder's name, is one of those held (see
     /// `heldVersions`)
     public func holds(_ version: String) -> Bool { heldVersions?.contains(version) == true }
+
+    /// whether `version`, a version folder's name, came from elsewhere (see
+    /// `adoptedVersions`)
+    public func adopted(_ version: String) -> Bool { adoptedVersions?.contains(version) == true }
 
     /// Whether `version`, a version folder here, is the library's own: one its job
     /// made as a sealed job. A version that isn't held came while the folder was what

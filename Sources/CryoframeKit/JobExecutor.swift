@@ -249,6 +249,16 @@ public struct JobExecutor: Sendable {
                                                                           jobs: (jobStore?.load().jobs ?? []).map { DestinationResolver(volumes: self.volumes).resolve($0).job },
                                                                           transferring: { folder in transferDirs.contains { DestinationRules.contains(folder, $0) } })
 
+        // A version a folder adopted (taken over from 1.5, or moved in) is pruned only
+        // once the person has let the Keep rule apply to it (see AdoptedVersions.swift)
+        var folderOwners: [String: (targetID: String, libraryID: String)] = [:]
+        for (tid, libs) in folderOf { for (lid, folder) in libs { folderOwners[folder.path] = (tid, lid) } }
+        let owners = folderOwners
+        let adoptionConfirmed: (URL, String) -> Bool = { folder, name in
+            guard let o = owners[folder.path] else { return false }
+            return saved.confirmsAdoption(of: name, target: o.targetID, library: o.libraryID)
+        }
+
         onStage(.preparing)
 
         // Where does each library actually live? A media library big enough to be
@@ -419,7 +429,7 @@ public struct JobExecutor: Sendable {
             pass.builds.forEach(cleanupBuild)
             if sealed != nil {
                 Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords(),
-                                   transferring: stillTransferring)
+                                   transferring: stillTransferring, confirmed: adoptionConfirmed)
             }
             return .cancelled
         }
@@ -511,8 +521,13 @@ public struct JobExecutor: Sendable {
         var pruneFailures: [String] = []
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
             pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords(),
-                                               transferring: stillTransferring)
+                                               transferring: stillTransferring, confirmed: adoptionConfirmed)
         }
+        // what was left alone for the person to say yes to, said in the run's warning
+        // and kept for the dashboard
+        let reviews = sealed == nil ? [] : Self.adoptionReviews(job, folderOf, checks: healthRecords(), transferring: stillTransferring,
+                                                                 confirmed: adoptionConfirmed, now: now)
+        jobStore?.recordAdoptionReviews(jobID: job.id, reviews, reached: Set(folderOf.keys))
         // the note on how to restore without Cryoframe, brought up to date in each
         // destination this run reached; a note that can't be written is logged, never
         // a failure (see RecoveryNote)
@@ -538,7 +553,7 @@ public struct JobExecutor: Sendable {
         // warning rather than failing it, but do not let it pass in silence.
         let pruneNote = pruneFailures.isEmpty ? nil
             : "couldn't remove \(pruneFailures.count) old version\(pruneFailures.count == 1 ? "" : "s") — \(pruneFailures.joined(separator: "; "))"
-        let warning = ([decision.warning, pruneNote].compactMap { $0 } + folderNotes + pass.notes).joined(separator: " · ")
+        let warning = ([decision.warning, pruneNote].compactMap { $0 } + folderNotes + reviews.map(\.text) + pass.notes).joined(separator: " · ")
         return .finished(results: results, warning: warning.isEmpty ? nil : warning)
     }
 
@@ -563,10 +578,12 @@ public struct JobExecutor: Sendable {
     /// the same, for each library's own folder (see LibraryFolders): only a folder a
     /// run writes to is pruned, never a 1.5 folder left for reading. `transferring`:
     /// whether an interrupted transfer is still to finish into a folder (see prunePlan).
+    /// `confirmed`: see prunePlan. A run always passes it.
     @discardableResult
     static func pruneVersions(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
-                              checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false }) -> [String] {
-        let plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring)
+                              checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false },
+                              confirmed: ((URL, String) -> Bool)? = nil) -> [String] {
+        let plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring, confirmed: confirmed)
         let fm = FileManager.default
         for husk in plan.husks { try? fm.removeItem(at: husk) }        // junk from a failed/canceled run
         var failures: [String] = []
@@ -590,6 +607,41 @@ public struct JobExecutor: Sendable {
         public var versions: [Version] = []
     }
 
+    /// One library's versions as retention reads them: those in its folder and, for
+    /// saying what a run does before it has run, those the run moves in first (see
+    /// LibraryFolders.next).
+    struct Shelf {
+        var library: ContentType
+        var folder: URL
+        var identity: LibraryIdentity?
+        /// the version folders, wherever each is now
+        var entries: [URL]
+        /// the names of those the folder adopted (see LibraryIdentity.adoptedVersions)
+        var adopted: Set<String>
+    }
+
+    /// `library`'s folder `folder` as it is on disk
+    static func shelf(_ library: ContentType, _ folder: URL) -> Shelf {
+        let identity = LibraryIdentity.read(in: folder)
+        let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        return Shelf(library: library, folder: folder, identity: identity, entries: entries, adopted: Set(identity?.adoptedVersions ?? []))
+    }
+
+    /// `library`'s folder at `destination` as `job`'s next run leaves it once it is
+    /// ready to write to (see LibraryFolders.next): the folder it takes over, with
+    /// every version in it adopted, and the versions it moves in. Reads; changes nothing.
+    static func nextShelf(job: BackupJob, library: ContentType, in destination: URL, jobs: [BackupJob]) -> (shelf: Shelf, next: LibraryFolders.Next) {
+        let next = LibraryFolders.next(job: job, library: library, in: destination, jobs: jobs)
+        let folder = next.folder ?? destination.appendingPathComponent(LibraryFolderName.choose(job: job, library: library, in: destination), isDirectory: true)
+        var s = next.folder == nil || next.takesOver ? Shelf(library: library, folder: folder, identity: LibraryIdentity(job: job, library: library),
+                                                             entries: [], adopted: [])
+            : shelf(library, folder)
+        if next.takesOver { s.entries = shelf(library, folder).entries }
+        s.entries += next.movesIn
+        s.adopted.formUnion(next.adopts)
+        return (s, next)
+    }
+
     /// The one rule for what retention deletes, for a run and for showing it before a
     /// save. Only version folders with a manifest are versions; one without is a
     /// failed run's leftover, unless an interrupted transfer is still to finish into
@@ -598,19 +650,34 @@ public struct JobExecutor: Sendable {
     /// last known to restore (see KnownGood). `upcoming`: a version the next run
     /// adds, counted by the policy (it takes a place) but not itself in the plan, for
     /// saying what the next run deletes before it has run.
+    ///
+    /// `confirmed`: whether the person has let the Keep rule apply to a version a
+    /// folder adopted (the folder, the version's name; see AdoptedVersions.swift). One
+    /// they haven't is left out altogether, as a held one is: never deleted, taking
+    /// no place. nil: every adopted version counts, which is what a run does once the
+    /// person says yes to what they were shown.
     static func prunePlan(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
                           checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false },
-                          upcoming: Date? = nil) -> PrunePlan {
+                          upcoming: Date? = nil, confirmed: ((URL, String) -> Bool)? = nil) -> PrunePlan {
+        prunePlan(shelves: folders.map { shelf($0.library, $0.folder) }, policy: policy, checks: checks,
+                  transferring: transferring, upcoming: upcoming, confirmed: confirmed)
+    }
+
+    static func prunePlan(shelves: [Shelf], policy: RetentionPolicy, checks: [HealthRecord] = [],
+                          transferring: (URL) -> Bool = { _ in false }, upcoming: Date? = nil,
+                          confirmed: ((URL, String) -> Bool)? = nil) -> PrunePlan {
         let fm = FileManager.default
         var plan = PrunePlan()
-        for (library, libDir) in folders {
-            let entries = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-            let identity = LibraryIdentity.read(in: libDir)
+        for shelf in shelves {
+            let identity = shelf.identity
             var complete: [(url: URL, date: Date)] = []
-            for e in entries {
+            for e in shelf.entries {
+                let name = e.lastPathComponent
                 // held versions aren't provably this library's (see heldVersions)
                 guard (try? e.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
-                      let d = VersionStamp.date(e.lastPathComponent), identity?.holds(e.lastPathComponent) != true else { continue }
+                      let d = VersionStamp.date(name), identity?.holds(name) != true else { continue }
+                // adopted, and no one has said yes to the Keep rule applying to it
+                if let confirmed, shelf.adopted.contains(name), !confirmed(shelf.folder, name) { continue }
                 if fm.fileExists(atPath: e.appendingPathComponent(ArchiveManifest.sidecarName).path) {
                     complete.append((e, d))
                 } else if !transferring(e) {
@@ -618,12 +685,12 @@ public struct JobExecutor: Sendable {
                 }
             }
             guard policy != .keepAll else { continue }
-            let known = KnownGood.version(of: library.displayName, key: identity?.key, formerNames: identity?.formerNames ?? [],
+            let known = KnownGood.version(of: shelf.library.displayName, key: identity?.key, formerNames: identity?.formerNames ?? [],
                                           among: complete.map(\.date), records: checks)
             let prune = retentionPrune(complete.map(\.date) + [upcoming].compactMap { $0 }, policy: policy,
                                        keeping: Set([known].compactMap { $0 }))
             for v in complete where prune.contains(v.date) {
-                plan.versions.append(.init(library: library.displayName, url: v.url, date: v.date))
+                plan.versions.append(.init(library: shelf.library.displayName, url: v.url, date: v.date))
             }
         }
         return plan
@@ -664,6 +731,30 @@ public struct JobExecutor: Sendable {
             let volume = volumes.volume(containing: dir)
             return records.contains { $0.writesInto(dir, key: key, volume: volume) }
         }
+    }
+
+    /// The adopted versions in `job`'s folders (`folderOf`) no one has let the Keep
+    /// rule apply to yet (`confirmed`), and what saying yes deletes at the next run.
+    /// None under a rule that keeps everything: nothing is deleted either way.
+    static func adoptionReviews(_ job: BackupJob, _ folderOf: [String: [String: URL]], checks: [HealthRecord],
+                                transferring: (URL) -> Bool, confirmed: (URL, String) -> Bool, now: Date) -> [AdoptionReview] {
+        guard job.format.isSealed, job.retention != .keepAll else { return [] }
+        var out: [AdoptionReview] = []
+        for t in job.targets {
+            for lib in job.libraries {
+                guard let folder = folderOf[t.id]?[lib.id] else { continue }
+                let s = shelf(lib, folder)
+                let waiting = Set(s.entries.map(\.lastPathComponent)).intersection(s.adopted)
+                    .filter { s.identity?.holds($0) != true && !confirmed(folder, $0) }
+                guard !waiting.isEmpty else { continue }
+                let yes = prunePlan(shelves: [s], policy: job.retention, checks: checks, transferring: transferring, upcoming: now)
+                out.append(AdoptionReview(jobID: job.id, targetID: t.id, libraryID: lib.id, destination: t.displayName,
+                                          library: lib.displayName, versions: waiting.sorted(),
+                                          deletes: yes.versions.filter { waiting.contains($0.url.lastPathComponent) }.count,
+                                          unfinished: yes.husks.filter { waiting.contains($0.lastPathComponent) }.count, foundAt: now))
+            }
+        }
+        return out
     }
 
     static func prunable(_ job: BackupJob, _ folderOf: [String: [String: URL]]) -> [(library: ContentType, folder: URL)] {

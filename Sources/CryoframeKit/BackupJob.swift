@@ -53,6 +53,9 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
     public var encrypted: Bool          // AES-256; passphrase lives in the Keychain, never in the job
     public var retention: RetentionPolicy   // version pruning for sealed archives (mirrors are single-copy)
     public var createdAt: Date
+    /// the person's go-ahead for the Keep rule to apply to versions its folders
+    /// adopted (see AdoptedVersions.swift); nil: none given
+    public var adoptionConsents: [AdoptionConsent]?
 
     /// the primary destination — the one a run must reach. Secondaries can fail to a
     /// partial-success without failing the whole run.
@@ -82,7 +85,7 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, libraries, contentType, target, targets, format, frequency, verification, runPolicy, enabled, encrypted, retention, createdAt
+        case id, name, libraries, contentType, target, targets, format, frequency, verification, runPolicy, enabled, encrypted, retention, createdAt, adoptionConsents
     }
 
     public init(from decoder: Decoder) throws {
@@ -109,6 +112,7 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         encrypted = try c.decodeIfPresent(Bool.self, forKey: .encrypted) ?? false
         retention = try c.decodeIfPresent(RetentionPolicy.self, forKey: .retention) ?? .keepAll
         createdAt = try c.decode(Date.self, forKey: .createdAt)
+        adoptionConsents = try? c.decodeIfPresent([AdoptionConsent].self, forKey: .adoptionConsents)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -126,6 +130,7 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         try c.encode(encrypted, forKey: .encrypted)
         try c.encode(retention, forKey: .retention)
         try c.encode(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(adoptionConsents, forKey: .adoptionConsents)
     }
 
     /// Re-resolve any built-in libraries to their current (possibly overridden)

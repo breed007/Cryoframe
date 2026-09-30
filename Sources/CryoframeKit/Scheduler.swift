@@ -15,6 +15,9 @@ public struct ScheduleState: Codable, Sendable, Equatable {
     /// job id → destination (target) id → when it last got a complete copy of every
     /// library; how long a rotating drive has been away (see RotationRules)
     public var lastCopy: [String: [String: Date]] = [:]
+    /// job id → adopted versions its runs left alone until the person says yes (see
+    /// AdoptionReview)
+    public var adoptionReviews: [String: [AdoptionReview]] = [:]
     /// number of jobs that failed to decode and were skipped on the last load — so the
     /// UI can tell the user "3 jobs couldn't be read" instead of silently showing none.
     public var droppedJobs: Int = 0
@@ -23,7 +26,7 @@ public struct ScheduleState: Codable, Sendable, Equatable {
         self.jobs = jobs; self.lastRun = lastRun
     }
 
-    enum CodingKeys: String, CodingKey { case jobs, lastRun, lastCopy }
+    enum CodingKeys: String, CodingKey { case jobs, lastRun, lastCopy, adoptionReviews }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -35,6 +38,7 @@ public struct ScheduleState: Codable, Sendable, Equatable {
         self.droppedJobs = wrapped.count - self.jobs.count
         self.lastRun = (try? c.decode([String: Date].self, forKey: .lastRun)) ?? [:]
         self.lastCopy = (try? c.decode([String: [String: Date]].self, forKey: .lastCopy)) ?? [:]   // before 1.6: none
+        self.adoptionReviews = (try? c.decode([String: [AdoptionReview]].self, forKey: .adoptionReviews)) ?? [:]
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -42,6 +46,7 @@ public struct ScheduleState: Codable, Sendable, Equatable {
         try c.encode(jobs, forKey: .jobs)
         try c.encode(lastRun, forKey: .lastRun)
         if !lastCopy.isEmpty { try c.encode(lastCopy, forKey: .lastCopy) }
+        if !adoptionReviews.isEmpty { try c.encode(adoptionReviews, forKey: .adoptionReviews) }
     }
 }
 

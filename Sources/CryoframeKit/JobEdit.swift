@@ -25,7 +25,8 @@ public enum JobEdit {
     /// order, rotations, format, schedule and what to keep. From `stored` come the
     /// drives a run recorded (a destination's and a folder's volume, and the other
     /// drives a destination takes turns on) unless the draft changed that field from
-    /// `base`; whether the job is paused; when it was made; whether it is encrypted.
+    /// `base`; whether the job is paused; when it was made; whether it is encrypted;
+    /// the go-ahead given for adopted versions.
     /// The drives a destination takes turns on are the stored ones, plus those the
     /// draft added, less those it took away. What the draft removed stays removed.
     public static func merge(draft: BackupJob, base: BackupJob?, stored: BackupJob?) -> BackupJob? {
@@ -35,6 +36,8 @@ public enum JobEdit {
         out.enabled = stored.enabled
         out.createdAt = stored.createdAt
         out.encrypted = stored.encrypted
+        // said yes to on the dashboard, a rename, or an earlier save (see AdoptedVersions.swift)
+        out.adoptionConsents = stored.adoptionConsents
         out.targets = draft.targets.map { t in
             guard let s = stored.targets.first(where: { $0.id == t.id }),
                   let b = base.targets.first(where: { $0.id == t.id }) else { return t }

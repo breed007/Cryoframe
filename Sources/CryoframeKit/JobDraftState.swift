@@ -409,15 +409,18 @@ public struct JobDraftState: Sendable, Equatable {
     /// JobEdit), all under the store's lock. A new encrypted job's passphrase is
     /// handed to `savePassphrase` (passphrase, job id) first, so no job is ever
     /// saved without its key.
+    /// `consents`: the go-ahead the save summary asked for (see JobEditImpact.consents),
+    /// recorded with the job.
     public func commit(to store: JobStore, now: Date = Date(), calendar: Calendar = .current,
-                       home: String = NSHomeDirectory(), savePassphrase: (String, String) -> Void) -> CommitResult {
+                       home: String = NSHomeDirectory(), consents: [AdoptionConsent] = [],
+                       savePassphrase: (String, String) -> Void) -> CommitResult {
         guard isValid(existing: store.load().jobs, home: home) else { return .invalid }
         if storesNewPassphrase { savePassphrase(passphrase, jobID) }
         let draft = makeJob(now: now, calendar: calendar)
         return store.update { s -> CommitResult in
             guard isValid(existing: s.jobs, home: home) else { return .invalid }
             let stored = s.jobs.first { $0.id == jobID }
-            guard let job = JobEdit.merge(draft: draft, base: base, stored: stored) else { return .deleted }
+            guard let job = JobEdit.merge(draft: draft, base: base, stored: stored)?.adding(consents) else { return .deleted }
             if let i = s.jobs.firstIndex(where: { $0.id == jobID }) { s.jobs[i] = job } else { s.jobs.append(job) }
             return .saved(job)
         }

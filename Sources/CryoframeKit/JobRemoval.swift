@@ -127,6 +127,7 @@ public enum JobRemoval {
             s.jobs.removeAll { $0.id == job.id }
             s.lastRun[job.id] = nil
             s.lastCopy[job.id] = nil
+            s.adoptionReviews[job.id] = nil
         }
     }
 

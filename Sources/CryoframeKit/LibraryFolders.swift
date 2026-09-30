@@ -214,8 +214,13 @@ public enum LibraryFolders {
             .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
             .first?.url
 
-        if folder == nil, let legacy, owner(of: legacy.url, in: destination, jobs: jobs + [job]).map({ $0 == key }) == true {
-            try identity.write(in: legacy.url)                    // taken over in place
+        if folder == nil, let legacy, takesOver(legacy.url, key: key, in: destination, job: job, jobs: jobs) {
+            // taken over in place: every version in it is adopted, recorded in the same
+            // write, so no run of this job prunes one before the person has said yes
+            var taken = identity
+            let found = versionNames(in: legacy.url)
+            taken.adoptedVersions = found.isEmpty ? nil : found.sorted()
+            try taken.write(in: legacy.url)
             folder = legacy.url
         }
         if folder == nil {
@@ -264,6 +269,11 @@ public enum LibraryFolders {
                 updated.keptMirror = LibraryIdentity.KeptMirror(name: image, keptAt: Date())
             }
         }
+        if let current, current.key == key {
+            // adopted versions since deleted (or moved back by hand) aren't recorded
+            let adopted = Set(current.adoptedVersions ?? []).intersection(versionNames(in: folder))
+            updated.adoptedVersions = adopted.isEmpty ? nil : adopted.sorted()
+        }
         if current != updated { try updated.write(in: folder) }
 
         // Its sealed versions in any other folder of its name move in: a 1.5 folder it
@@ -272,17 +282,8 @@ public enum LibraryFolders {
         // Only versions that can be no other library's, and not one being read. (Not
         // from another library of this job: 1.5.6 doesn't run a job with two
         // libraries of one name, so nothing of this one's is there.)
-        let others = listing(destination).filter {
-            $0.url.path != folder.path && $0.identity?.key != key && $0.identity?.jobID != job.id
-                && library.answers(to: $0.url.lastPathComponent)
-        }
-        // Out of another job's folder only when that job is a mirror job writing here,
-        // and was one when it last wrote to it: a sealed job's folder, the job deleted
-        // (its backups stay), writing elsewhere, or made a mirror job since, holds its
-        // own versions, and this job's retention would delete them. Never its own held ones.
-        let mirrorJobs = Set(jobs.filter { !$0.format.isSealed }.map(\.id))
-        for other in others where job.format.isSealed
-            && (other.identity.map { mirrorJobs.contains($0.jobID) && $0.mirror == true } ?? true) {
+        let others = otherFolders(of: library, job: job, besides: folder, in: destination)
+        for other in movingFrom(others, job: job, jobs: jobs) {
             let r = moveVersions(from: other.url, to: folder, key: key, in: destination, jobs: jobs + [job], isOpen: isOpen)
             // emptied (a folder only 1.5.6 wrote, say): gone, so nothing looks for it
             if r.moved > 0, other.identity == nil { rmdir(other.url.path) }
@@ -360,20 +361,111 @@ public enum LibraryFolders {
     /// LibraryIdentity.owns).
     static func moveVersions(from other: URL, to folder: URL, key: String, in destination: URL, jobs: [BackupJob],
                              isOpen: (URL) -> Bool) -> (moved: Int, left: Int, busy: Int) {
-        let fm = FileManager.default
         var moved = 0, left = 0, busy = 0
-        let identity = LibraryIdentity.read(in: other)
-        for e in (try? fm.contentsOfDirectory(at: other, includingPropertiesForKeys: nil)) ?? [] {
-            guard VersionStamp.date(e.lastPathComponent) != nil, identity?.owns(e.lastPathComponent) != true,
-                  let a = RestoreDiscovery.archive(at: e), a.format != .liveMirror else { continue }
-            let sealed = claimants(named: other.lastPathComponent, bundles: [a.bundleName], in: destination, jobs: jobs).filter { !$0.mirror }
-            guard sealed.map(\.key) == [key] else { continue }
+        var going: [URL] = []
+        for e in movable(from: other, key: key, in: destination, jobs: jobs) {
             let to = folder.appendingPathComponent(e.lastPathComponent, isDirectory: true)
-            if fm.fileExists(atPath: to.path) { left += 1; continue }
+            if FileManager.default.fileExists(atPath: to.path) { left += 1; continue }
             if isOpen(e) { busy += 1; continue }
-            if rename(e.path, to.path) == 0 { moved += 1 } else { left += 1 }
+            going.append(e)
+        }
+        guard !going.isEmpty else { return (0, left, busy) }
+        // adopted before it moves: a version is never in this folder without being
+        // recorded as adopted, whatever point a run dies at. One that can't be recorded
+        // doesn't move.
+        guard var identity = LibraryIdentity.read(in: folder), identity.key == key else { return (0, left + going.count, busy) }
+        identity.adoptedVersions = Set(identity.adoptedVersions ?? []).union(going.map(\.lastPathComponent)).sorted()
+        do { try identity.write(in: folder) } catch { return (0, left + going.count, busy) }
+        for e in going {
+            if rename(e.path, folder.appendingPathComponent(e.lastPathComponent, isDirectory: true).path) == 0 { moved += 1 } else { left += 1 }
         }
         return (moved, left, busy)
+    }
+
+    /// The version folders of `other` that are the library `key`'s to move into its
+    /// own folder: a timestamped folder holding a sealed archive, not one `other`'s
+    /// own library made (see LibraryIdentity.owns), whose only possible owner among
+    /// the sealed libraries of the jobs writing to `destination` is `key`'s (by name
+    /// and bundle name).
+    static func movable(from other: URL, key: String, in destination: URL, jobs: [BackupJob]) -> [URL] {
+        let identity = LibraryIdentity.read(in: other)
+        let items = (try? FileManager.default.contentsOfDirectory(at: other, includingPropertiesForKeys: nil)) ?? []
+        return items.sorted { $0.lastPathComponent < $1.lastPathComponent }.filter { e in
+            guard VersionStamp.date(e.lastPathComponent) != nil, identity?.owns(e.lastPathComponent) != true,
+                  let a = RestoreDiscovery.archive(at: e), a.format != .liveMirror else { return false }
+            let sealed = claimants(named: other.lastPathComponent, bundles: [a.bundleName], in: destination, jobs: jobs).filter { !$0.mirror }
+            return sealed.map(\.key) == [key]
+        }
+    }
+
+    /// the folders at `destination` of `library`'s name (or one it had) that aren't
+    /// its own folder `folder` nor any folder of `job`'s
+    static func otherFolders(of library: ContentType, job: BackupJob, besides folder: URL?, in destination: URL) -> [Entry] {
+        let key = LibraryIdentity.key(job: job, library: library)
+        return listing(destination).filter {
+            $0.url.path != folder?.path && $0.identity?.key != key && $0.identity?.jobID != job.id
+                && library.answers(to: $0.url.lastPathComponent)
+        }
+    }
+
+    /// Of `others`, those a sealed job's versions move out of. Out of another job's
+    /// folder only when that job is a mirror job writing here, and was one when it
+    /// last wrote to it: a sealed job's folder, the job deleted (its backups stay),
+    /// writing elsewhere, or made a mirror job since, holds its own versions, and this
+    /// job's retention would delete them. Never its own held ones.
+    static func movingFrom(_ others: [Entry], job: BackupJob, jobs: [BackupJob]) -> [Entry] {
+        guard job.format.isSealed else { return [] }
+        let mirrorJobs = Set(jobs.filter { !$0.format.isSealed }.map(\.id))
+        return others.filter { other in other.identity.map { mirrorJobs.contains($0.jobID) && $0.mirror == true } ?? true }
+    }
+
+    /// whether the next run of `job` takes `legacy`, a folder 1.5 wrote, over for the
+    /// library `key`: the one library it can belong to (see `owner`)
+    static func takesOver(_ legacy: URL, key: String, in destination: URL, job: BackupJob, jobs: [BackupJob]) -> Bool {
+        owner(of: legacy, in: destination, jobs: jobs + [job]) == key
+    }
+
+    // MARK: what the next run adopts
+
+    /// What `prepare` does with `library`'s folder at `destination` at `job`'s next
+    /// run, changing nothing. Decided by the same rules `prepare` follows, so what a
+    /// person is shown before a save, a pairing or a rename is what that run does.
+    public struct Next: Sendable, Equatable {
+        /// the folder the run writes to: the library's own, or the 1.5 folder it takes
+        /// over; nil when it makes a new one
+        public var folder: URL?
+        /// whether `folder` is a 1.5 folder the run takes over (every version in it is
+        /// adopted)
+        public var takesOver: Bool
+        /// version folders in other folders that the run moves into its own
+        public var movesIn: [URL]
+        /// the names of the versions the run adopts: every one in a folder it takes
+        /// over, and those it moves in
+        public var adopts: [String]
+    }
+
+    public static func next(job: BackupJob, library: ContentType, in destination: URL, jobs: [BackupJob]) -> Next {
+        let key = LibraryIdentity.key(job: job, library: library)
+        let entries = listing(destination)
+        var folder = entries.filter { $0.identity?.key == key }
+            .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
+            .first?.url
+        var takes = false
+        if folder == nil, let legacy = entries.first(where: { $0.identity == nil && library.answers(to: $0.url.lastPathComponent) }),
+           takesOver(legacy.url, key: key, in: destination, job: job, jobs: jobs) {
+            folder = legacy.url
+            takes = true
+        }
+        let there = folder.map(versionNames(in:)) ?? []
+        var moves: [URL] = []
+        for other in movingFrom(otherFolders(of: library, job: job, besides: folder, in: destination), job: job, jobs: jobs) {
+            for e in movable(from: other.url, key: key, in: destination, jobs: jobs + [job])
+                where !there.contains(e.lastPathComponent) && !moves.contains(where: { $0.lastPathComponent == e.lastPathComponent }) {
+                moves.append(e)
+            }
+        }
+        let adopts = (takes ? there.sorted() : []) + moves.map(\.lastPathComponent)
+        return Next(folder: folder, takesOver: takes, movesIn: moves, adopts: adopts)
     }
 
     // MARK: helpers

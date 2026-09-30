@@ -346,16 +346,28 @@ public enum DestinationRules {
     /// What a run will make in `folder` for `job`: one folder per library, found again
     /// by its identity if it already exists.
     public static func preview(_ folder: URL, job: BackupJob) -> [String] {
+        previewLines(folder, job: job).map(\.text)
+    }
+
+    /// The same, saying of each whether it makes a folder. A folder an earlier
+    /// version of Cryoframe made, that the first backup takes over (see
+    /// LibraryFolders.next), is kept using, not made. `jobs`: every saved job, to tell
+    /// whose such a folder is.
+    public static func previewLines(_ folder: URL, job: BackupJob, jobs: [BackupJob] = []) -> [(creates: Bool, text: String)] {
         var planned: [String] = []          // names the libraries before this one will take
         return job.libraries.map { lib in
             if let existing = LibraryFolders.folder(job: job, library: lib, in: folder) {
-                return "\(lib.displayName): keeps using \(existing.path)"
+                return (false, "\(lib.displayName): keeps using \(existing.path)")
+            }
+            let next = LibraryFolders.next(job: job, library: lib, in: folder, jobs: jobs.filter { $0.id != job.id })
+            if next.takesOver, let taken = next.folder {
+                return (false, "\(lib.displayName): keeps using \(taken.path), made by an earlier version of Cryoframe")
             }
             var name = LibraryFolderName.choose(job: job, library: lib, in: folder)
             if planned.contains(where: { LibraryNames.same($0, name) }) { name = LibraryFolderName.make(job: job, library: lib) }
             planned.append(name)
             let what = job.format.isSealed ? "a dated folder for each backup inside it" : "a disk image holding the copy"
-            return "\(lib.displayName): creates \(folder.appendingPathComponent(name).path), with \(what)"
+            return (true, "\(lib.displayName): creates \(folder.appendingPathComponent(name).path), with \(what)")
         }
     }
 

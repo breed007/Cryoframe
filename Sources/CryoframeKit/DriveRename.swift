@@ -373,6 +373,9 @@ public enum DriveRename {
             new.rotation = Rotation(group: group, maxAwayDays: t.rotation?.maxAwayDays ?? Rotation.defaultMaxAwayDays, addedAt: now)
             s.jobs[j].targets[i] = t
             s.jobs[j].targets.insert(new, at: i + 1)
+            // what the look showed the next backup doing to the backups there, said
+            // yes to (see AdoptedVersions.swift)
+            s.jobs[j] = s.jobs[j].adding(look.consents(targetID: new.id, at: now))
             saved = Outcome(drive: after, job: s.jobs[j], newTarget: new)
         }
         guard let saved else { throw Refusal.renamedJobNotUpdated(newName) }

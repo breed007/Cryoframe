@@ -38,6 +38,11 @@ public struct DrivePairing: Sendable, Equatable {
         public var unfinished: Int = 0
         /// what the next run does, in words
         public var effects: [String]
+        public var libraryID: String = ""
+        /// the versions the next run takes over or moves in (or adopted earlier and
+        /// not yet let follow the Keep rule), counted in `deletes`: saying yes lets
+        /// the Keep rule apply to them (see AdoptedVersions.swift)
+        public var adopted: [String] = []
 
         public struct Copy: Sendable, Equatable {
             public var date: Date?
@@ -89,6 +94,13 @@ public struct DrivePairing: Sendable, Equatable {
     /// unfinished one deleted, or an up-to-date copy replaced. What DriveRename needs confirmed.
     public var changesBackups: Bool { libraries.contains { $0.deletes > 0 || $0.replacesCopy || $0.unfinished > 0 } }
 
+    /// the go-ahead saying yes gives, for the destination `targetID` (see AdoptedVersions.swift)
+    public func consents(targetID: String, at date: Date = Date()) -> [AdoptionConsent] {
+        libraries.filter { !$0.adopted.isEmpty }.map {
+            AdoptionConsent(targetID: targetID, libraryID: $0.libraryID, versions: $0.adopted, deletes: $0.deletes + $0.unfinished, confirmedAt: date)
+        }
+    }
+
     /// Whether `other`, looked at earlier, says the same of the same drive: what was
     /// shown is still what happens.
     public func saysTheSame(as other: DrivePairing) -> Bool {
@@ -126,43 +138,60 @@ public struct DrivePairing: Sendable, Equatable {
             return DrivePairing(drive: drive, libraries: [], refusal: why)
         }
 
-        let all = jobs.filter { $0.id != job.id } + [job]
+        let others = jobs.filter { $0.id != job.id }
         let libraries = job.libraries.map { lib -> Library in
-            let key = LibraryIdentity.key(job: job, library: lib)
-            let mine = entries.first { $0.identity?.key == key }
+            // what the next run does with the library's folder here, by the rules it
+            // follows (see LibraryFolders.next): its own folder, a 1.5 folder it takes
+            // over, and versions it moves in from another folder of its name
+            let (shelf, next) = JobExecutor.nextShelf(job: job, library: lib, in: dir, jobs: others)
             let legacy = entries.first { $0.identity == nil && lib.answers(to: $0.url.lastPathComponent) }
-            guard let folder = mine?.url ?? legacy?.url else {
+            guard let folder = next.folder ?? legacy?.url ?? (next.movesIn.isEmpty ? nil : shelf.folder) else {
                 return Library(name: lib.displayName, copy: nil, versions: [], versionBytes: 0, deletes: 0,
-                               effects: ["The next backup makes its folder there."])
+                               effects: ["The next backup makes its folder there."], libraryID: lib.id)
             }
-            let adopted = mine != nil || LibraryFolders.owner(of: folder, in: dir, jobs: all) == key
+            let adopted = next.folder != nil
             let top = RestoreDiscovery.archive(at: folder).flatMap { $0.format == .liveMirror && $0.version == nil ? $0 : nil }
             let copy = top.map { _ in
                 Library.Copy(date: modified(folder.appendingPathComponent(ArchiveManifest.sidecarName)),
                              bytes: LibraryFolders.mirrorImage(in: folder).map { JobExecutor.directorySize(folder.appendingPathComponent($0)) } ?? 0)
             }
-            let found = RestoreDiscovery.scan(folder, maxDepth: 1).filter { $0.version != nil }
+            var found = RestoreDiscovery.scan(folder, maxDepth: 1).filter { $0.version != nil }
+            if job.format.isSealed { found += next.movesIn.compactMap { RestoreDiscovery.archive(at: $0) } }
             let versions = found.compactMap(\.version).sorted(by: >)
             let versionBytes = found.reduce(UInt64(0)) { $0 + $1.bytes }
             var effects: [String] = []
             var deletes = 0
             var replacesCopy = false
             var unfinished = 0
-            if !adopted {
+            var asked: [String] = []
+            if !adopted && legacy != nil {
                 effects.append("The folder there isn't only this job's to take, so it stays as it is and the next backup makes a new one beside it.")
-            } else if job.format.isSealed {
-                if copy != nil { effects.append("Its up-to-date copy there stays as it is.") }
-                let plan = JobExecutor.prunePlan(folders: [(lib, folder)], policy: job.retention, checks: checks, upcoming: now)
-                deletes = plan.versions.count
-                if !versions.isEmpty || deletes > 0 {
-                    effects.append("\(versions.count) dated version\(versions.count == 1 ? "" : "s") now follow this job's Keep rule"
-                                   + (deletes > 0 ? "; \(deletes) \(deletes == 1 ? "is" : "are") deleted at the next backup." : "; none are deleted."))
+            }
+            if job.format.isSealed {
+                if adopted, copy != nil { effects.append("Its up-to-date copy there stays as it is.") }
+                let n = next.movesIn.count
+                if n > 0 {
+                    let from = Set(next.movesIn.map { $0.deletingLastPathComponent().lastPathComponent }).sorted().map { "“\($0)”" }.joined(separator: ", ")
+                    effects.append("\(n) dated version\(n == 1 ? "" : "s") of it in \(from) move\(n == 1 ? "s" : "") into its own folder.")
                 }
-                unfinished = plan.husks.count
-                if unfinished > 0 {
-                    effects.append("\(unfinished) dated folder\(unfinished == 1 ? "" : "s") there never finished (\(unfinished == 1 ? "it has" : "they have") no record of being complete, so Restore can't open \(unfinished == 1 ? "it" : "them")); \(unfinished == 1 ? "it is" : "they are") deleted at the next backup.")
+                // saying yes lets the Keep rule apply to what the run adopts (and to what
+                // was adopted before and never let)
+                let plan = JobExecutor.prunePlan(shelves: [shelf], policy: job.retention, checks: checks, upcoming: now)
+                asked = Set(shelf.entries.map(\.lastPathComponent)).intersection(shelf.adopted)
+                    .filter { shelf.identity?.holds($0) != true && !job.confirmsAdoption(of: $0, target: target.id, library: lib.id) }.sorted()
+                if adopted || n > 0 {
+                    deletes = plan.versions.count
+                    let counted = adopted ? versions.count : n
+                    if counted > 0 || deletes > 0 {
+                        effects.append("\(counted) dated version\(counted == 1 ? "" : "s") now follow this job's Keep rule"
+                                       + (deletes > 0 ? "; \(deletes) \(deletes == 1 ? "is" : "are") deleted at the next backup." : "; none are deleted."))
+                    }
+                    unfinished = plan.husks.count
+                    if unfinished > 0 {
+                        effects.append("\(unfinished) dated folder\(unfinished == 1 ? "" : "s") there never finished (\(unfinished == 1 ? "it has" : "they have") no record of being complete, so Restore can't open \(unfinished == 1 ? "it" : "them")); \(unfinished == 1 ? "it is" : "they are") deleted at the next backup.")
+                    }
                 }
-            } else {
+            } else if adopted {
                 if let c = copy {
                     replacesCopy = true
                     effects.append("The next backup replaces the copy from \(c.date.map(Self.day) ?? "an unknown date") (\(Self.size(c.bytes))) with an up-to-date one.")
@@ -174,7 +203,8 @@ public struct DrivePairing: Sendable, Equatable {
                 }
             }
             return Library(name: lib.displayName, copy: copy, versions: versions, versionBytes: versionBytes,
-                           deletes: deletes, replacesCopy: replacesCopy, unfinished: unfinished, effects: effects)
+                           deletes: deletes, replacesCopy: replacesCopy, unfinished: unfinished, effects: effects,
+                           libraryID: lib.id, adopted: asked)
         }
         return DrivePairing(drive: drive, libraries: libraries, refusal: nil)
     }

@@ -86,7 +86,7 @@ public final class JobStore: @unchecked Sendable {
         update { s in s.jobs.removeAll { $0.id == job.id }; s.jobs.append(job) }
     }
     public func remove(id: String) {
-        update { s in s.jobs.removeAll { $0.id == id }; s.lastRun[id] = nil; s.lastCopy[id] = nil }
+        update { s in s.jobs.removeAll { $0.id == id }; s.lastRun[id] = nil; s.lastCopy[id] = nil; s.adoptionReviews[id] = nil }
     }
     public func recordRun(id: String, at date: Date) {
         update { s in s.lastRun[id] = date }
