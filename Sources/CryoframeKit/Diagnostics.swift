@@ -287,6 +287,10 @@ public enum DiagnosticsReport {
     }
 
     static func kindName(_ t: Target) -> String {
+        t.rotation == nil ? baseKindName(t) : baseKindName(t) + ", rotates"
+    }
+
+    static func baseKindName(_ t: Target) -> String {
         switch t.kind {
         case .local: return t.destinationDir.path.hasPrefix("/Volumes/") ? "external drive" : "folder on this Mac"
         case .networkShare: return "network share"

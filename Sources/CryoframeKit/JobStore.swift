@@ -46,6 +46,13 @@ public final class JobStore: @unchecked Sendable {
     public func recordRun(id: String, at date: Date) {
         var s = load(); s.lastRun[id] = date; save(s)
     }
+    /// record that each of `targetIDs` got a complete copy of `jobID`'s libraries
+    public func recordCopies(jobID: String, targetIDs: [String], at date: Date) {
+        guard !targetIDs.isEmpty else { return }
+        var s = load()
+        for t in targetIDs { s.lastCopy[jobID, default: [:]][t] = date }
+        save(s)
+    }
     /// record the volume a destination set up before 1.6 is on, if none is recorded yet
     public func recordVolume(jobID: String, targetID: String, _ volume: VolumeIdentity) {
         var s = load()

@@ -33,6 +33,7 @@ final class AppModel: ObservableObject {
     @Published var lastRecords: [String: RunRecord] = [:]   // latest run per job (persisted)
     @Published var lastGood: [String: Date] = [:]           // when each job last finished a good run
     @Published var unrecordedRuns: [String: Date] = [:]     // runs the job store saw that the history no longer holds
+    @Published var lastCopies: [String: [String: Date]] = [:]   // job → destination → last complete copy (rotating drives)
     @Published var clock = Date()                           // moves every few minutes, so "overdue" arrives on its own
     @Published var scheduleOn = true                        // the scheduled agent is switched on
     @Published var lastHealth: [String: HealthRecord] = [:] // latest archive health check per job
@@ -113,7 +114,9 @@ final class AppModel: ObservableObject {
         for r in history.all() where latest[r.jobID] == nil { latest[r.jobID] = r }   // newest-first → first wins
         lastRecords = latest
         lastGood = history.lastGood()
-        let all = history.all(), ran = store.load().lastRun
+        let state = store.load()
+        let all = history.all(), ran = state.lastRun
+        lastCopies = state.lastCopy
         var unrecorded: [String: Date] = [:]
         for job in jobs {
             unrecorded[job.id] = ProtectionVerdict.unrecordedRun(lastRun: ran[job.id], records: all.filter { $0.jobID == job.id })

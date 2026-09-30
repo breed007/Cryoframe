@@ -144,6 +144,7 @@ compared
 complete
 completed
 computer
+connect
 connected
 connection
 connections
@@ -499,6 +500,7 @@ nobody
 nobrowse
 node
 nomount
+none
 not
 note
 nothing
@@ -650,6 +652,8 @@ rlptgo
 room
 root
 rootless
+rotates
+rotation
 rounded
 row
 rsync
@@ -781,6 +785,7 @@ triangle
 tried
 trusted
 try
+turn
 turned
 txt
 type

@@ -71,7 +71,7 @@ enum RehearsalSchedule {
                 var checks: [ArchiveCheck] = []
                 // each destination where it is now; one not connected has nothing to rehearse
                 let placed = DestinationResolver().resolve(resolved)
-                for target in placed.job.targets where target.volume == nil || placed.presence[target.id]?.isPresent == true {
+                for target in placed.job.targets where (target.volume == nil && target.rotation == nil) || placed.presence[target.id]?.isPresent == true {
                     let report = RecoveryRehearsal().rehearse(
                         destination: target.destinationDir,
                         expecting: expecting,

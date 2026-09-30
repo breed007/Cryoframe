@@ -158,17 +158,30 @@ public struct JobExecutor: Sendable {
             return probe.availability(of: t)
         }
 
-        // the primary destination must be reachable — a run that can't write its first
-        // copy is a real failure. Secondaries that are down degrade to partial success.
-        let primaryAvail = availability(job.target)
-        guard primaryAvail.ok else {
-            throw TargetError.unavailable(primaryAvail.reason ?? "\(job.target.displayName) is unavailable")
+        // The primary place must be reachable: a run that can't write its first copy
+        // is a real failure. Secondaries that are down degrade to partial success. A
+        // rotation of drives is one place (see Rotation): the run writes to whichever
+        // of them is connected, and one that's away is taking its turn off-site, not
+        // failing, so it isn't reported at all. Only when none of them is connected is
+        // the rotation down.
+        var placed: [(target: Target, available: Bool, reason: String?)] = []
+        for (i, place) in job.places.enumerated() {
+            let checked = place.map { ($0, availability($0)) }
+            if place[0].rotation == nil {
+                let (t, a) = checked[0]
+                if i == 0, !a.ok { throw TargetError.unavailable(a.reason ?? "\(t.displayName) is unavailable") }
+                placed.append((t, a.ok, a.reason)); continue
+            }
+            guard checked.contains(where: { $0.1.ok }) else {
+                let why = "none of \(RotationRules.name(of: place)) is connected"
+                if i == 0 { throw TargetError.unavailable(why) }
+                placed.append((place[0], false, why)); continue
+            }
+            for (t, a) in checked where a.ok || a.reachable {        // connected but not writable: a fault
+                placed.append((t, a.ok, a.reason))
+            }
         }
-        let dests: [(target: Target, available: Bool, reason: String?)] = job.targets.enumerated().map { i, t in
-            if i == 0 { return (t, true, nil) }
-            let a = availability(t)
-            return (t, a.ok, a.reason)
-        }
+        let dests = placed
         // A destination set up before 1.6 has no volume on record. The first run that
         // writes to it records it, if the folder is known to be this job's (it already
         // holds one of its libraries' folders) or the job has never run: a drive of the
@@ -446,6 +459,14 @@ public struct JobExecutor: Sendable {
         // destination this run reached; a note that can't be written is logged, never
         // a failure (see RecoveryNote)
         for d in dests where d.available { RecoveryNote.write(in: d.target.destinationDir) }
+        // each destination that got every library, for its "last copy" (a rotating
+        // drive's age, see RotationRules)
+        let copied = dests.filter { d in
+            d.available && job.libraries.allSatisfy { lib in
+                results.contains { if case .completed(lib.displayName, d.target.displayName, _, _, let v) = $0 { return v != false }; return false }
+            }
+        }.map(\.target.id)
+        jobStore?.recordCopies(jobID: job.id, targetIDs: copied, at: now)
         let reached = Set(results.compactMap { r -> String? in if case .completed(_, let dest, _, _, _) = r { return dest }; return nil })
         for d in dests where knownPlaces.contains(d.target.id) && reached.contains(d.target.displayName) {
             if let identity = DestinationResolver(volumes: self.volumes).identity(for: d.target.destinationDir) {

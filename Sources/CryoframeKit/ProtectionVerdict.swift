@@ -35,10 +35,13 @@ public struct ProtectionVerdict: Sendable, Equatable {
     ///     its own.
     ///   - unrecordedRuns: runs the job store saw finish that the history no longer
     ///     holds (see `unrecordedRun`), by job id.
+    ///   - lastCopies: job id → destination id → when it last got a complete copy
+    ///     (ScheduleState.lastCopy), for rotating drives
     public static func compute(jobs: [BackupJob], lastRecords: [String: RunRecord],
                                lastHealth: [String: HealthRecord], runningCount: Int,
                                lastGood: [String: Date] = [:], now: Date = Date(),
-                               scheduleOn: Bool = true, unrecordedRuns: [String: Date] = [:]) -> ProtectionVerdict {
+                               scheduleOn: Bool = true, unrecordedRuns: [String: Date] = [:],
+                               lastCopies: [String: [String: Date]] = [:]) -> ProtectionVerdict {
         guard !jobs.isEmpty else {
             return .init(level: .idle, title: "No backup jobs yet",
                          subtitle: "Create a job to start protecting a library.",
@@ -53,7 +56,8 @@ public struct ProtectionVerdict: Sendable, Equatable {
         let standings = jobs.map { job in
             (job: job, standing: standing(of: job, latest: lastRecords[job.id],
                                           lastGood: lastGood[job.id] ?? goodDate(lastRecords[job.id]),
-                                          health: lastHealth[job.id], now: now, unrecordedRun: unrecordedRuns[job.id]))
+                                          health: lastHealth[job.id], now: now, unrecordedRun: unrecordedRuns[job.id],
+                                          awayTooLong: RotationRules.awayTooLong(job, lastCopies: lastCopies[job.id] ?? [:], now: now)))
         }
         let healthy = standings.filter { $0.standing == .healthy }.count
         let neverRan = standings.filter { $0.standing == .neverRan }
@@ -135,6 +139,9 @@ public struct ProtectionVerdict: Sendable, Equatable {
         case notBackedUpLately(lastGood: Date)
         /// has tried, and never finished a good run (put off, say); not overdue yet
         case noGoodRunYet(note: String?)
+        /// a drive in a rotation hasn't had a copy for longer than the rotation allows:
+        /// its name, since when, and its last copy (nil: none since it joined)
+        case driveAway(name: String, since: Date, lastCopy: Date?)
         /// ran (the job store says so), but the history no longer says how: 1.5
         /// trimmed it without keeping the last good run. Critical only if the job
         /// hasn't run at all for twice its interval and a week.
@@ -147,7 +154,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
             case .failed: return .critical
             case .overdue(_, _, let critical, _): return critical ? .critical : .attention
             case .noRecordOfGoodRun(_, let critical): return critical ? .critical : .attention
-            case .paused, .partial, .checkFailed, .stopped, .notBackedUpLately, .noGoodRunYet: return .attention
+            case .paused, .partial, .checkFailed, .stopped, .notBackedUpLately, .noGoodRunYet, .driveAway: return .attention
             }
         }
 
@@ -157,6 +164,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
             case .overdue: return 0
             case .noRecordOfGoodRun: return 1
             case .partial: return 1
+            case .driveAway: return 1
             case .checkFailed: return 2
             case .stopped: return 3
             case .noGoodRunYet: return 4
@@ -179,6 +187,10 @@ public struct ProtectionVerdict: Sendable, Equatable {
                 return note.map { "\(base) (\($0))" } ?? base
             case .paused: return "is paused, so its schedule doesn't run it"
             case .partial: return "finished as a partial backup"
+            case .driveAway(let name, let since, let last):
+                let age = ProtectionVerdict.age(from: since, to: now)
+                return last == nil ? "hasn't had a copy on \(name) since it joined the rotation \(age) ago; connect it for its turn"
+                                   : "hasn't had a copy on \(name) in \(age); connect it for its turn"
             case .checkFailed: return "failed an archive check"
             case .stopped: return "was stopped before it finished"
             case .notBackedUpLately(let lastGood):
@@ -209,8 +221,13 @@ public struct ProtectionVerdict: Sendable, Equatable {
     /// holds. With no good run on record, that run is judged unknown rather than
     /// absent: a job upgraded from 1.5, whose good runs were trimmed out of the
     /// history, read as never backed up, critical, with a high-priority alert.
+    ///
+    /// `awayTooLong`: the job's rotating drives gone longer than their rotation allows
+    /// (RotationRules.awayTooLong). A drive that's away isn't a fault, and the runs
+    /// that skip it are good ones; one away too long is worth a look.
     public static func standing(of job: BackupJob, latest: RunRecord?, lastGood: Date?,
-                                health: HealthRecord?, now: Date, unrecordedRun: Date? = nil) -> Standing {
+                                health: HealthRecord?, now: Date, unrecordedRun: Date? = nil,
+                                awayTooLong: [RotationRules.AwayTooLong] = []) -> Standing {
         if latest?.outcome == .failed { return .failed }
         if !job.enabled { return .paused }
         if lastGood == nil, let ran = unrecordedRun {
@@ -227,6 +244,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
             }
         }
         if latest?.outcome == .partial { return .partial }
+        if let away = awayTooLong.first { return .driveAway(name: away.name, since: away.since, lastCopy: away.lastCopy) }
         if let health, !health.passed { return .checkFailed }
         if latest?.outcome == .cancelled { return .stopped }
         guard latest != nil else { return .neverRan }

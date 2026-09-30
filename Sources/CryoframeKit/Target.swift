@@ -55,6 +55,9 @@ public struct Target: Sendable, Identifiable, Equatable, Codable {
     /// another drive of the same name isn't taken for it (see DestinationResolver);
     /// nil for a destination set up before 1.6 until a run records it
     public var volume: VolumeIdentity? = nil
+    /// its place in a rotation of drives that take turns (see Rotation); nil if it
+    /// doesn't rotate
+    public var rotation: Rotation? = nil
 
     public init(id: String, displayName: String, kind: TargetKind, destinationDir: URL,
                 constraints: TargetConstraints, networkMount: NetworkMountSpec? = nil,
@@ -70,7 +73,7 @@ public extension Target {
     func at(_ dir: URL) -> Target {
         var t = Target(id: id, displayName: displayName, kind: kind, destinationDir: dir, constraints: constraints,
                        networkMount: networkMount, cloudProvider: cloudProvider)
-        t.volume = volume
+        t.volume = volume; t.rotation = rotation
         return t
     }
 

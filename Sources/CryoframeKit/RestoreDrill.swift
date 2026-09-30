@@ -34,7 +34,7 @@ public struct RestoreDriller: Sendable {
         // drive of its name) has nothing here to drill
         let (job, presence) = DestinationResolver(volumes: self.volumes).resolve(saved)
         for t in job.targets {
-            if let p = presence[t.id], !p.isPresent, t.volume != nil { continue }
+            if let p = presence[t.id], !p.isPresent, t.volume != nil || t.rotation != nil { continue }   // away: nothing to drill
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             for library in job.libraries {
                 var archives = LibraryFolders.archives(job: job, library: library, in: t.destinationDir)   // newest first
