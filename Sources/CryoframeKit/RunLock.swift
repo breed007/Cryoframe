@@ -230,6 +230,11 @@ public final class RunLocks: @unchecked Sendable {
         return nil
     }
 
+    /// Whether anything holds the job now, in any process: a run, a transfer being
+    /// finished, a check, a tidy. One whose lock can't be read counts as held. For
+    /// what must not happen while the job is in use (deleting it, renaming its drive).
+    public func isBusy(_ jobID: String) -> Bool { look(jobID) != .free }
+
     /// the jobs a run (not a chore) holds right now, in any process.
     public func runningJobIDs(among jobIDs: [String]) -> Set<String> {
         Set(holders(of: jobIDs).filter { $0.value.isRun }.keys)

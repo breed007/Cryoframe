@@ -508,6 +508,11 @@ final class AppModel: ObservableObject {
         job.libraries.compactMap(\.owningProcess).filter(detector.isRunning).map(\.displayName)
     }
     func isRunning(_ id: String) -> Bool { runningJobIDs.contains(id) || externalRuns[id] != nil }
+    /// Whether anything is using the job, here or in the scheduled agent: a run, one
+    /// waiting to start, a transfer being finished, a check. Deleting it waits.
+    func isBusy(_ id: String) -> Bool {
+        isRunning(id) || isQueued(id) || verifyingJobIDs.contains(id) || runLocks.isBusy(id)
+    }
     func isQueued(_ id: String) -> Bool { queue.contains(id) }
     /// every running job, whether this app or the scheduled agent is running it.
     var allRunningJobIDs: Set<String> { runningJobIDs.union(externalRuns.keys) }
@@ -605,8 +610,10 @@ final class AppModel: ObservableObject {
     }
 
     func refreshOtherRuns() {
+        // this app's own transfer finishing shows as well: it is using the job as much
+        // as the agent's would, and Stop reaches it the same way
         let found = runLocks.holders(of: jobs.map(\.id))
-            .filter { !$0.value.isThisProcess && !runningJobIDs.contains($0.key) }
+            .filter { (!$0.value.isThisProcess || $0.value.trigger == .resume) && !runningJobIDs.contains($0.key) }
         guard found != externalRuns else { return }
         let ended = Set(externalRuns.keys).subtracting(found.keys)
         externalRuns = found
