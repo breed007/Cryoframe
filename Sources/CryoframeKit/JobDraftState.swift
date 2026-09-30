@@ -185,9 +185,25 @@ public struct JobDraftState: Sendable, Equatable {
     /// libraries in THIS job with one name: allowed, with a note (see LibraryNames)
     public var libraryNameClashes: [String] { LibraryNames.clashMessages(selectedLibraries) }
 
-    public func isValid(existing: [BackupJob]) -> Bool {
+    /// Each chosen library against each chosen destination, by path alone: a
+    /// destination inside a library backs up its own backups; a library inside a
+    /// destination is copied into itself. Checked on every save, so a library chosen
+    /// after the destinations can't slip one through, and a destination whose drive
+    /// is away doesn't stop the save (see DestinationRules.pathIssues).
+    public func pathIssues(home: String = NSHomeDirectory()) -> [String] {
+        var out: [String] = []
+        let roots = selectedLibraries.flatMap { $0.paths.map { $0.liveURL(home: home) } }
+        for t in dedupedTargets {
+            for issue in DestinationRules.pathIssues(t.destinationDir, sources: roots) where !out.contains(issue.message) {
+                out.append(issue.message)
+            }
+        }
+        return out
+    }
+
+    public func isValid(existing: [BackupJob], home: String = NSHomeDirectory()) -> Bool {
         !selectedLibraries.isEmpty && !dedupedTargets.isEmpty && encryptionValid
-            && destinationConflicts(existing: existing).isEmpty
+            && destinationConflicts(existing: existing).isEmpty && pathIssues(home: home).isEmpty
     }
 
     public var defaultName: String {
@@ -251,6 +267,33 @@ public struct JobDraftState: Sendable, Equatable {
         if !selectedTargetIDs.contains(t.id) { selectedTargetIDs.append(t.id) }
     }
 
+    /// Add `target`, a place just chosen, as a destination, if it passes every rule
+    /// for one (see DestinationRules.check) against the chosen libraries. What's wrong
+    /// or worth knowing about it, either way; nothing is added when anything is refused.
+    @discardableResult
+    public mutating func addDestination(_ target: Target, volumes: VolumeTable = SystemVolumeTable(),
+                                        home: String = NSHomeDirectory(),
+                                        systemRoots: [String] = DestinationRules.systemRoots) -> [PlaceIssue] {
+        let roots = selectedLibraries.flatMap { $0.paths.map { $0.liveURL(home: home) } }
+        let issues = DestinationRules.check(target.destinationDir, sources: roots, volumes: volumes, home: home,
+                                            systemRoots: systemRoots)
+        if !issues.contains(where: { $0.severity == .refusal }) { addTarget(target) }
+        return issues
+    }
+
+    /// Add `library`, a folder just chosen at `folder`, to back up, if it passes every
+    /// rule for one (see SourceRules.check) against the chosen destinations. What's
+    /// wrong or worth knowing about it, either way; nothing is added when anything is
+    /// refused.
+    @discardableResult
+    public mutating func addSource(_ library: ContentType, at folder: URL, home: String = NSHomeDirectory(),
+                                   systemRoots: [String] = SourceRules.systemRoots) -> [PlaceIssue] {
+        let issues = SourceRules.check(folder, destinations: dedupedTargets.map(\.destinationDir), home: home,
+                                       systemRoots: systemRoots)
+        if !issues.contains(where: { $0.severity == .refusal }) { addLibrary(library) }
+        return issues
+    }
+
     /// Take one destination off the list on offer (and out of the selection). One of
     /// the edited job's own stays: taking it off the list would take it out of the job
     /// without saying so. Only this entry goes: the list used to be read back whole
@@ -278,12 +321,12 @@ public struct JobDraftState: Sendable, Equatable {
     /// handed to `savePassphrase` (passphrase, job id) first, so no job is ever
     /// saved without its key.
     public func commit(to store: JobStore, now: Date = Date(), calendar: Calendar = .current,
-                       savePassphrase: (String, String) -> Void) -> CommitResult {
-        guard isValid(existing: store.load().jobs) else { return .invalid }
+                       home: String = NSHomeDirectory(), savePassphrase: (String, String) -> Void) -> CommitResult {
+        guard isValid(existing: store.load().jobs, home: home) else { return .invalid }
         if storesNewPassphrase { savePassphrase(passphrase, jobID) }
         let draft = makeJob(now: now, calendar: calendar)
         return store.update { s -> CommitResult in
-            guard isValid(existing: s.jobs) else { return .invalid }
+            guard isValid(existing: s.jobs, home: home) else { return .invalid }
             let stored = s.jobs.first { $0.id == jobID }
             guard let job = JobEdit.merge(draft: draft, base: base, stored: stored) else { return .deleted }
             if let i = s.jobs.firstIndex(where: { $0.id == jobID }) { s.jobs[i] = job } else { s.jobs.append(job) }

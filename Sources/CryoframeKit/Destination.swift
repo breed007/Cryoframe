@@ -302,15 +302,7 @@ public enum DestinationRules {
         guard isDir.boolValue, !isPackage(folder) else {
             return [PlaceIssue(.refusal, "\(folder.lastPathComponent) is a file, not a folder. Choose the folder the backups should go in.")]
         }
-        for s in sources {
-            if contains(s, folder) {
-                out.append(PlaceIssue(.refusal, samePath(s, folder)
-                    ? "\(folder.lastPathComponent) is the folder being backed up. Backups have to go somewhere else."
-                    : "\(folder.lastPathComponent) is inside \(s.lastPathComponent), which is being backed up: each backup would copy the ones before it."))
-            } else if contains(folder, s) {
-                out.append(PlaceIssue(.refusal, "\(s.lastPathComponent), which is being backed up, is inside \(folder.lastPathComponent): choose a folder outside it."))
-            }
-        }
+        out += pathIssues(folder, sources: sources)
         if let why = systemLocation(folder, home: home, roots: systemRoots) { out.append(PlaceIssue(.refusal, why)) }
         if let inside = insideBackup(folder) {
             out.append(PlaceIssue(.refusal, "\(folder.lastPathComponent) is inside a Cryoframe backup (\(inside.lastPathComponent)). Choose the folder that holds your backups, or another one."))
@@ -327,6 +319,25 @@ public enum DestinationRules {
             }
             if let s = shared.first, let d = dest {
                 out.append(PlaceIssue(.warning, "\(folder.lastPathComponent) is on the same disk as \(s.lastPathComponent) (\(d.name)). If that disk fails, the backup goes with it; a backup on another drive is safer."))
+            }
+        }
+        return out
+    }
+
+    /// The rules that need only the paths: `folder` is a source, inside one, or holds
+    /// one. They hold for a destination whose drive isn't connected too, so a job is
+    /// checked against them on every save; the rest of `check` only when a place is
+    /// added (an away drive can't be asked whether it's writable, and mustn't stop a
+    /// job being saved).
+    public static func pathIssues(_ folder: URL, sources: [URL]) -> [PlaceIssue] {
+        var out: [PlaceIssue] = []
+        for s in sources {
+            if contains(s, folder) {
+                out.append(PlaceIssue(.refusal, samePath(s, folder)
+                    ? "\(folder.lastPathComponent) is the folder being backed up. Backups have to go somewhere else."
+                    : "\(folder.lastPathComponent) is inside \(s.lastPathComponent), which is being backed up: each backup would copy the ones before it."))
+            } else if contains(folder, s) {
+                out.append(PlaceIssue(.refusal, "\(s.lastPathComponent), which is being backed up, is inside \(folder.lastPathComponent): choose a folder outside it."))
             }
         }
         return out

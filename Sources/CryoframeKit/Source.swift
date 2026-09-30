@@ -19,8 +19,11 @@ public enum SourceRules {
     /// missing; a file (a package, like a library, is fine); unreadable; inside a
     /// destination, or holding one; a Cryoframe backup, or inside one; a system
     /// location. Warned: on a drive that can't be frozen, so it is read as it is.
+    /// folders that are part of macOS itself, which a reinstall puts back
+    public static let systemRoots = ["/System", "/usr", "/bin", "/sbin", "/private", "/var", "/tmp", "/etc", "/dev", "/cores"]
+
     public static func check(_ folder: URL, destinations: [URL], home: String = NSHomeDirectory(),
-                             systemRoots: [String] = ["/System", "/usr", "/bin", "/sbin", "/private", "/var", "/tmp", "/etc", "/dev", "/cores"]) -> [PlaceIssue] {
+                             systemRoots: [String] = SourceRules.systemRoots) -> [PlaceIssue] {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: folder.path, isDirectory: &isDir) else {
