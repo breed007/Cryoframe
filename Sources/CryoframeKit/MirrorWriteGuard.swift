@@ -135,6 +135,11 @@ enum MirrorIntegrity {
     enum Verdict: Equatable { case sound, damaged(String), unknown(String) }
 
     static func check(_ bundle: URL, passphrase: String?, runner: CommandRunner) -> Verdict {
+        // An attach that fails (or is retried after "Resource temporarily unavailable")
+        // can still leave the image attached, and with nothing mounted no detach by
+        // device or mount point finds it. The run holds the image, so anything of it
+        // attached with nothing mounted is this check's.
+        defer { ArchiveReader.detachOrphans(ofImage: bundle, runner: runner) }
         var args = ["attach", "-nomount", "-readonly", "-nobrowse", bundle.path]
         if passphrase != nil { args.append("-stdinpass") }
         guard let a = try? runner.runRetryingBusy("/usr/bin/hdiutil", args, stdin: passphrase.map { Data($0.utf8) }), a.ok else {

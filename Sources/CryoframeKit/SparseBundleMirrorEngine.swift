@@ -203,7 +203,11 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         }
         let work = try MirrorMounts.makeWork(in: mountBase)
         let mnt = work.appendingPathComponent("mnt", isDirectory: true)
-        defer { MountPoint.detach(mnt, runner: teardown); OpenedArchive.removeWork(work) }
+        defer {
+            MountPoint.detach(mnt, runner: teardown)
+            ArchiveReader.detachOrphans(ofImage: bundle, runner: teardown)     // a failed attach's (see MirrorIntegrity)
+            OpenedArchive.removeWork(work)
+        }
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
         let attached = try? DiskImageGate.serialized {
             try runner.runRetryingBusy("/usr/bin/hdiutil",
@@ -316,6 +320,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let mountpoint = work.appendingPathComponent("mnt", isDirectory: true)
         defer {
             MountPoint.detach(mountpoint, runner: teardown)
+            ArchiveReader.detachOrphans(ofImage: bundle, runner: teardown)     // a failed attach's (see MirrorIntegrity)
             OpenedArchive.removeWork(work)          // only once nothing is mounted there
         }
         // attach read-write at `mountpoint`; also used to attach it again for the read-back
