@@ -301,4 +301,32 @@ private let boot = vol("/System/Volumes/Data", "DATA-UUID", "Macintosh HD", onMa
         }
         #expect(try FileManager.default.contentsOfDirectory(atPath: dest.path).isEmpty)
     }
+    // A 1.5 folder on a drive is this job's only by what only this job can have made:
+    // a version stamped when one of its runs started, the exact size that run recorded
+    // for the library. Not its name and bundle name, and not the time alone (two Macs
+    // on the default schedule stamp versions in the same second).
+    @Test func a15FolderIsThisJobsOnlyIfAVersionMatchesOneOfItsRuns() throws {
+        let dest = folder("evidence")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let stamp = "2026-09-01-020000", made = try #require(VersionStamp.date(stamp))
+        let v = dest.appendingPathComponent("Papers/\(stamp)")
+        try FileManager.default.createDirectory(at: v, withIntermediateDirectories: true)
+        try Data(count: 12_345).write(to: v.appendingPathComponent("Papers.zip"))
+        _ = try ArchiveManifest.write(try ArchiveManifest.build(for: ArchiveResult(artifacts: [v.appendingPathComponent("Papers.zip")],
+                                                                                   format: .sealedZip)), toDir: v)
+        let job = BackupJob(id: "mine", name: "Papers", libraries: [.genericFolder(id: "p", displayName: "Papers", path: .absolute("/Users/j/Papers"))],
+                            target: .externalDrive(id: "t7", name: "T7", dir: dest), format: .sealedZip, frequency: .manual,
+                            createdAt: Date(timeIntervalSince1970: 0))
+        func run(_ jobID: String, at start: Date, bytes: UInt64) -> RunRecord {
+            RunRecord(id: UUID().uuidString, jobID: jobID, jobName: "Papers", startedAt: start, finishedAt: start.addingTimeInterval(60),
+                      trigger: "scheduled", outcome: .completed, summary: "",
+                      libraries: [LibraryOutcome(from: .completed(library: "Papers", destination: "T7", parts: 1, bytes: bytes, verified: nil))],
+                      bytes: bytes, warning: nil)
+        }
+        #expect(LibraryFolders.holdsBackups(of: job, in: dest, runs: [run("mine", at: made.addingTimeInterval(-0.4), bytes: 12_345)]))
+        #expect(!LibraryFolders.holdsBackups(of: job, in: dest, runs: []), "a name and a bundle name")
+        #expect(!LibraryFolders.holdsBackups(of: job, in: dest, runs: [run("mine", at: made, bytes: 12_346)]), "the time alone")
+        #expect(!LibraryFolders.holdsBackups(of: job, in: dest, runs: [run("mine", at: made.addingTimeInterval(-86_400), bytes: 12_345)]))
+        #expect(!LibraryFolders.holdsBackups(of: job, in: dest, runs: [run("theirs", at: made, bytes: 12_345)]))
+    }
 }

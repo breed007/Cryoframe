@@ -40,6 +40,9 @@ public struct JobExecutor: Sendable {
     /// the archive checks recorded so far, newest first: retention keeps the version
     /// last known to restore (see KnownGood)
     let healthRecords: @Sendable () -> [HealthRecord]
+    /// the runs recorded so far: what a drive holding this job's 1.5 backups is told by
+    /// (see LibraryFolders.holdsBackups)
+    let runHistory: @Sendable () -> [RunRecord]
 
     public init(helper: PrivilegedHelper,
                 detector: ProcessDetector,
@@ -53,12 +56,13 @@ public struct JobExecutor: Sendable {
                 dataVolume: VolumeRef = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: ""),
                 passphraseProvider: @escaping @Sendable (String) -> String? = { _ in nil },
                 healthRecords: @escaping @Sendable () -> [HealthRecord] = { [] },
+                runHistory: @escaping @Sendable () -> [RunRecord] = { [] },
                 volumes: VolumeTable = SystemVolumeTable()) {
         self.helper = helper; self.detector = detector; self.probe = probe; self.locator = locator
         self.volumes = volumes
         self.scratchBase = scratchBase; self.chunkSize = chunkSize
         self.pendingStore = pendingStore; self.jobStore = jobStore; self.dataVolume = dataVolume
-        self.passphraseProvider = passphraseProvider; self.healthRecords = healthRecords
+        self.passphraseProvider = passphraseProvider; self.healthRecords = healthRecords; self.runHistory = runHistory
     }
 
     /// resolves the AES-256 passphrase for an encrypted job (jobID → passphrase),
@@ -145,13 +149,15 @@ public struct JobExecutor: Sendable {
         // only way to take turns between two drives was two drives of one name, as the
         // README suggests for an off-site copy; after the first 1.6 run recorded one of
         // them, the other was "a different drive" every week it was the one at home.
-        // One that holds this job's backups is the other drive of the pair: it is
-        // recorded, and used. A drive with nothing of the job's is still refused.
+        // One that holds backups only this job can have made is the other drive of the
+        // pair: it is recorded, and used. Anything else is refused as a different drive
+        // and left untouched, a neighbor's drive of the same name above all.
         var turns: [(targetID: String, volume: VolumeIdentity)] = []
+        let runs = saved.targets.contains { if case .otherDrive = presence[$0.id] { return true }; return false } ? runHistory() : []
         for t in saved.targets {
             guard case .otherDrive = presence[t.id], let id = t.volume, id.learnedAt != nil, !id.isShare,
                   let here = self.volumes.volume(containing: t.destinationDir), let uuid = here.uuid, uuid != id.uuid,
-                  LibraryNames.same(here.name, id.name), LibraryFolders.holdsBackups(of: saved, in: t.destinationDir),
+                  LibraryNames.same(here.name, id.name), LibraryFolders.holdsBackups(of: saved, in: t.destinationDir, runs: runs),
                   var other = DestinationResolver(volumes: self.volumes).identity(for: t.destinationDir) else { continue }
             other.learnedAt = now
             turns.append((t.id, other))

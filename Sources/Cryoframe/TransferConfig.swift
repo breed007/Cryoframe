@@ -50,6 +50,7 @@ enum TransferConfig {
                     pendingStore: PendingTransferStore.standard(),
                     jobStore: store,
                     passphraseProvider: { KeychainArchiveKey.load(jobID: $0) },
-                    healthRecords: { HealthStore.standard().all() })
+                    healthRecords: { HealthStore.standard().all() },
+                    runHistory: { RunHistoryStore.standard().all() })
     }
 }

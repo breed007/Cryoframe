@@ -79,12 +79,34 @@ public enum LibraryFolders {
         return out
     }
 
-    /// Whether `destination` holds `job`'s backups: a folder with the identity of one of
-    /// its libraries, or a 1.5 folder of one of their names with its archives in it.
-    public static func holdsBackups(of job: BackupJob, in destination: URL) -> Bool {
-        listing(destination).contains { $0.identity?.jobID == job.id }
-            || job.libraries.contains { lib in holdings(job: job, library: lib, in: destination).contains { !$0.archives.isEmpty } }
+    /// Whether `destination` holds backups this very job made, by evidence only it can
+    /// have: a folder with the identity of one of its libraries, or a 1.5 folder of one
+    /// of their names holding a version made by one of `runs` (the job's recorded runs):
+    /// stamped when that run started, and exactly the size it recorded for the library.
+    /// A name and a bundle name aren't evidence: another Mac's drive of the same name
+    /// (every drive of a make comes with one) can hold the same folder's backups, and
+    /// two Macs on the default schedule stamp versions in the same second.
+    public static func holdsBackups(of job: BackupJob, in destination: URL, runs: [RunRecord]) -> Bool {
+        let entries = listing(destination)
+        if entries.contains(where: { $0.identity?.jobID == job.id }) { return true }
+        let mine = runs.filter { $0.jobID == job.id }
+        guard !mine.isEmpty else { return false }
+        for e in entries where e.identity == nil {
+            let names = job.libraries.map(\.displayName).filter { LibraryNames.same($0, e.url.lastPathComponent) }
+            guard !names.isEmpty else { continue }
+            for a in RestoreDiscovery.scan(e.url, maxDepth: 1) {
+                guard let made = a.version else { continue }
+                if mine.contains(where: { r in
+                    abs(made.timeIntervalSince(r.startedAt)) <= 5
+                        && r.libraries.contains { o in names.contains(o.library) && o.parts > 0 && o.bytes == a.bytes }
+                }) { return true }
+            }
+        }
+        return false
     }
+
+    /// whether a folder holds a mirror at its top
+    static func holdsMirror(_ folder: URL) -> Bool { RestoreDiscovery.archive(at: folder)?.format == .liveMirror }
 
     /// Whether an archive whose bundle is named `bundle` can be `library`'s: its folder
     /// on disk has that name, or, for a built-in library kept in a package, the bundle
