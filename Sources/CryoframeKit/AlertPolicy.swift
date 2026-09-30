@@ -44,10 +44,13 @@ public enum AlertPolicy {
     /// isn't happening.
     public static let deferralsBeforeAlert = 3
 
-    /// nil unless this is the deferral that makes `deferralsBeforeAlert` in a row. Sent
-    /// once per run of deferrals: the count only passes that number once.
+    /// nil unless this is the deferral that makes `deferralsBeforeAlert` in a row, or a
+    /// later one while that alert is still owed (it couldn't be delivered: alerts not
+    /// set up yet, the network down). Sent once per run of deferrals; once the job
+    /// runs, nothing is owed.
     public static func payload(forDeferral record: RunRecord, count: Int) -> Payload? {
-        guard record.outcome == .deferred, count == deferralsBeforeAlert else { return nil }
+        guard record.outcome == .deferred,
+              count == deferralsBeforeAlert || (count > deferralsBeforeAlert && record.deferralAlertPending == true) else { return nil }
         return Payload(title: "Cryoframe — \(record.jobName) isn't running",
                        body: "⏸ Put off: \(record.summary)",
                        high: false, tags: "hourglass")

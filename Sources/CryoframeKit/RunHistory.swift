@@ -119,6 +119,9 @@ public struct RunRecord: Codable, Sendable, Identifiable {
     /// for a deferral: how many times in a row the job was put off (see
     /// RunHistoryStore.recordDeferral); nil otherwise, and in records before 1.6
     public var deferrals: Int?
+    /// for a run of deferrals: its alert fell due and couldn't be delivered, so it is
+    /// owed at the next deferral of the same run (nil when nothing is owed)
+    public var deferralAlertPending: Bool?
 
     public var duration: TimeInterval { max(0, finishedAt.timeIntervalSince(startedAt)) }
 
@@ -222,6 +225,15 @@ public final class RunHistoryStore: @unchecked Sendable {
         list.insert(r, at: 0)
         write(trimmed(list))
         return (r, 1)
+    }
+
+    /// Record whether the alert for a run of deferrals is still owed.
+    public func setDeferralAlertPending(recordID: String, _ pending: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        var list = decode()
+        guard let i = list.firstIndex(where: { $0.id == recordID }) else { return }
+        list[i].deferralAlertPending = pending ? true : nil
+        write(list)
     }
 
     /// The newest `cap` records, and each job's newest good run however old: that is

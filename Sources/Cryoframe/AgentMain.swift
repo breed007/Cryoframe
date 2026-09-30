@@ -33,14 +33,14 @@ enum AgentMain {
         var due = Scheduler().jobsToStart(store.load(), now: Date(), running: running,
                                           stoppedThisPass: resumes.stoppedJobIDs)
         var alerts: [RunRecord] = []      // failures to start, delivered once the run loop is done
-        var notices: [AlertPolicy.Payload] = []     // deferrals that have gone on, overdue jobs
+        var notices: [(payload: AlertPolicy.Payload, record: RunRecord)] = []     // deferrals that have gone on
         let historyStore = RunHistoryStore.standard()
         // One history record per run of deferrals, kept up to date, rather than one
         // every hour (see RunHistoryStore.recordDeferral); an alert once it has
         // happened several times in a row.
         func deferred(_ job: BackupJob, _ reason: String) {
             let (record, count) = historyStore.recordDeferral(job: job, reason: reason, at: Date())
-            if let p = AlertPolicy.payload(forDeferral: record, count: count) { notices.append(p) }
+            if let p = AlertPolicy.payload(forDeferral: record, count: count) { notices.append((p, record)) }
         }
 
         // Unattended work on a dying laptop battery is how a Mac ends up flat. Hold
@@ -133,7 +133,11 @@ enum AgentMain {
         let sem = DispatchSemaphore(value: 0)
         Task {
             for record in alerts { await RemoteAlert.deliver(for: record) }
-            for p in notices { await RemoteAlert.deliverPayload(p) }
+            // an alert that couldn't go is owed at the next deferral of the same run
+            for n in notices {
+                let delivered = await RemoteAlert.deliverPayload(n.payload)
+                historyStore.setDeferralAlertPending(recordID: n.record.id, !delivered)
+            }
             for (p, sent) in overdue {
                 if await RemoteAlert.deliverPayload(p) { sent() }
             }

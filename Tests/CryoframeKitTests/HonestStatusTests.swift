@@ -192,6 +192,26 @@ private func record(_ job: BackupJob, _ outcome: RunOutcomeKind, at t: TimeInter
                                           lastGood: ["h": later], now: lateAgain, throttle: throttle).count == 1)
     }
 
+    // A deferral alert that couldn't go at the third (alerts not set up, the network
+    // down) is owed: tried at each later deferral of the same run until it goes. Once
+    // the job runs, nothing is owed.
+    @Test func anUndeliveredDeferralAlertIsTriedAgainUntilItGoes() {
+        let url = tmpFile(); defer { try? FileManager.default.removeItem(at: url) }
+        let store = RunHistoryStore(url: url)
+        let a = job("a")
+        var due: [Int] = []
+        for h in 0..<6 {
+            let (r, n) = store.recordDeferral(job: a, reason: "on battery (12%)", at: Date(timeIntervalSince1970: Double(h) * 3600))
+            guard AlertPolicy.payload(forDeferral: r, count: n) != nil else { continue }
+            due.append(n)
+            store.setDeferralAlertPending(recordID: r.id, n < 5)        // delivered only at the fifth
+        }
+        #expect(due == [3, 4, 5])
+        store.append(record(a, .completed, at: 10 * 3600))
+        let (r, n) = store.recordDeferral(job: a, reason: "on battery (9%)", at: Date(timeIntervalSince1970: 11 * 3600))
+        #expect(n == 1 && AlertPolicy.payload(forDeferral: r, count: n) == nil && r.deferralAlertPending == nil)
+    }
+
     // Only an answer in the 2xx range counts as delivered.
     @Test func onlyAnAcceptedAlertCountsAsDelivered() throws {
         let url = try #require(URL(string: "https://ntfy.example/topic"))
