@@ -536,7 +536,9 @@ public struct JobExecutor: Sendable {
                 }
             }
             guard policy != .keepAll else { continue }
-            let known = KnownGood.version(of: library.displayName, among: complete.map(\.date), records: checks)
+            let identity = LibraryIdentity.read(in: libDir)
+            let known = KnownGood.version(of: library.displayName, key: identity?.key, formerNames: identity?.formerNames ?? [],
+                                          among: complete.map(\.date), records: checks)
             let prune = retentionPrune(complete.map(\.date), policy: policy, keeping: Set([known].compactMap { $0 }))
             for v in complete where prune.contains(v.date) {
                 do { try fm.removeItem(at: v.url) }

@@ -31,6 +31,8 @@ public struct RecoveryRehearsal: Sendable {
 
     public struct LibraryOutcome: Sendable, Equatable {
         public let library: String
+        /// whose archive it is, from its folder's identity (nil for a 1.5 folder)
+        public let key: String?
         public let version: Date?
         public let ok: Bool
         /// encrypted, and no key on this Mac — not a failure of the archive.
@@ -38,9 +40,9 @@ public struct RecoveryRehearsal: Sendable {
         public let skipped: Bool
         public let detail: String
 
-        public init(library: String, version: Date?, ok: Bool, locked: Bool = false,
+        public init(library: String, key: String? = nil, version: Date?, ok: Bool, locked: Bool = false,
                     skipped: Bool = false, detail: String) {
-            self.library = library; self.version = version; self.ok = ok
+            self.library = library; self.key = key; self.version = version; self.ok = ok
             self.locked = locked; self.skipped = skipped; self.detail = detail
         }
     }
@@ -87,14 +89,14 @@ public struct RecoveryRehearsal: Sendable {
             let a = selection.archive
             if isCloud, CloudFile.anyDataless(in: a.dir) {
                 guard materializeCloud else {
-                    return LibraryOutcome(library: a.libraryName, version: a.version, ok: true,
+                    return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: true,
                                           skipped: true, detail: "not downloaded — skipped")
                 }
                 CloudFile.materialize(a.dir)
             }
             let key = a.encrypted ? passphrase(a.displayName) : nil
             if a.encrypted, key == nil {
-                return LibraryOutcome(library: a.libraryName, version: a.version, ok: false, locked: true,
+                return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false, locked: true,
                                       detail: "encrypted, and no passphrase is available on this Mac")
             }
             do {
@@ -103,7 +105,7 @@ public struct RecoveryRehearsal: Sendable {
                 let manifest = try ArchiveManifest.read(sidecar)
                 let report = try ChecksumVerifier().verify(manifest, in: a.dir)
                 guard report.passed else {
-                    return LibraryOutcome(library: a.libraryName, version: a.version, ok: false,
+                    return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false,
                                           detail: "checksums don't match — \(report.details)")
                 }
                 let opened = try ArchiveReader(runner: runner, freeSpace: freeSpace).open(a.archiveResult(), passphrase: key)
@@ -114,22 +116,22 @@ public struct RecoveryRehearsal: Sendable {
                 let look = a.format == .liveMirror ? opened.root.appendingPathComponent(a.bundleName) : opened.root
                 let entries = (try? FileManager.default.contentsOfDirectory(atPath: look.path)) ?? []
                 guard !entries.isEmpty else {
-                    return LibraryOutcome(library: a.libraryName, version: a.version, ok: false,
+                    return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false,
                                           detail: "opened, but there is nothing inside it")
                 }
-                return LibraryOutcome(library: a.libraryName, version: a.version, ok: true,
+                return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: true,
                                       detail: "opened and readable")
             } catch let e as RestoreError {
                 // no room on the startup disk to join or unpack it says nothing about the
                 // archive (as for a drill, see RestoreDriller): skipped, and why
                 if case .notEnoughRoom = e {
-                    return LibraryOutcome(library: a.libraryName, version: a.version, ok: true, skipped: true,
+                    return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: true, skipped: true,
                                           detail: "not rehearsed: " + Self.reason(e, encrypted: a.encrypted))
                 }
-                return LibraryOutcome(library: a.libraryName, version: a.version, ok: false,
+                return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false,
                                       detail: Self.reason(e, encrypted: a.encrypted))
             } catch {
-                return LibraryOutcome(library: a.libraryName, version: a.version, ok: false,
+                return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false,
                                       detail: Self.reason(error, encrypted: a.encrypted))
             }
         }
@@ -189,7 +191,7 @@ extension RecoveryRehearsal.Report {
         var checks = outcomes.map { o in
             ArchiveCheck(library: o.library, version: o.version,
                          passed: o.ok || o.skipped, detail: o.detail,
-                         destination: dest, skipped: o.skipped)
+                         destination: dest, skipped: o.skipped, libraryKey: o.key)
         }
         checks += missing.map { lib in
             ArchiveCheck(library: lib, version: nil, passed: false,

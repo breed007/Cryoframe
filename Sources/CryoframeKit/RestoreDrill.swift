@@ -46,7 +46,7 @@ public struct RestoreDriller: Sendable {
                         if !materializeCloud {
                             checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
                                                        detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",
-                                                       destination: multiDest ? t.displayName : nil, skipped: true))
+                                                       destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
                             continue
                         }
                         CloudFile.materialize(archive.dir)
@@ -55,7 +55,8 @@ public struct RestoreDriller: Sendable {
                     let (passed, detail, skipped) = drillOne(archive, type: type, passphrase: job.encrypted ? passphrase : nil)
                     checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
                                                passed: passed, detail: detail,
-                                               destination: multiDest ? t.displayName : nil, skipped: skipped))
+                                               destination: multiDest ? t.displayName : nil, skipped: skipped,
+                                               libraryKey: archive.libraryKey))
                 }
             }
         }

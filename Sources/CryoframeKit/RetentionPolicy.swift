@@ -75,10 +75,16 @@ public enum KnownGood {
     /// A version that passed and later failed still counts: keeping one version more
     /// than the policy asks costs space, and deleting the last one that ever restored
     /// can cost the backup.
-    public static func version(of library: String, among versions: [Date], records: [HealthRecord]) -> Date? {
+    ///
+    /// The checks are matched by the library folder's identity `key` where they
+    /// recorded one, else by name, the library's or one it had (see
+    /// ArchiveAssurance.lastVerified): by name alone, a renamed library found no
+    /// check, and retention deleted the one version known to restore.
+    public static func version(of library: String, key: String? = nil, formerNames: [String] = [],
+                               among versions: [Date], records: [HealthRecord]) -> Date? {
         var checksum: Date?
         for v in versions.sorted(by: >) {
-            switch ArchiveAssurance.lastVerified(library: library, version: v, in: records)?.level {
+            switch ArchiveAssurance.lastVerified(library: library, key: key, formerNames: formerNames, version: v, in: records)?.level {
             case .drill?: return v
             case .checksum?: if checksum == nil { checksum = v }
             case nil: break

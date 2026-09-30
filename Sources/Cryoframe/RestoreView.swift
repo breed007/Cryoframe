@@ -629,7 +629,7 @@ struct RestoreView: View {
     /// restore path works; a checksum only proves the bytes still match. Versions that
     /// were never checked show nothing rather than an implied all-clear.
     @ViewBuilder private func assuranceChip(_ v: RestorableArchive) -> some View {
-        if let a = ArchiveAssurance.lastVerified(library: v.libraryName, version: v.version,
+        if let a = ArchiveAssurance.lastVerified(library: v.libraryName, key: v.libraryKey, version: v.version,
                                                  in: model.healthRecords) {
             let drill = a.level == .drill
             let text = drill ? "Restore-tested" : "Checksum verified"

@@ -139,7 +139,8 @@ public enum LibraryFolders {
                 folder = renamed
             }
         }
-        if LibraryIdentity.read(in: folder) != identity { try identity.write(in: folder) }
+        let current = LibraryIdentity.read(in: folder), updated = identity.following(current)
+        if current != updated { try updated.write(in: folder) }
 
         // Its sealed versions in any other folder of its name move in: a 1.5 folder it
         // shared with a mirror job, whichever of the two took it over first, or a

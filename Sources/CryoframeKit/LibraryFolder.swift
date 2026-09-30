@@ -33,6 +33,9 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
     /// the library's name, and its job's, when the folder was last written to
     public var name: String
     public var jobName: String
+    /// the names the library had before it was renamed, oldest first: checks recorded
+    /// before 1.6 know a library only by its name (see KnownGood)
+    public var formerNames: [String]?
 
     public init(jobID: String, libraryID: String, name: String, jobName: String) {
         self.key = Self.key(jobID: jobID, libraryID: libraryID)
@@ -57,6 +60,18 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
     public static func read(in folder: URL) -> LibraryIdentity? {
         guard let data = try? Data(contentsOf: folder.appendingPathComponent(fileName)) else { return nil }
         return try? JSONDecoder().decode(LibraryIdentity.self, from: data)
+    }
+
+    /// this identity, carrying over the names `previous` (the folder's identity until
+    /// now) had, and its name if the library has since been renamed
+    public func following(_ previous: LibraryIdentity?) -> LibraryIdentity {
+        guard let previous, previous.key == key else { return self }
+        var names = previous.formerNames ?? []
+        if previous.name != name, !names.contains(previous.name) { names.append(previous.name) }
+        names.removeAll { $0 == name }
+        var out = self
+        out.formerNames = names.isEmpty ? nil : Array(names.suffix(20))
+        return out
     }
 
     /// write it into `folder`, all at once (a crash leaves the old file or the new one)

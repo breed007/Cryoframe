@@ -75,4 +75,32 @@ private func check(_ kind: String, library: String = "Photos", passed: [Int] = [
         let left = try fm.contentsOfDirectory(atPath: lib.path).sorted()
         #expect(left == [2, 7, 8].map { VersionStamp.string(day($0)) })
     }
+
+    // Two libraries of one name in one job ("Projects" from Work and from Home), and a
+    // library renamed: a check that recorded whose archive it was counts only for that
+    // library, whatever either is called; one from before 1.6 counts by the name the
+    // library had.
+    @Test func checksCountForTheLibraryTheyWereOfNotItsName() {
+        let versions = (1...3).map(day)
+        let work = HealthRecord(jobID: "j", jobName: "Job", checkedAt: day(2).addingTimeInterval(3600), archivesChecked: 1,
+                                failures: [], kind: "drill",
+                                verified: [VerifiedArchive(library: "Projects", version: day(2), passed: true, key: "j/work")])
+        #expect(KnownGood.version(of: "Projects", key: "j/work", among: versions, records: [work]) == day(2))
+        #expect(KnownGood.version(of: "Projects", key: "j/home", among: versions, records: [work]) == nil,
+                "the other Projects' drill was taken for this one's")
+        #expect(KnownGood.version(of: "Client Work", key: "j/work", among: versions, records: [work]) == day(2), "lost with a rename")
+        let old = check("drill", library: "Projects", passed: [1], at: 1)
+        #expect(KnownGood.version(of: "Client Work", key: "j/work", formerNames: ["Projects"], among: versions, records: [old]) == day(1))
+        #expect(KnownGood.version(of: "Client Work", key: "j/work", among: versions, records: [old]) == nil)
+    }
+
+    // A folder's identity remembers the names its library had, for those older checks.
+    @Test func aFoldersIdentityRemembersTheLibrarysFormerNames() {
+        let first = LibraryIdentity(jobID: "j", libraryID: "p", name: "Projects", jobName: "Job")
+        let second = LibraryIdentity(jobID: "j", libraryID: "p", name: "Client Work", jobName: "Job").following(first)
+        #expect(second.formerNames == ["Projects"])
+        let back = LibraryIdentity(jobID: "j", libraryID: "p", name: "Projects", jobName: "Job").following(second)
+        #expect(back.formerNames == ["Client Work"])
+        #expect(LibraryIdentity(jobID: "x", libraryID: "p", name: "Other", jobName: "X").following(first).formerNames == nil)
+    }
 }

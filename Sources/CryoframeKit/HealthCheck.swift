@@ -19,11 +19,13 @@ public struct ArchiveCheck: Codable, Sendable, Equatable, Identifiable {
     public var detail: String
     public var destination: String?      // which copy; nil for a single-destination job
     public var skipped: Bool = false     // a cloud placeholder we chose not to download — not checked, not failed
+    /// whose archive it is, from its folder's identity (nil for a 1.5 folder)
+    public var libraryKey: String? = nil
 
     public init(library: String, version: Date?, passed: Bool, detail: String,
-                destination: String? = nil, skipped: Bool = false) {
+                destination: String? = nil, skipped: Bool = false, libraryKey: String? = nil) {
         self.library = library; self.version = version; self.passed = passed
-        self.detail = detail; self.destination = destination; self.skipped = skipped
+        self.detail = detail; self.destination = destination; self.skipped = skipped; self.libraryKey = libraryKey
     }
 }
 
@@ -45,9 +47,13 @@ public struct VerifiedArchive: Codable, Sendable, Equatable {
     public var version: Date?
     public var passed: Bool
     public var skipped: Bool
+    /// whose archive it was, by its library folder's identity ("<job id>/<library
+    /// id>"): a library is renamed, and two libraries can share a name, so the name
+    /// alone can't say. nil in records before 1.6, and for a 1.5 folder's archives.
+    public var key: String?
 
-    public init(library: String, version: Date?, passed: Bool, skipped: Bool = false) {
-        self.library = library; self.version = version; self.passed = passed; self.skipped = skipped
+    public init(library: String, version: Date?, passed: Bool, skipped: Bool = false, key: String? = nil) {
+        self.library = library; self.version = version; self.passed = passed; self.skipped = skipped; self.key = key
     }
 }
 
@@ -81,7 +87,7 @@ public struct HealthChecker: Sendable {
                         if !materializeCloud {
                             checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
                                                        detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",
-                                                       destination: multiDest ? t.displayName : nil, skipped: true))
+                                                       destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
                             continue
                         }
                         CloudFile.materialize(archive.dir)
@@ -94,13 +100,13 @@ public struct HealthChecker: Sendable {
                     if archive.format == .liveMirror, MirrorSeal.isOpen(archive.dir), report?.passed == true {
                         checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
                                                    detail: MirrorSeal.uncheckedDetail,
-                                                   destination: multiDest ? t.displayName : nil, skipped: true))
+                                                   destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
                         continue
                     }
                     checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
                                                passed: report?.passed ?? false,
                                                detail: report?.details ?? "could not read manifest",
-                                               destination: multiDest ? t.displayName : nil))
+                                               destination: multiDest ? t.displayName : nil, libraryKey: archive.libraryKey))
                 }
             }
         }
@@ -207,7 +213,7 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
                      // "verified" from "never checked" from "not downloaded".
                      verified: report.checks.map {
                         VerifiedArchive(library: $0.library, version: $0.version,
-                                        passed: $0.passed && !$0.skipped, skipped: $0.skipped)
+                                        passed: $0.passed && !$0.skipped, skipped: $0.skipped, key: $0.libraryKey)
                      }, trigger: trigger, skipNotes: report.checks.filter(\.skipped).map(line))
     }
 }
@@ -269,7 +275,12 @@ public enum ArchiveAssurance {
     /// the most recent PASSING check covering this library + version, or nil if this
     /// version has never been checked (a skipped cloud placeholder counts as never).
     /// Records are expected newest-first, as HealthStore.all() returns them.
-    public static func lastVerified(library: String, version: Date?,
+    ///
+    /// With `key` (the library folder's identity), a check that recorded one counts
+    /// only if it is this library's, whatever it was called; one that didn't (made
+    /// before 1.6, or of a 1.5 folder) counts by name: `library`, or one of
+    /// `formerNames` it had before a rename.
+    public static func lastVerified(library: String, key: String? = nil, formerNames: [String] = [], version: Date?,
                                     in records: [HealthRecord]) -> Result? {
         // prefer a drill over a checksum, even if the checksum is more recent: the
         // stronger promise is the one worth showing.
@@ -278,7 +289,7 @@ public enum ArchiveAssurance {
             // a multi-destination job checks this version once PER COPY. Only call it
             // verified when every copy checked in that run passed — otherwise we'd
             // vouch for a version whose copy on the drive you're restoring from is bad.
-            let mine = r.verified.filter { matches($0, library: library, version: version) }
+            let mine = r.verified.filter { matches($0, library: library, key: key, formerNames: formerNames, version: version) }
             guard !mine.isEmpty, mine.allSatisfy({ $0.passed && !$0.skipped })
             else { continue }
             let level: Level = r.isDrill ? .drill : .checksum
@@ -293,8 +304,12 @@ public enum ArchiveAssurance {
         return best
     }
 
-    private static func matches(_ v: VerifiedArchive, library: String, version: Date?) -> Bool {
-        guard v.library == library else { return false }
+    private static func matches(_ v: VerifiedArchive, library: String, key: String?, formerNames: [String], version: Date?) -> Bool {
+        if let key, let recorded = v.key {
+            guard recorded == key else { return false }
+        } else {
+            guard v.library == library || formerNames.contains(v.library) else { return false }
+        }
         // compare via the stamp string so two Dates parsed from the same folder name
         // always agree, regardless of sub-second representation.
         switch (v.version, version) {
