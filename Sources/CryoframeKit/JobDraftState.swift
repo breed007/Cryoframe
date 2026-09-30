@@ -228,8 +228,16 @@ public struct JobDraftState: Sendable, Equatable {
         // an existing job keeps its encryption exactly as it is (see encryptionLocked);
         // only a new job sets it
         let encrypted = encryptionLocked ? editingEncrypted : encrypt
+        // a rotation needs two drives: one whose partners are on offer but weren't
+        // chosen is a destination of its own (one saved alone is left as it was)
+        var targets = dedupedTargets
+        for i in targets.indices {
+            guard let g = targets[i].rotation?.group else { continue }
+            if targets.filter({ $0.rotation?.group == g }).count < 2,
+               self.targets.filter({ $0.rotation?.group == g }).count >= 2 { targets[i].rotation = nil }
+        }
         return BackupJob(id: id, name: name.isEmpty ? defaultName : name,
-                         libraries: selectedLibraries, targets: dedupedTargets, format: format,
+                         libraries: selectedLibraries, targets: targets, format: format,
                          frequency: frequency(calendar: calendar), verification: verification, runPolicy: runPolicy,
                          enabled: editingEnabled, encrypted: encrypted,
                          retention: isSealed ? retentionPolicy : .keepAll,
@@ -302,6 +310,69 @@ public struct JobDraftState: Sendable, Equatable {
                                        systemRoots: systemRoots)
         if !issues.contains(where: { $0.severity == .refusal }) { addLibrary(library) }
         return issues
+    }
+
+    // MARK: destinations: the main one, taking turns, the drives one is on
+
+    /// Make `id` the main destination: the one a run must reach.
+    public mutating func makeMain(_ id: String) {
+        guard selectedTargetIDs.contains(id) else { return }
+        selectedTargetIDs.removeAll { $0 == id }
+        selectedTargetIDs.insert(id, at: 0)
+    }
+
+    /// the other destinations `id` takes turns with (see Rotation)
+    public func takesTurns(_ id: String) -> [Target] {
+        guard let g = targets.first(where: { $0.id == id })?.rotation?.group else { return [] }
+        return selectedTargets.filter { $0.id != id && $0.rotation?.group == g }
+    }
+
+    /// Have `id` take turns with `other`: one place the backups go, written to
+    /// whichever of its drives is connected (see Rotation). One joining a rotation is
+    /// counted as away from `now`, not from before it joined.
+    public mutating func takeTurns(_ id: String, with other: String, now: Date = Date()) {
+        guard id != other, selectedTargetIDs.contains(id), selectedTargetIDs.contains(other),
+              let a = targets.firstIndex(where: { $0.id == id }), let b = targets.firstIndex(where: { $0.id == other }) else { return }
+        let group = targets[b].rotation?.group ?? targets[a].rotation?.group ?? UUID().uuidString
+        if targets[a].rotation?.group != group {
+            leaveRotation(a)
+            targets[a].rotation = Rotation(group: group, addedAt: now)
+        }
+        if targets[b].rotation == nil { targets[b].rotation = Rotation(group: group, addedAt: now) }
+    }
+
+    /// `id` stops taking turns: a destination of its own again. A rotation left with
+    /// one drive is no rotation.
+    public mutating func stopTakingTurns(_ id: String) {
+        guard let i = targets.firstIndex(where: { $0.id == id }) else { return }
+        leaveRotation(i)
+    }
+
+    private mutating func leaveRotation(_ i: Int) {
+        guard let g = targets[i].rotation?.group else { return }
+        targets[i].rotation = nil
+        let left = targets.indices.filter { targets[$0].rotation?.group == g }
+        if left.count == 1 { targets[left[0]].rotation = nil }
+    }
+
+    /// Record `drive` as another drive `id` is on, taking turns at its folder under one
+    /// name, as 1.5 did (see Target.otherVolumes, DrivePairing). Only for a destination
+    /// whose own drive is known. Saved with the job; Cancel forgets it.
+    @discardableResult
+    public mutating func pair(_ id: String, with drive: VolumeIdentity) -> Bool {
+        guard let i = targets.firstIndex(where: { $0.id == id }), let own = targets[i].volume, !own.isShare, !drive.isShare,
+              own.uuid != drive.uuid else { return false }
+        var others = targets[i].otherVolumes ?? []
+        if !others.contains(where: { $0.uuid == drive.uuid }) { others.append(drive) }
+        targets[i].otherVolumes = others
+        return true
+    }
+
+    /// `id` stops taking turns with the drive `uuid` at its folder.
+    public mutating func unpair(_ id: String, uuid: String) {
+        guard let i = targets.firstIndex(where: { $0.id == id }) else { return }
+        let others = (targets[i].otherVolumes ?? []).filter { $0.uuid != uuid }
+        targets[i].otherVolumes = others.isEmpty ? nil : others
     }
 
     /// Take one destination off the list on offer (and out of the selection). One of

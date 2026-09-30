@@ -16,6 +16,7 @@ about
 above
 access
 acl
+add
 address
 addresses
 administrator's
@@ -193,7 +194,9 @@ dd
 decmpfs
 deferring
 delete
+deleted
 deletelocalsnapshots
+deletes
 denied
 describe
 desktop
@@ -300,6 +303,7 @@ fix
 folder
 folder's
 folders
+follow
 for
 force
 forever
@@ -558,6 +562,7 @@ outlook
 output
 outside
 ov
+over
 overdue
 own
 owned
@@ -658,6 +663,7 @@ rename
 reopened
 repeats
 replaced
+replaces
 reserved
 resize
 resource
@@ -679,6 +685,7 @@ rotation
 rounded
 row
 rsync
+rule
 run
 running
 runs
@@ -751,7 +758,9 @@ starting
 startup
 static
 status
+stay
 stayed
+stays
 stderr
 stdinpass
 still
@@ -767,6 +776,7 @@ switch
 sync
 system
 tags
+take
 taken
 takes
 target
@@ -799,6 +809,7 @@ tmp
 tmutil
 to
 told
+too
 took
 tool
 tools

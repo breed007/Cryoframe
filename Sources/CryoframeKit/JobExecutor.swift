@@ -597,9 +597,12 @@ public struct JobExecutor: Sendable {
     /// failed run's leftover, unless an interrupted transfer is still to finish into
     /// it (`transferring`): the manifest is its last part. Held versions are never
     /// touched (see LibraryIdentity.heldVersions), nor the version of each library
-    /// last known to restore (see KnownGood).
+    /// last known to restore (see KnownGood). `upcoming`: a version the next run
+    /// adds, counted by the policy (it takes a place) but not itself in the plan, for
+    /// saying what the next run deletes before it has run.
     static func prunePlan(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
-                          checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false }) -> PrunePlan {
+                          checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false },
+                          upcoming: Date? = nil) -> PrunePlan {
         let fm = FileManager.default
         var plan = PrunePlan()
         for (library, libDir) in folders {
@@ -619,7 +622,8 @@ public struct JobExecutor: Sendable {
             guard policy != .keepAll else { continue }
             let known = KnownGood.version(of: library.displayName, key: identity?.key, formerNames: identity?.formerNames ?? [],
                                           among: complete.map(\.date), records: checks)
-            let prune = retentionPrune(complete.map(\.date), policy: policy, keeping: Set([known].compactMap { $0 }))
+            let prune = retentionPrune(complete.map(\.date) + [upcoming].compactMap { $0 }, policy: policy,
+                                       keeping: Set([known].compactMap { $0 }))
             for v in complete where prune.contains(v.date) {
                 plan.versions.append(.init(library: library.displayName, url: v.url, date: v.date))
             }
