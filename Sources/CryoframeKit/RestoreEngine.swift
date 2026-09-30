@@ -248,6 +248,8 @@ public struct RestoreEngine: Sendable {
         }
         // before reading anything: a sealed archive's library is at least as big as it
         if let floor = RestoreRoom.floor(for: archive) { try checkRoom(floor) }
+        // and a clash is said before the archive is verified, not after
+        _ = try Self.target(archive.bundleName, in: destinationDir, onClash: onClash)
 
         if verify {
             onStage(.verifying)
@@ -263,11 +265,7 @@ public struct RestoreEngine: Sendable {
 
         onStage(.copying)
         let bundleName = archive.bundleName
-        var target = destinationDir.appendingPathComponent(bundleName)
-        if fm.fileExists(atPath: target.path) {
-            guard onClash == .alongside else { throw RestoreError.destinationExists(target.path) }
-            target = RestoreNames.alongside(bundleName, in: destinationDir)
-        }
+        let target = try Self.target(bundleName, in: destinationDir, onClash: onClash)   // taken meanwhile?
         try fm.createDirectory(at: destinationDir, withIntermediateDirectories: true)
 
         // zip / live mirror keep the bundle intact one level down. A sealed DMG does
@@ -310,6 +308,18 @@ public struct RestoreEngine: Sendable {
 
         onStage(.completed)
         return target
+    }
+
+    /// where the library goes: its own name, or with `.alongside` the first free
+    /// "Name (2)" when that is taken. lstat, not fileExists: a broken link takes the
+    /// name too, and fileExists follows it and says nothing is there; the copy then
+    /// failed at the end with a raw "already exists".
+    static func target(_ name: String, in dir: URL, onClash: RestoreClash) throws -> URL {
+        let target = dir.appendingPathComponent(name)
+        var st = stat()
+        guard lstat(target.path, &st) == 0 else { return target }
+        guard onClash == .alongside else { throw RestoreError.destinationExists(target.path) }
+        return RestoreNames.alongside(name, in: dir)
     }
 
     static let quarantine = "com.apple.quarantine"
