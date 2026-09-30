@@ -334,6 +334,7 @@ enum MirrorCopy {
         defer { removeLeftOut(in: next) }
         guard !readOnly.isEmpty || !leftOut.isEmpty else {
             try execute(ArchivePlan.rsync(root: source, into: next))
+            try matchSizesAndDates(from: source, to: next, control: runner.control)
             try matchAttributes(from: source, to: next, control: runner.control)
             return []
         }
@@ -369,6 +370,7 @@ enum MirrorCopy {
                 try execute(Command("/usr/bin/rsync", ["-a", "-S", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
             }
         }
+        try matchSizesAndDates(from: source, to: next, control: runner.control)
         for (i, rel) in readOnly.enumerated() {
             if i % 256 == 0, runner.control?.isCancelled == true { throw CancelledError() }
             try copyAttributes(from: source.appendingPathComponent(rel), to: next.appendingPathComponent(rel))
@@ -452,6 +454,48 @@ enum MirrorCopy {
             let type = a.st_mode & S_IFMT
             guard type == b.st_mode & S_IFMT, type == S_IFREG || type == S_IFDIR else { continue }
             if differentAttributes(from.path, to.path) != nil { try copyAttributes(from: from, to: to) }
+        }
+    }
+
+    /// Give every file of the copy the library's size and date where rsync left them
+    /// different.
+    ///
+    /// rsync -S writes a run of zeros as a hole: it skips over it instead of writing
+    /// it. When the zeros run to the end of the file, skipping doesn't make the file
+    /// any longer, so the copier has to extend it to its size once it's done. The
+    /// openrsync of macOS 15 doesn't (CI's macOS 15 runner: every file of zeros, and
+    /// every file ending in them, read back "has the wrong size or date", while files
+    /// with holes inside and data at the end were fine; macOS 26's openrsync gets it
+    /// right). So a mirror of any library holding such a file failed every run on
+    /// macOS 15. Extending the file here makes its missing tail a hole, which reads
+    /// back as the zeros it is, and the library's dates go back on.
+    ///
+    /// This can't pass a bad copy off as a good one. The copy starts as a clone of the
+    /// previous one, and rsync only writes a file whose size or date differs from the
+    /// library's; so a file fixed here differs from the previous copy in size or date,
+    /// and the read-back compares its bytes with the library's (see `verify`).
+    static func matchSizesAndDates(from source: URL, to next: URL, control: RunControl?) throws {
+        guard let walker = FileManager.default.enumerator(atPath: source.path) else { return }
+        var seen = 0
+        while let rel = walker.nextObject() as? String {
+            seen += 1
+            if seen % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+            let to = next.appendingPathComponent(rel).path
+            var a = stat(), b = stat()
+            guard lstat(source.appendingPathComponent(rel).path, &a) == 0, a.st_mode & S_IFMT == S_IFREG,
+                  lstat(to, &b) == 0, b.st_mode & S_IFMT == S_IFREG else { continue }
+            if b.st_size < a.st_size {
+                // read-only like its source: writable for the moment it takes
+                chmod(to, (b.st_mode & 0o7777) | S_IWUSR)
+                let extended = truncate(to, a.st_size)
+                chmod(to, b.st_mode & 0o7777)
+                guard extended == 0 else { continue }                 // the read-back names it
+            } else if b.st_size != a.st_size
+                        || (a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec && a.st_mtimespec.tv_nsec == b.st_mtimespec.tv_nsec) {
+                continue
+            }
+            var times = [a.st_atimespec, a.st_mtimespec]
+            _ = utimensat(AT_FDCWD, to, &times, AT_SYMLINK_NOFOLLOW)
         }
     }
 
