@@ -62,6 +62,7 @@ asks
 at
 attach
 attached
+attaches
 attention
 attribute
 attributes
@@ -335,6 +336,7 @@ has
 hasn't
 have
 haven't
+hdid
 hdiutil
 health
 healthy

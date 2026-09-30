@@ -212,9 +212,18 @@ public struct ArchiveReader: Sendable {
         return try ImageLock.attaching(image, runner: runner) { before in
             let held = DiskImageInUse(image: image.path, mountedAt: [], attachedWithoutMount: true)
             if encrypted, !before.isEmpty { throw held }
+            // Held by someone else, the attach may hand back the holder's disk, so the
+            // work dir is marked borrowed before it is made: a crash from here on leaves
+            // a sweep that only unmounts. If the disk turns out to be this attach's own,
+            // the crash leaves it attached but recorded, and the next attach takes it
+            // (see AttachRecords); detaching the holder's disk can't be undone.
+            let mark = work.appendingPathComponent(OpenedArchive.borrowedFileName)
+            if !before.isEmpty { FileManager.default.createFile(atPath: mark.path, contents: nil) }
             do {
-                try DiskImageGate.serialized {
-                    try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
+                try AttachRecords.recording(image, sparing: before, runner: look) {
+                    try DiskImageGate.serialized {
+                        try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
+                    }
                 }
             } catch {
                 try MirrorMounts.refuseIfOpen(image, except: mnt, runner: look)   // opened by someone else meanwhile
@@ -226,10 +235,12 @@ public struct ArchiveReader: Sendable {
             guard MountPoint.isMounted(mnt) else {
                 throw DiskImageInUse(image: image.path, mountedAt: MirrorMounts.mountPoints(of: image, runner: look))
             }
-            // the holder's disk, mounted here: marked before anything can crash, so a
-            // sweep unmounts it rather than detach it
-            guard let device = MountPoint.device(at: mnt), before.contains(device) else { return false }
-            FileManager.default.createFile(atPath: work.appendingPathComponent(OpenedArchive.borrowedFileName).path, contents: nil)
+            // the holder's disk, mounted here, stays marked, so a sweep unmounts it rather
+            // than detach it; this attach's own disk is detached on close
+            guard let device = MountPoint.device(at: mnt), before.contains(device) else {
+                try? FileManager.default.removeItem(at: mark)
+                return false
+            }
             return true
         }
     }

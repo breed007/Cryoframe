@@ -149,7 +149,7 @@ enum MirrorIntegrity {
                 // attached elsewhere: the attach would hand back that disk, and the
                 // detach below would take it from its holder
                 guard before.isEmpty else { return .unknown("the image is attached elsewhere on this Mac") }
-                return checkAttaching(bundle, passphrase: passphrase, runner: runner)
+                return checkAttaching(bundle, passphrase: passphrase, runner: runner, before: before)
             }
         } catch is CancelledError {
             return .unknown("the check was stopped")
@@ -158,10 +158,13 @@ enum MirrorIntegrity {
         }
     }
 
-    private static func checkAttaching(_ bundle: URL, passphrase: String?, runner: CommandRunner) -> Verdict {
+    private static func checkAttaching(_ bundle: URL, passphrase: String?, runner: CommandRunner, before: Set<String>) -> Verdict {
         var args = ["attach", "-nomount", "-readonly", "-nobrowse", bundle.path]
         if passphrase != nil { args.append("-stdinpass") }
-        guard let a = try? runner.runRetryingBusy("/usr/bin/hdiutil", args, stdin: passphrase.map { Data($0.utf8) }), a.ok else {
+        // recorded, so that a crash before the detach below leaves nothing that blocks the mirror
+        guard let a = try? AttachRecords.recording(bundle, sparing: before, runner: runner.forTeardown, {
+            try runner.runRetryingBusy("/usr/bin/hdiutil", args, stdin: passphrase.map { Data($0.utf8) })
+        }), a.ok else {
             return .unknown("the image wouldn't attach to be checked")
         }
         let lines = a.stdout.split(separator: "\n")

@@ -161,6 +161,8 @@ public struct KeyCheck: Sendable {
         // hdiutil info failing is "can't tell", not "nothing attached": taken for the
         // latter, a holder's disk would be counted as this attach's, and detached.
         let cantTell = Proof.unchecked("whether it is open elsewhere on this Mac couldn't be told, so it is tried when it is restored")
+        // a crashed process's key check or reader of Cryoframe's (see AttachRecords)
+        AttachRecords.releaseLeftovers(of: image, runner: look)
         guard let attached = MirrorMounts.attachedImagesIfKnown(runner: look) else { return cantTell }
         let target = image.resolvingSymlinksInPath().path
         guard !attached.contains(where: { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == target && !$0.devices.isEmpty }) else {
@@ -178,7 +180,7 @@ public struct KeyCheck: Sendable {
         do {
             return try ImageLock.attaching(image, runner: runner) { before -> Proof in
                 guard before.isEmpty else { return .unchecked("it is open elsewhere on this Mac, so it is tried when it is restored") }
-                return tryAttaching(image, passphrase: passphrase)
+                return tryAttaching(image, passphrase: passphrase, before: before)
             }
         } catch is DiskImageInUse {
             return .unchecked("it is open elsewhere on this Mac, so it is tried when it is restored")
@@ -192,13 +194,15 @@ public struct KeyCheck: Sendable {
     /// one attach of `image` with `passphrase`, and the detach of its disk, run holding
     /// the image's lock with no device of the image attached before it: so the disk it
     /// hands back is its own
-    private func tryAttaching(_ image: URL, passphrase: String) -> Proof {
+    private func tryAttaching(_ image: URL, passphrase: String, before: Set<String>) -> Proof {
         let look = runner.forTeardown
         let result: CommandResult
         do {
-            result = try DiskImageGate.serialized {
-                try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach", "-nomount", "-readonly", "-noverify", "-noautofsck",
-                                                                "-stdinpass", image.path], stdin: Data(passphrase.utf8))
+            result = try AttachRecords.recording(image, sparing: before, runner: look) {
+                try DiskImageGate.serialized {
+                    try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach", "-nomount", "-readonly", "-noverify", "-noautofsck",
+                                                                    "-stdinpass", image.path], stdin: Data(passphrase.utf8))
+                }
             }
         } catch {
             return .unchecked(error.localizedDescription)

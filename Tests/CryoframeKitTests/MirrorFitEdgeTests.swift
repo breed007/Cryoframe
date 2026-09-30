@@ -363,6 +363,48 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
         #expect(!MirrorSeal.isOpen(out), "a run refused before touching the image left it marked open")
     }
 
+    // The same device left by Cryoframe itself: a file system check that attached the
+    // image without mounting it, in a process that crashed before detaching it. Its
+    // record says so, and names a process that is gone, so the next run detaches it
+    // and goes ahead, as unattended backups must after a crash of their own.
+    @Test func aMirrorLeftAttachedByADeadCheckIsReleasedAndRuns() throws {
+        let src = fitDir("deadsrc").appendingPathComponent("Lib")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try Data("one".utf8).write(to: src.appendingPathComponent("one.txt"))
+        let out = fitDir("deadout"), base = fitDir("base")
+        defer { for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
+        let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
+        let bundle = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
+        defer { ArchiveReader.detachOrphans(ofImage: bundle, runner: ProcessCommandRunner()) }
+
+        // a process that has exited, as it was while it ran
+        let gone = Process()
+        gone.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        gone.arguments = ["30"]
+        try gone.run()
+        let dead = try #require(ProcessIdentity.of(pid: gone.processIdentifier))
+        gone.terminate()
+        gone.waitUntilExit()
+
+        // the check's attach, recorded as the check records it
+        let lock = try #require(ImageLock.acquire(bundle, wait: 30))
+        let attached = try AttachRecords.recording(bundle, sparing: [], runner: ProcessCommandRunner(), owner: dead) {
+            try DiskImageGate.serialized {
+                try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", "-nomount", "-readonly", "-nobrowse", bundle.path])
+            }
+        }
+        lock.release()
+        try #require(attached.ok, "\(attached.stderr)")
+        let left = devices(of: bundle)
+        try #require(left.count > 0 && !left.mounted, "nothing was left attached, so this proves nothing")
+
+        try Data("two".utf8).write(to: src.appendingPathComponent("two.txt"))
+        #expect(throws: Never.self) { try engine.archive(ArchiveSource(name: "Lib", root: src), to: out) }
+        #expect(devices(of: bundle).count == 0, "the run left the image attached")
+        let copied = try lookInside(bundle) { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Lib/two.txt").path) }
+        #expect(copied, "the run didn't bring the mirror up to date")
+    }
+
     // The same in the way of a restore: held read-only, its volume is mounted for the
     // restore and only unmounted afterwards, leaving the disk to its holder.
     @Test func aRestoreOpensAMirrorAttachedWithNothingMounted() throws {

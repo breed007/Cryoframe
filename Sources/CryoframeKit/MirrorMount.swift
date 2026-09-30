@@ -98,6 +98,23 @@ public enum MirrorMounts {
     /// every attached disk image and its devices; nil when hdiutil couldn't be asked
     /// or its answer couldn't be read, which isn't the same as nothing attached
     static func attachedImagesIfKnown(runner: CommandRunner) -> [(path: String, devices: [String])]? {
+        attachesIfKnown(runner: runner)?.map { ($0.path, $0.devices) }
+    }
+
+    /// One attach of a disk image, as `hdiutil info` lists it.
+    struct Attach {
+        let path: String
+        let devices: [String]
+        let mounted: Bool
+        /// the process serving the attach (diskimages-helper). It lives exactly as long
+        /// as the attach: a later attach of the same image gets another, even when it
+        /// is handed the same device name, which macOS does (measured on macOS 26)
+        let helper: Int32?
+    }
+
+    /// every attach of a disk image on this Mac; nil when hdiutil couldn't be asked or
+    /// its answer couldn't be read
+    static func attachesIfKnown(runner: CommandRunner) -> [Attach]? {
         guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"], stdin: nil), r.ok,
               let data = r.stdout.data(using: .utf8),
               let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return nil }
@@ -105,7 +122,9 @@ public enum MirrorMounts {
         return images.compactMap { img in
             guard let path = img["image-path"] as? String else { return nil }
             let entities = img["system-entities"] as? [[String: Any]] ?? []
-            return (path, entities.compactMap { $0["dev-entry"] as? String })
+            return Attach(path: path, devices: entities.compactMap { $0["dev-entry"] as? String },
+                          mounted: entities.contains { $0["mount-point"] != nil },
+                          helper: (img["hdid-pid"] as? NSNumber)?.int32Value)
         }
     }
 

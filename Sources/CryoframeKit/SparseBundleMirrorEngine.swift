@@ -215,10 +215,12 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         try ImageLock.attaching(bundle, runner: teardown, control: runner.control) { before in
             // attached elsewhere: an attach would hand back that disk, not read the drive
             guard before.isEmpty else { throw MirrorCopyError.couldNotConfirm("it is attached elsewhere on this Mac") }
-            let attached = try? DiskImageGate.serialized {
-                try runner.runRetryingBusy("/usr/bin/hdiutil",
-                                           ArchivePlan.attach(image: bundle, mountpoint: mnt, readonly: true, encrypted: passphrase != nil).args,
-                                           stdin: stdin)
+            let attached = try? AttachRecords.recording(bundle, sparing: before, runner: teardown) {
+                try DiskImageGate.serialized {
+                    try runner.runRetryingBusy("/usr/bin/hdiutil",
+                                               ArchivePlan.attach(image: bundle, mountpoint: mnt, readonly: true, encrypted: passphrase != nil).args,
+                                               stdin: stdin)
+                }
             }
             guard attached?.ok == true, MountPoint.isMounted(mnt) else {
                 throw MirrorCopyError.couldNotConfirm(attached?.stderr.trimmingCharacters(in: .whitespacesAndNewlines) ?? "it wouldn't attach")
@@ -283,6 +285,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             // attached with nothing mounted by another program, and no attach of
             // Cryoframe's under way: refused now, before growing it (see attach below)
             if let lock = ImageLock.acquire(bundle) {
+                // one a crashed run or check of Cryoframe's left goes first (see AttachRecords)
+                AttachRecords.releaseLeftovers(of: bundle, runner: teardown, holding: lock)
                 let held = MirrorMounts.attachedDevices(of: bundle, runner: teardown)
                 lock.release()
                 if !held.isEmpty { throw DiskImageInUse(image: bundle.path, mountedAt: [], attachedWithoutMount: true) }
@@ -340,13 +344,16 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                 // reused that device, read-only if it was, and failed "volume is read
                 // only" every run, or failed busy. It was detached before this attach,
                 // which pulled the disk out from under whoever held it; now the run is
-                // refused, and says how to let it go.
+                // refused, and says how to let it go. (One a crashed process of
+                // Cryoframe's left was detached as the lock was taken: see AttachRecords.)
                 guard before.isEmpty else {
                     let open = MirrorMounts.mountPoints(of: bundle, runner: teardown)
                     throw DiskImageInUse(image: bundle.path, mountedAt: open, attachedWithoutMount: open.isEmpty)
                 }
                 do {
-                    try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
+                    try AttachRecords.recording(bundle, sparing: before, runner: teardown) {
+                        try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
+                    }
                 } catch {
                     try MirrorMounts.refuseIfOpen(bundle, except: mountpoint, runner: teardown)   // opened elsewhere meanwhile
                     throw error
