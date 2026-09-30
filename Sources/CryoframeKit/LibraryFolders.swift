@@ -141,24 +141,34 @@ public enum LibraryFolders {
         }
         if LibraryIdentity.read(in: folder) != identity { try identity.write(in: folder) }
 
-        // a 1.5 folder it shares with a mirror job (or one 1.5.6 wrote again after a
-        // return to it): its sealed versions for this library move in
-        if let legacy, legacy.url != folder,
-           versionMover(of: legacy.url, in: destination, jobs: jobs + [job]) == key {
-            let (moved, left) = moveVersions(from: legacy.url, to: folder)
+        // Its sealed versions in any other folder of its name move in: a 1.5 folder it
+        // shared with a mirror job, whichever of the two took it over first, or a
+        // folder 1.5.6 wrote them into after a return to it (another job's included).
+        // Only versions that can be no other library's, and not one being read.
+        let others = listing(destination).filter {
+            $0.url.path != folder.path && $0.identity?.key != key && LibraryNames.same($0.url.lastPathComponent, library.displayName)
+        }
+        for other in others where job.format.isSealed {
+            let r = moveVersions(from: other.url, to: folder, key: key, in: destination, jobs: jobs + [job], isOpen: isOpen)
             // emptied (a folder only 1.5.6 wrote, say): gone, so nothing looks for it
-            if moved > 0 { rmdir(legacy.url.path) }
-            if moved > 0 || left > 0 {
-                notes.append("moved \(moved) earlier version\(moved == 1 ? "" : "s") of \(library.displayName) from “\(legacy.url.lastPathComponent)” into “\(folder.lastPathComponent)”"
-                             + (left > 0 ? "; \(left) with the same time as one already there stayed where they were" : ""))
+            if r.moved > 0, other.identity == nil { rmdir(other.url.path) }
+            if r.moved > 0 || r.left > 0 || r.busy > 0 {
+                notes.append("moved \(r.moved) earlier version\(r.moved == 1 ? "" : "s") of \(library.displayName) from “\(other.url.lastPathComponent)” into “\(folder.lastPathComponent)”"
+                             + (r.left > 0 ? "; \(r.left) with the same time as one already there stayed where they were" : "")
+                             + (r.busy > 0 ? "; \(r.busy) being read stayed where they were, and move on a later run" : ""))
             }
         }
-        // a copy at its top (a mirror) that is this library's, or can't be told whose,
-        // stays, and is no longer updated: say so once a run
-        if let legacy, legacy.url != folder, RestoreDiscovery.archive(at: legacy.url) != nil,
-           claimants(of: legacy.url, in: destination, jobs: jobs + [job]).contains(where: { $0.key == key }),
-           [nil, key].contains(owner(of: legacy.url, in: destination, jobs: jobs + [job])) {
-            notes.append("an earlier copy of \(library.displayName) is still in “\(legacy.url.lastPathComponent)”, and is no longer updated; Restore still finds it. Delete it once you no longer need it.")
+        // A copy of this library at the top of another folder of its name (a mirror
+        // 1.5 or 1.5.6 made there) that no mirror job keeps up: it stays, and is no
+        // longer updated. Say so once a run.
+        for other in others {
+            guard let top = RestoreDiscovery.archive(at: other.url), top.format == .liveMirror, top.version == nil,
+                  rootNames(of: library).contains(top.bundleName) else { continue }
+            let mirrors = claimants(named: other.url.lastPathComponent, bundles: [top.bundleName], in: destination, jobs: jobs + [job])
+                .filter(\.mirror).map(\.key)
+            if let id = other.identity?.key, mirrors.contains(id) { continue }          // another mirror job's own copy
+            guard mirrors.isEmpty || mirrors.contains(key) else { continue }             // the mirror job that will take it over
+            notes.append("an earlier copy of \(library.displayName) is still in “\(other.url.lastPathComponent)”, and is no longer updated; Restore still finds it. Delete it once you no longer need it.")
         }
         return Prepared(folder: folder, notes: notes)
     }
@@ -180,19 +190,17 @@ public enum LibraryFolders {
         return all.count == 1 ? all[0].key : nil
     }
 
-    /// The library (by identity key) whose sealed versions in a 1.5 folder move into
-    /// its own folder: the one sealed library that could have written them, when the
-    /// folder is someone else's (a mirror job's) or nobody's.
-    static func versionMover(of legacy: URL, in destination: URL, jobs: [BackupJob]) -> String? {
-        let sealed = claimants(of: legacy, in: destination, jobs: jobs).filter { !$0.mirror }
-        return sealed.count == 1 ? sealed[0].key : nil
-    }
-
     struct Claimant: Equatable { let key: String; let mirror: Bool }
 
+    /// the libraries of the jobs writing to `destination` that could have written the
+    /// archives of a 1.5 folder: those named like it, and whose source folder has one
+    /// of its archives' bundle names (any, when it holds none)
     static func claimants(of legacy: URL, in destination: URL, jobs: [BackupJob]) -> [Claimant] {
-        let name = legacy.lastPathComponent
-        let bundles = Set(RestoreDiscovery.scan(legacy, maxDepth: 1).map(\.bundleName))
+        claimants(named: legacy.lastPathComponent, bundles: Set(RestoreDiscovery.scan(legacy, maxDepth: 1).map(\.bundleName)),
+                  in: destination, jobs: jobs)
+    }
+
+    static func claimants(named name: String, bundles: Set<String>, in destination: URL, jobs: [BackupJob]) -> [Claimant] {
         var seen = Set<String>(), out: [Claimant] = []
         for job in jobs where job.targets.contains(where: { samePlace($0.destinationDir, destination) }) {
             for lib in job.libraries where LibraryNames.same(lib.displayName, name) {
@@ -208,20 +216,27 @@ public enum LibraryFolders {
 
     // MARK: moving versions
 
-    /// move each version folder (a timestamped folder with a manifest) of `legacy`
-    /// into `folder`, one rename each: a crash leaves each version in one place or the
-    /// other, whole. A version whose time is already in `folder` stays.
-    static func moveVersions(from legacy: URL, to folder: URL) -> (moved: Int, left: Int) {
+    /// Move each version folder (a timestamped folder with a manifest) of `other` that
+    /// is the library `key`'s into `folder`, one rename each: a crash leaves each
+    /// version in one place or the other, whole. A version is that library's when it
+    /// is the only sealed library of the jobs writing to `destination` that could
+    /// have written it (by name and bundle name). One whose time is already in
+    /// `folder` stays (`left`), and so does one with a disk image attached, a restore
+    /// or a drill reading it (`busy`).
+    static func moveVersions(from other: URL, to folder: URL, key: String, in destination: URL, jobs: [BackupJob],
+                             isOpen: (URL) -> Bool) -> (moved: Int, left: Int, busy: Int) {
         let fm = FileManager.default
-        var moved = 0, left = 0
-        for e in (try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil)) ?? [] {
-            guard VersionStamp.date(e.lastPathComponent) != nil,
-                  fm.fileExists(atPath: e.appendingPathComponent(ArchiveManifest.sidecarName).path) else { continue }
+        var moved = 0, left = 0, busy = 0
+        for e in (try? fm.contentsOfDirectory(at: other, includingPropertiesForKeys: nil)) ?? [] {
+            guard VersionStamp.date(e.lastPathComponent) != nil, let a = RestoreDiscovery.archive(at: e), a.format != .liveMirror else { continue }
+            let sealed = claimants(named: other.lastPathComponent, bundles: [a.bundleName], in: destination, jobs: jobs).filter { !$0.mirror }
+            guard sealed.map(\.key) == [key] else { continue }
             let to = folder.appendingPathComponent(e.lastPathComponent, isDirectory: true)
             if fm.fileExists(atPath: to.path) { left += 1; continue }
+            if isOpen(e) { busy += 1; continue }
             if rename(e.path, to.path) == 0 { moved += 1 } else { left += 1 }
         }
-        return (moved, left)
+        return (moved, left, busy)
     }
 
     // MARK: helpers
