@@ -91,7 +91,15 @@ public struct DMGBlockers: Sendable, Equatable {
         }
     }
 
-    /// What the run reports: which items, and what to do about them.
+    /// What a live mirror run says about the named pipes, sockets and devices it
+    /// left out (MirrorCopy.isLeftOut), or nil if there were none. Not a failure:
+    /// they hold no data.
+    public func leftOutOfMirror(library: String) -> String? {
+        guard let n = counts[.special], n > 0 else { return nil }
+        let shown = examples[.special] ?? []
+        return "\(library): left \(n) named pipe\(n == 1 ? "" : "s"), socket\(n == 1 ? "" : "s") or device\(n == 1 ? "" : "s") out of the mirror (\(shown.joined(separator: ", "))\(n > shown.count ? ", …" : "")). These are connections a running program makes and hold no data; a restore doesn't need them."
+    }
+
     /// What the run reports: which items, and what to do about them. `zip`: the
     /// sealed zip format, which only `special` items stop.
     public func explanation(library: String, zip: Bool = false) -> String {
@@ -124,7 +132,7 @@ public struct DMGBlockers: Sendable, Equatable {
             }
         }
         if counts[.special] != nil {
-            fix += " Named pipes and sockets are connections a running program makes and hold no data: move them out of the folder (or the program that makes them)."
+            fix += " Named pipes and sockets are connections a running program makes and hold no data: move them out of the folder (or the program that makes them), or back the folder up as a live mirror, which leaves them out."
         }
         return said.joined(separator: " ") + " " + fix
     }

@@ -161,6 +161,7 @@ enum MirrorCopy {
             inLibrary.insert(rel)
             var a = stat(), b = stat(), c = stat()
             guard lstat(source.appendingPathComponent(rel).path, &a) == 0 else { continue }
+            if isLeftOut(a.st_mode) { inLibrary.remove(rel); continue }       // not mirrored (see isLeftOut)
             guard lstat(copy.appendingPathComponent(rel).path, &b) == 0 else { found.note(rel, "is missing"); continue }
             let type = a.st_mode & S_IFMT
             guard type == b.st_mode & S_IFMT else { found.note(rel, "is the wrong kind of item"); continue }
@@ -322,13 +323,19 @@ enum MirrorCopy {
     /// all. There is no other rsync on macOS 26. So when the source holds read-only
     /// files, they are left out of the -E pass, copied by a plain -a pass (which
     /// handles them), and given their attributes and ACL with copyfile(3).
+    ///
+    /// Named pipes, sockets and devices are left out (see `leftOut(in:)`), and any a
+    /// copy made before this holds are taken out of it. Returns the ones left out.
+    @discardableResult
     static func sync(_ source: URL, into next: URL, runner: CommandRunner,
-                     execute: (Command) throws -> Void) throws {
-        let readOnly = readOnlyFiles(in: source)
-        guard !readOnly.isEmpty else {
+                     execute: (Command) throws -> Void) throws -> [String] {
+        let survey = survey(source)
+        let readOnly = survey.readOnly, leftOut = survey.leftOut
+        defer { removeLeftOut(in: next) }
+        guard !readOnly.isEmpty || !leftOut.isEmpty else {
             try execute(ArchivePlan.rsync(root: source, into: next))
             try matchAttributes(from: source, to: next, control: runner.control)
-            return
+            return []
         }
         let fm = FileManager.default
         let lists = fm.temporaryDirectory.appendingPathComponent("cf-rsync-\(UUID().uuidString)")
@@ -337,27 +344,30 @@ enum MirrorCopy {
         let exclude = lists.appendingPathComponent("exclude"), files = lists.appendingPathComponent("files")
         // NUL-separated (-0), so no name can break a line; excludes anchored to the
         // top of the transfer, with rsync's pattern characters escaped
-        try Data(readOnly.map { "/" + escapedPattern($0) + "\0" }.joined().utf8).write(to: exclude)
+        try Data((readOnly + leftOut).map { "/" + escapedPattern($0) + "\0" }.joined().utf8).write(to: exclude)
         // "./" first: openrsync reads a --files-from line starting with "#" or ";" as a
         // comment, even NUL-separated, and skipped those files without a word
         try Data(readOnly.map { "./" + $0 + "\0" }.joined().utf8).write(to: files)
 
-        if readOnly.contains(where: { $0.contains("\\") }) {
+        if (readOnly + leftOut).contains(where: { $0.contains("\\") }) {
             // openrsync's filters can't match a backslash, escaped or not, so such a
-            // file can't be left out of the -E pass. Then no filter at all: a plain -a
-            // pass for everything (content, modes, deletions), and -E for everything
-            // but the read-only files, named one by one and without recursing (-a's -r,
-            // or naming the library folder itself, would reach them again). The
-            // library folder's own attributes and ACL go by copyfile, as the read-only
-            // files' do. Slower, and only for this.
+            // file can't be left out of the -E pass. Then no filter at all: a plain
+            // pass for everything (content, modes, deletions; without -D, so it passes
+            // over pipes and sockets), and -E for everything but the read-only files
+            // and those, named one by one and without recursing (-a's -r, or naming the
+            // library folder itself, would reach them again). The library folder's own
+            // attributes and ACL go by copyfile, as the read-only files' do. Slower,
+            // and only for this.
             let others = lists.appendingPathComponent("others")
-            try Data(everythingBut(readOnly, in: source).map { "./" + $0 + "\0" }.joined().utf8).write(to: others)
-            try execute(Command("/usr/bin/rsync", ["-a", "--delete", "--partial", source.path + "/", next.path + "/"]))
+            try Data(everythingBut(readOnly + leftOut, in: source).map { "./" + $0 + "\0" }.joined().utf8).write(to: others)
+            try execute(Command("/usr/bin/rsync", ["-rlptgo", "--delete", "--partial", source.path + "/", next.path + "/"]))
             try execute(Command("/usr/bin/rsync", ["-lptgoDE", "-0", "--files-from=\(others.path)", source.path + "/", next.path + "/"]))
             try copyAttributes(from: source, to: next)
         } else {
             try execute(ArchivePlan.rsync(root: source, into: next, extra: ["-0", "--exclude-from=\(exclude.path)"]))
-            try execute(Command("/usr/bin/rsync", ["-a", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
+            if !readOnly.isEmpty {
+                try execute(Command("/usr/bin/rsync", ["-a", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
+            }
         }
         for (i, rel) in readOnly.enumerated() {
             if i % 256 == 0, runner.control?.isCancelled == true { throw CancelledError() }
@@ -365,6 +375,50 @@ enum MirrorCopy {
         }
         try matchAttributes(from: source, to: next, control: runner.control)
         restoreFolderModes(from: source, to: next)
+        return leftOut
+    }
+
+    /// Whether an item of this type is left out of the mirror: a named pipe, a
+    /// socket or a device. They are connections a running program makes (an editor,
+    /// ssh, gpg, a build server) or device nodes, and hold no data, so a restore
+    /// never needs them. openrsync can't copy them faithfully here: it can't make a
+    /// socket at all ("mkstempsock: Invalid argument": the staging path is already
+    /// past the 104 bytes a socket's path may have), and with -E it fails on a pipe
+    /// carrying any attribute ("copyfile: Operation not supported"), which on a Mac
+    /// in use is every pipe (provenance). Either failed every run of a mirror of a
+    /// home or developer folder.
+    static func isLeftOut(_ mode: mode_t) -> Bool {
+        let type = mode & S_IFMT
+        return type == S_IFIFO || type == S_IFSOCK || type == S_IFBLK || type == S_IFCHR
+    }
+
+    /// the library's read-only regular files and the items left out of the mirror,
+    /// relative to it, in one walk
+    static func survey(_ root: URL) -> (readOnly: [String], leftOut: [String]) {
+        guard let walker = FileManager.default.enumerator(atPath: root.path) else { return ([], []) }
+        var readOnly: [String] = [], leftOut: [String] = []
+        while let rel = walker.nextObject() as? String {
+            var st = stat()
+            guard lstat(root.appendingPathComponent(rel).path, &st) == 0 else { continue }
+            if isLeftOut(st.st_mode) { leftOut.append(rel); continue }
+            if st.st_mode & S_IFMT == S_IFREG, st.st_mode & S_IWUSR == 0 { readOnly.append(rel) }
+        }
+        return (readOnly, leftOut)
+    }
+
+    /// items left out of the mirror, relative to `root`
+    static func leftOut(in root: URL) -> [String] { survey(root).leftOut }
+
+    /// take out of a copy any pipe, socket or device it holds: a copy made before they
+    /// were left out (a pipe with no attributes did copy) or one rsync's delete passes
+    /// over because it is excluded
+    static func removeLeftOut(in copy: URL) {
+        guard let walker = FileManager.default.enumerator(atPath: copy.path) else { return }
+        while let rel = walker.nextObject() as? String {
+            var st = stat()
+            let path = copy.appendingPathComponent(rel).path
+            if lstat(path, &st) == 0, isLeftOut(st.st_mode) { unlink(path) }
+        }
     }
 
     /// Give every file and folder of the copy the library's extended attributes and
@@ -418,17 +472,7 @@ enum MirrorCopy {
     }
 
     /// regular files under `root` their owner can't write, relative to it.
-    static func readOnlyFiles(in root: URL) -> [String] {
-        guard let walker = FileManager.default.enumerator(atPath: root.path) else { return [] }
-        var out: [String] = []
-        while let rel = walker.nextObject() as? String {
-            var st = stat()
-            guard lstat(root.appendingPathComponent(rel).path, &st) == 0,
-                  st.st_mode & S_IFMT == S_IFREG, st.st_mode & S_IWUSR == 0 else { continue }
-            out.append(rel)
-        }
-        return out
-    }
+    static func readOnlyFiles(in root: URL) -> [String] { survey(root).readOnly }
 
     /// every entry under `root` (folders, links, files) except those in `excluded`
     static func everythingBut(_ excluded: [String], in root: URL) -> [String] {

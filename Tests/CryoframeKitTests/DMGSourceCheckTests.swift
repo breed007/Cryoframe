@@ -118,7 +118,7 @@ private func unlock(_ dir: URL) {
             #expect(text.hasPrefix("Projects holds 2 named pipes, sockets or devices ("), "\(text)")
             #expect(text.contains("(agent.sock, build.pipe)") || text.contains("(build.pipe, agent.sock)"), "\(text)")
             #expect(text.contains(zip ? "which a sealed zip can't hold: ditto waits" : "which a sealed disk image can't hold: hdiutil waits"), "\(text)")
-            #expect(text.hasSuffix("move them out of the folder (or the program that makes them)."), "\(text)")
+            #expect(text.hasSuffix("move them out of the folder (or the program that makes them), or back the folder up as a live mirror, which leaves them out."), "\(text)")
             #expect(!text.contains("sealed zip format"), "\(text)")
         }
         // a folder backed up as a mirror isn't looked at

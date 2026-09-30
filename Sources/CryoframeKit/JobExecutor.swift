@@ -121,6 +121,8 @@ public struct JobExecutor: Sendable {
         var results: [LibraryRunResult]
         var builds: [SealedBuild]
         var cancelled: Bool
+        /// said in the run's warning: what a live mirror left out
+        var notes: [String] = []
     }
 
     public func run(_ job: BackupJob, ownerUID: uid_t, now: Date,
@@ -182,6 +184,7 @@ public struct JobExecutor: Sendable {
             var results: [LibraryRunResult] = []
             var builds: [SealedBuild] = []
             var cancelled = false
+            var notes: [String] = []
             // A job saved before 1.5.6 can hold two libraries whose archives share a
             // folder (see LibraryNames). Running it silently overwrote one with the
             // other; refuse both, per destination, so the run fails where it can be seen.
@@ -201,7 +204,7 @@ public struct JobExecutor: Sendable {
                       let root = placement.root(in: mounts) else {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
                 }
-                let stats = Self.directoryStats(root, forDMG: sealed == .dmg, forZip: sealed == .zip)
+                let stats = Self.directoryStats(root, forDMG: sealed == .dmg, forZip: sealed == .zip, forMirror: sealed == nil)
                 let sourceSize = stats.bytes
                 let source = ArchiveSource(name: root.lastPathComponent, root: root, sizeHint: sourceSize)
 
@@ -229,7 +232,7 @@ public struct JobExecutor: Sendable {
                 // some of these, and hdiutil and ditto both wait forever on a named pipe:
                 // an unattended run waited all night with its snapshot held. Name them
                 // now instead.
-                if !stats.dmgBlockers.isEmpty {
+                if sealed != nil, !stats.dmgBlockers.isEmpty {
                     let why = stats.dmgBlockers.explanation(library: library.displayName, zip: sealed == .zip)
                     for d in dests {
                         results.append(.failed(library: library.displayName, destination: d.target.displayName, error: why))
@@ -270,6 +273,7 @@ public struct JobExecutor: Sendable {
                 } else {
                     // LIVE MIRROR: an in-place incremental rsync per destination, from
                     // the snapshot. Cheap to repeat, so each destination is its own mirror.
+                    if let note = stats.dmgBlockers.leftOutOfMirror(library: library.displayName) { notes.append(note) }
                     for d in dests {
                         if control.isCancelled { cancelled = true; break libraryLoop }
                         let t = d.target
@@ -303,7 +307,7 @@ public struct JobExecutor: Sendable {
                     }
                 }
             }
-            return SnapshotPass(results: results, builds: builds, cancelled: cancelled)
+            return SnapshotPass(results: results, builds: builds, cancelled: cancelled, notes: notes)
         }
 
         if pass.cancelled {
@@ -412,7 +416,7 @@ public struct JobExecutor: Sendable {
         // warning rather than failing it, but do not let it pass in silence.
         let pruneNote = pruneFailures.isEmpty ? nil
             : "couldn't remove \(pruneFailures.count) old version\(pruneFailures.count == 1 ? "" : "s") — \(pruneFailures.joined(separator: "; "))"
-        let warning = [decision.warning, pruneNote].compactMap { $0 }.joined(separator: " · ")
+        let warning = ([decision.warning, pruneNote].compactMap { $0 } + pass.notes).joined(separator: " · ")
         return .finished(results: results, warning: warning.isEmpty ? nil : warning)
     }
 
@@ -596,8 +600,10 @@ public struct JobExecutor: Sendable {
         var dmgBlockers = DMGBlockers()
     }
 
-    /// With `forZip`, what a sealed zip can't hold (named pipes, sockets, devices).
-    static func directoryStats(_ url: URL, forDMG: Bool = false, forZip: Bool = false) -> DirectoryStats {
+    /// With `forZip`, what a sealed zip can't hold (named pipes, sockets, devices);
+    /// with `forMirror`, the same, which a live mirror leaves out (see MirrorCopy.isLeftOut).
+    static func directoryStats(_ url: URL, forDMG: Bool = false, forZip: Bool = false,
+                               forMirror: Bool = false) -> DirectoryStats {
         var out = DirectoryStats()
         let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
         let root = url.standardizedFileURL.path
@@ -609,7 +615,7 @@ public struct JobExecutor: Sendable {
             out.readable = false; return out
         }
         var groups = DMGBlockers.Membership()
-        let sealed = forDMG || forZip
+        let sealed = forDMG || forZip || forMirror
         if sealed { out.dmgBlockers.inspect(url.path, relative: url.lastPathComponent, groups: &groups, forDMG: forDMG) }   // copied too
         for case let u as URL in e {
             if sealed { out.dmgBlockers.inspect(u.path, relative: DMGBlockers.relative(u.path, to: root), groups: &groups, forDMG: forDMG) }
