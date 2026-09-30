@@ -67,9 +67,15 @@ public enum LibraryFolders {
         let mirror = !job.format.isSealed
         func ofItsKind(_ a: RestorableArchive) -> Bool { mirror ? a.format == .liveMirror && a.version == nil : a.format != .liveMirror }
         let entries = listing(destination)
+        // each archive as this library's, whatever folder it sits in: a version 1.5.6
+        // wrote into a mirror job's folder, checked there, then moved home, is still
+        // the one that was checked (see KnownGood)
+        func owned(_ found: [RestorableArchive]) -> [RestorableArchive] {
+            found.map { var a = $0; a.libraryKey = key; return a }
+        }
         var out: [(folder: URL, archives: [RestorableArchive])] = entries.filter { $0.identity?.key == key }
             .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
-            .map { ($0.url, RestoreDiscovery.scan($0.url, maxDepth: 1).filter(ofItsKind)) }
+            .map { ($0.url, owned(RestoreDiscovery.scan($0.url, maxDepth: 1).filter(ofItsKind))) }
         for e in entries where e.identity?.key != key && e.identity?.jobID != job.id
             && LibraryNames.same(e.url.lastPathComponent, library.displayName) {
             // another job's folder only if it's a mirror job's: the one kind of folder
@@ -78,7 +84,7 @@ public enum LibraryFolders {
             if e.identity != nil, mirror || !holdsMirror(e.url) { continue }
             let found = RestoreDiscovery.scan(e.url, maxDepth: 1)
             let mine = found.filter { ofItsKind($0) && isOf(library, bundle: $0.bundleName) }
-            if !mine.isEmpty || (e.identity == nil && found.isEmpty) { out.append((e.url, mine)) }
+            if !mine.isEmpty || (e.identity == nil && found.isEmpty) { out.append((e.url, owned(mine))) }
         }
         return out
     }
@@ -107,6 +113,14 @@ public enum LibraryFolders {
             }
         }
         return false
+    }
+
+    /// The key a check of `archive`, found by a scan, is recorded under: its folder's,
+    /// but none for a sealed version sitting in a folder that holds a mirror (one 1.5.6
+    /// wrote into a mirror job's folder, which moves home to its own library's folder
+    /// on the next run); a check without a key counts by the library's name.
+    public static func checkKey(of archive: RestorableArchive) -> String? {
+        archive.version != nil && holdsMirror(archive.libraryFolder) ? nil : archive.libraryKey
     }
 
     /// whether a folder holds a mirror at its top

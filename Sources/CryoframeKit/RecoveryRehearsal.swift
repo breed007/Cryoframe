@@ -89,14 +89,14 @@ public struct RecoveryRehearsal: Sendable {
             let a = selection.archive
             if isCloud, CloudFile.anyDataless(in: a.dir) {
                 guard materializeCloud else {
-                    return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: true,
+                    return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true,
                                           skipped: true, detail: "not downloaded — skipped")
                 }
                 CloudFile.materialize(a.dir)
             }
             let key = a.encrypted ? passphrase(a.displayName) : nil
             if a.encrypted, key == nil {
-                return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false, locked: true,
+                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false, locked: true,
                                       detail: "encrypted, and no passphrase is available on this Mac")
             }
             do {
@@ -105,7 +105,7 @@ public struct RecoveryRehearsal: Sendable {
                 let manifest = try ArchiveManifest.read(sidecar)
                 let report = try ChecksumVerifier().verify(manifest, in: a.dir)
                 guard report.passed else {
-                    return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false,
+                    return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
                                           detail: "checksums don't match — \(report.details)")
                 }
                 let opened = try ArchiveReader(runner: runner, freeSpace: freeSpace).open(a.archiveResult(), passphrase: key)
@@ -116,22 +116,22 @@ public struct RecoveryRehearsal: Sendable {
                 let look = a.format == .liveMirror ? opened.root.appendingPathComponent(a.bundleName) : opened.root
                 let entries = (try? FileManager.default.contentsOfDirectory(atPath: look.path)) ?? []
                 guard !entries.isEmpty else {
-                    return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false,
+                    return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
                                           detail: "opened, but there is nothing inside it")
                 }
-                return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: true,
+                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true,
                                       detail: "opened and readable")
             } catch let e as RestoreError {
                 // no room on the startup disk to join or unpack it says nothing about the
                 // archive (as for a drill, see RestoreDriller): skipped, and why
                 if case .notEnoughRoom = e {
-                    return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: true, skipped: true,
+                    return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true, skipped: true,
                                           detail: "not rehearsed: " + Self.reason(e, encrypted: a.encrypted))
                 }
-                return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false,
+                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
                                       detail: Self.reason(e, encrypted: a.encrypted))
             } catch {
-                return LibraryOutcome(library: a.libraryName, key: a.libraryKey, version: a.version, ok: false,
+                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
                                       detail: Self.reason(error, encrypted: a.encrypted))
             }
         }
