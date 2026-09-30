@@ -437,9 +437,8 @@ enum MirrorCopy {
     }
 
     /// Copy each of `rels` (sparse files) from `source` into `next` with its holes,
-    /// unless the copy there already is this file: its size and date, and not more
-    /// than 1 MiB more on disk than the library's. A dense copy (made by rsync on
-    /// macOS 15, before this) is made sparse again.
+    /// unless the copy there already is this file (see sparseCopyIsCurrent). A dense
+    /// copy (made by rsync on macOS 15, before this) is made sparse again.
     static func copySparse(_ rels: [String], from source: URL, to next: URL, control: RunControl?) throws {
         for rel in rels {
             if control?.isCancelled == true { throw CancelledError() }
@@ -452,19 +451,33 @@ enum MirrorCopy {
     }
 
     /// Whether a copy (`copy`) of a sparse library file (`library`) is left as it is by
-    /// copySparse: a file of its size and date, to the nanosecond, and not more than
-    /// 1 MiB more on disk. The read-back asks the same of the previous copy, the one
-    /// the new copy was cloned from, to tell which sparse files this run wrote.
+    /// copySparse: a file of its size and date, to the nanosecond, and on disk not
+    /// more than an eighth and 16 MiB more than the library's. The read-back asks the
+    /// same of the previous copy, the one the new copy was cloned from, to tell which
+    /// sparse files this run wrote.
+    ///
+    /// The room allowed is what a copy copyWithHoles wrote itself can take: APFS
+    /// fills in a hole of under 16 MiB between two writes (measured on macOS 26), and
+    /// a few MiB stay allocated after those are punched out again. A copy held to 1 MiB
+    /// more failed this on every run, so a small sparse file was written again, and
+    /// read back, on every run. A dense copy of a large sparse file still fails it.
     static func sparseCopyIsCurrent(_ copy: stat, of library: stat) -> Bool {
         copy.st_mode & S_IFMT == S_IFREG && copy.st_size == library.st_size
             && copy.st_mtimespec.tv_sec == library.st_mtimespec.tv_sec && copy.st_mtimespec.tv_nsec == library.st_mtimespec.tv_nsec
-            && copy.st_blocks <= library.st_blocks + 2048
+            && copy.st_blocks <= library.st_blocks + library.st_blocks / 8 + blkcnt_t(sparseSlack / 512)
     }
 
+    /// what a sparse file's copy may take on disk beyond its library file's (see
+    /// sparseCopyIsCurrent)
+    static let sparseSlack: Int64 = 16 << 20
+
     /// `from` copied to `to` as its data and holes: the copy is made its full length
-    /// (all hole), and only the ranges holding data are written. Made beside `to` and
-    /// renamed over it, so a failure leaves the copy as it was. Mode and dates follow;
-    /// attributes and the access list are copyAttributes'.
+    /// (all hole), and only the ranges holding data are written. APFS fills in a hole
+    /// of under 16 MiB it is asked to write past, so each is punched out again once the
+    /// range after it is written: a disk image with a little data every few MiB would
+    /// otherwise be copied at its full length. Made beside `to` and renamed over it, so
+    /// a failure leaves the copy as it was. Mode and dates follow; attributes and the
+    /// access list are copyAttributes'.
     static func copyWithHoles(_ from: String, _ to: String, _ st: stat) throws {
         func failed(_ what: String) -> Error {
             ArchiveError.toolFailed(tool: "copy", status: errno,
@@ -509,6 +522,11 @@ enum MirrorCopy {
                     written += w
                 }
                 pos += off_t(n)
+            }
+            // where it can't be punched (not APFS), the copy just takes more room
+            if data > at {
+                var hole = fpunchhole_t(fp_flags: 0, reserved: 0, fp_offset: at, fp_length: data - at)
+                _ = fcntl(dst, F_PUNCHHOLE, &hole)
             }
             at = end
         }
