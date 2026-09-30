@@ -131,35 +131,103 @@ public struct Redactor: Sendable {
         s = Self.replace(#"(?<![\w/\[~])[^\s/"'“”(),;:\[\]]+(?:/[^\s/"'“”(),;:\[\]]+)+/?"#, in: s) {
             $0.hasPrefix("/") || ["and/or", "ntfy/webhook", "files/attrs"].contains($0) ? $0 : "[path]"
         }
-        // 5. numbers: see keepsNumber
-        s = Self.replace(Self.numberRun, in: s) { Self.keepsNumber($0) ? $0 : "[…]" }
+        // 5. numbers: see keepsNumber. One kept on its own (not inside a file name,
+        //    say) is set aside with its unit, so step 6 doesn't judge its pieces again.
+        var kept: [String] = []
+        s = s.replacingOccurrences(of: Self.keptOpen, with: " ").replacingOccurrences(of: Self.keptClose, with: " ")
+        s = Self.replaceInContext(Self.numberRun, in: s) { found, before, after in
+            guard Self.keepsNumber(found) else { return "[…]" }
+            guard Self.standsAlone(before: before, after: after) else { return found }
+            kept.append(found)
+            return Self.keptOpen + String(kept.count - 1) + Self.keptClose
+        }
         // 6. then only words Cryoframe or macOS write, and numbers, are kept
-        return keepingKnownWords(s)
+        s = keepingKnownWords(s)
+        for (i, number) in kept.enumerated().reversed() {
+            s = s.replacingOccurrences(of: Self.keptOpen + String(i) + Self.keptClose, with: number)
+        }
+        return s
     }
 
-    /// A number with whatever follows it that makes it one number: groups of digits
-    /// joined by a space, dash, slash, dot or comma ("4111 1111 1111 1111",
-    /// "(404) 555-1234"), and a unit. A date, with its time, comes first as a whole.
-    static let numberRun = #"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)?|(?<![\p{L}\p{N}_.,:])\(?[0-9]+(?:\)?[ \-/.,]\(?[0-9]+)*\)?"#
-        + #"(?:\s?(?i:%|[kmgt]i?b|bytes?|b|files?|items?|parts?|blocks?|folders?|versions?|times|ms|s|sec|seconds?|min|minutes?|h|hours?|days?|weeks?)(?![\p{L}\p{N}]))?"#
+    /// what a number set aside in step 5 is held between (private-use characters, not
+    /// letters or digits, so step 6 passes over them)
+    static let keptOpen = "\u{E000}", keptClose = "\u{E001}"
 
-    /// Whether a number is kept. The ones a fix needs are short, or carry a unit:
-    /// sizes, counts, durations, error and status codes, versions, dates and times.
-    /// A long run of digits, or digits in groups, is how a social security, phone or
-    /// card number is written, and a file named by one names who it is about.
+    /// Whether a number found between `before` and `after` stands on its own, not
+    /// inside a word (a file name: "report-2026.pdf"), which step 6 judges whole.
+    static func standsAlone(before: String, after: String) -> Bool {
+        before.range(of: #"[\p{L}\p{N}][\p{L}\p{N}'’_.\-]*$"#, options: .regularExpression) == nil
+            && after.range(of: #"^[’'_.\-]*[\p{L}\p{N}]"#, options: .regularExpression) == nil
+    }
+
+    /// A number, however its digit groups are written apart, with its unit. Digit
+    /// groups are one number when nothing but spaces (any kind, and tabs) and at most
+    /// three marks stand between them: "4111 1111 1111 1111", "(404) 555 - 1234",
+    /// "123\u{00A0}45\u{00A0}6789", "4111–5222", "12.345.678", "2:00". What ends a
+    /// clause or a list keeps numbers apart: ";", "!", "?", a comma before a space,
+    /// brackets and quotes. A date, with its time, comes first as a whole.
+    static let numberRun: String = {
+        let space = #"[\t\p{Zs}]"#
+        let mark = #"(?:,(?![\t\p{Zs}])|[^\p{L}\p{N}\s,;!?%\[\]{}<>"“”'’])"#
+        let joiner = "(?:\(space){1,8}(?:\(mark)\(space){0,8}){0,3}|(?:\(mark)\(space){0,8}){1,3})"
+        let units = #"(?i:%|[kmgtp]i?b|bytes?|b|files?|items?|parts?|blocks?|folders?|versions?|times|ms|s|secs?|seconds?|mins?|minutes?|h|hrs?|hours?|days?|weeks?)"#
+        return #"(?<![\p{L}\p{N}_.,:])(?:[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)?(?![0-9])"#
+            + "|\\(?[0-9]+(?:\(joiner)[0-9]+)*\\)?(?:\(space)?\(units)(?![\\p{L}\\p{N}]))?)"
+    }()
+
+    /// Whether a number is kept. The ones a fix needs are short, or are an amount of
+    /// something: sizes, counts, durations, error and status codes, versions, dates
+    /// and times. A long run of digits, or of digit groups, is how a social security,
+    /// phone, card or account number is written, and a file named by one names who it
+    /// is about. So a number is kept when it has at most six digits, is a date, is a
+    /// version (up to eight digits; not groups of three after the first, which is
+    /// how "12.345.678" writes an ID), or is one number with a unit that it can
+    /// plausibly be an amount of (see `plausible`). A unit never costs a short number.
     static func keepsNumber(_ text: String) -> Bool {
         if text.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)?$"#, options: .regularExpression) != nil { return true }
-        // the number, without a unit after it
-        guard let m = text.range(of: #"^\(?[0-9][0-9 ()\-/.,]*"#, options: .regularExpression) else { return false }
-        let number = text[m].trimmingCharacters(in: CharacterSet(charactersIn: " ()"))
-        let hasUnit = !text[m.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty
-        let digits = number.filter { ("0"..."9").contains($0) }.count
-        if !number.contains(where: { !("0"..."9").contains($0) }) { return digits <= 6 || hasUnit }   // 72000, 1234567 bytes
-        if number.range(of: #"^[0-9]+(?:\.[0-9]+)+$"#, options: .regularExpression) != nil { return digits <= 8 }    // 1.6.0, 3.5, 26.7
-        if number.range(of: #"^[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?$"#, options: .regularExpression) != nil {         // 72,000
-            return digits <= 6 || hasUnit
+        // the number (through its last digit, and a closing parenthesis) and its unit
+        guard let last = text.lastIndex(where: { ("0"..."9").contains($0) }) else { return false }
+        let number = String(text[...last])
+        let unit = text[text.index(after: last)...].trimmingCharacters(in: CharacterSet(charactersIn: ")").union(.whitespaces)).lowercased()
+        let groups = number.split(whereSeparator: { !("0"..."9").contains($0) }).map(String.init)
+        let joins = number.drop(while: { !("0"..."9").contains($0) }).split(whereSeparator: { ("0"..."9").contains($0) }).map(String.init)
+        let digits = groups.reduce(0) { $0 + $1.count }
+        if digits <= 6 { return true }
+        // one number: plain, with thousands commas, or with a decimal point
+        let thousands = groups.count > 1 && groups[0].count <= 3
+            && joins.dropLast(joins.last == "." ? 1 : 0).allSatisfy { $0 == "," }
+            && groups.dropFirst().dropLast(joins.last == "." ? 1 : 0).allSatisfy { $0.count == 3 }
+        let decimal = joins == ["."]
+        if groups.count == 1 || thousands || decimal {
+            let whole = groups.dropLast(decimal || (thousands && joins.last == ".") ? 1 : 0).joined()
+            let fraction = decimal || (thousands && joins.last == ".") ? "." + groups.last! : ""
+            if let value = Double(whole + fraction), !unit.isEmpty, plausible(value, unit: unit) { return true }
+            return decimal && digits <= 8                                                        // 3.14159
         }
-        return digits <= 6                                                                                    // 3/5, 12-34
+        // a version: dotted groups, not thousands ("12.345.678")
+        if joins.allSatisfy({ $0 == "." }) {
+            let groupsOfThree = groups[0].count <= 3 && groups.dropFirst().allSatisfy { $0.count == 3 }
+            return !groupsOfThree && digits <= 8
+        }
+        return false
+    }
+
+    /// Whether `value` is a plausible amount of `unit`: a size up to a petabyte, a
+    /// count up to a billion, a time up to about four months (10 million seconds), a
+    /// percentage up to 10,000. An unknown unit makes nothing plausible.
+    static func plausible(_ value: Double, unit: String) -> Bool {
+        let bytes: [String: Double] = ["b": 1, "byte": 1, "bytes": 1, "kb": 1e3, "kib": 1024, "mb": 1e6, "mib": 1_048_576,
+                                       "gb": 1e9, "gib": 1_073_741_824, "tb": 1e12, "tib": 1_099_511_627_776, "pb": 1e15, "pib": 1_125_899_906_842_624]
+        let seconds: [String: Double] = ["ms": 0.001, "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1, "min": 60, "mins": 60,
+                                         "minute": 60, "minutes": 60, "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+                                         "day": 86_400, "days": 86_400, "week": 604_800, "weeks": 604_800]
+        let counts: Set<String> = ["file", "files", "item", "items", "part", "parts", "block", "blocks", "folder", "folders",
+                                   "version", "versions", "times"]
+        if let m = bytes[unit] { return value * m <= 1e15 }
+        if let m = seconds[unit] { return value * m <= 1e7 }
+        if counts.contains(unit) { return value <= 1e9 }
+        if unit == "%" { return value <= 10_000 }
+        return false
     }
 
     /// every word that isn't Cryoframe's own, macOS's, a stand-in's, or a number,
@@ -185,7 +253,7 @@ public struct Redactor: Sendable {
         // numbers, sizes, dates and times, counts (see keepsNumber), a unit joined on
         if let n = t.range(of: #"^[0-9][0-9.,\-]*"#, options: .regularExpression),
            t[n.upperBound...].range(of: #"^(?:%|[KMGT]i?B|[KMGT]|s|ms|h|x)?$"#, options: .regularExpression) != nil {
-            return Self.keepsNumber(String(t[n]) + (n.upperBound < t.endIndex ? " B" : ""))
+            return Self.keepsNumber(String(t[n]) + (n.upperBound < t.endIndex ? " " + t[n.upperBound...] : ""))
         }
         if Self.toolTokens.contains(t.lowercased()) { return true }
         // A letter outside ASCII: a name with an accent or in another script. The
@@ -201,6 +269,19 @@ public struct Redactor: Sendable {
         return parts.allSatisfy {
             Self.isVocabularyWord($0) && (Self.productWords.contains($0) || Self.systemWords.contains($0) || standInWords.contains($0))
         }
+    }
+
+    /// `replace`, with the text before and after each match
+    static func replaceInContext(_ pattern: String, in text: String, with make: (String, String, String) -> String) -> String {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return text }
+        let ns = text as NSString
+        var out = "", last = 0
+        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+            out += make(ns.substring(with: m.range), ns.substring(to: m.range.location), ns.substring(from: m.range.location + m.range.length))
+            last = m.range.location + m.range.length
+        }
+        return out + ns.substring(from: last)
     }
 
     static func replace(_ pattern: String, in text: String, with make: (String) -> String) -> String {
@@ -334,8 +415,8 @@ public enum DiagnosticsReport {
 
         add("Cryoframe diagnostics")
         add("Made \(when(input.now)). Jobs, folders and destinations are numbered instead of named. Messages keep only the")
-        add("words Cryoframe and macOS use in their own messages, and short numbers; paths, web addresses and everything")
-        add("else become [path], [url] or […].")
+        add("words Cryoframe and macOS use in their own messages, short numbers, and sizes, counts and times; paths, web")
+        add("addresses and everything else become [path], [url] or […].")
         add("")
         add("App: \(input.appVersion)")
         add("Helper: \(input.helperVersion ?? "not installed or not answering")")

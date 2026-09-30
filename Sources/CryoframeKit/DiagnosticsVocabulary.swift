@@ -89,6 +89,7 @@ below
 beside
 bigger
 bin
+block
 blocks
 box
 build
@@ -97,6 +98,7 @@ business
 busy
 but
 by
+byte
 bytes
 caches
 called
@@ -311,9 +313,11 @@ fth
 full
 fully
 garageband
+gb
 generic
 get
 gfs
+gib
 go
 goes
 good
@@ -345,6 +349,8 @@ hourly
 hourminutesecond
 hours
 how
+hr
+hrs
 human
 icloud
 id
@@ -392,14 +398,17 @@ jobs
 join
 joined
 json
+kb
 keep
 keepparent
 keeps
 kept
 key
+kib
 kind
 kmdlabel
 kmgt
+kmgtp
 known
 large
 last
@@ -453,12 +462,16 @@ mark
 master
 match
 may
+mb
 me
 messages
 metadata
+mib
 microsoft
 min
 mine
+mins
+minute
 minutes
 mirror
 mirror's
@@ -555,6 +568,7 @@ passwords
 path
 paths
 paused
+pb
 pending
 permission
 permissions
@@ -562,6 +576,7 @@ permitted
 personal
 photos
 photoslibrary
+pib
 pictures
 pid
 pipe
@@ -675,7 +690,9 @@ scratch
 scratchbase
 sealed
 sec
+second
 seconds
+secs
 sectors
 see
 self
@@ -697,6 +714,7 @@ shown
 signed
 since
 size
+sizes
 skipped
 snap
 snapshot
@@ -745,6 +763,7 @@ tags
 taken
 takes
 target
+tb
 tell
 temp
 temporarily
@@ -763,6 +782,7 @@ they
 they're
 this
 through
+tib
 tidied
 tidying
 time
@@ -843,6 +863,7 @@ wasn't
 way
 web
 webhook
+week
 weekly
 weeks
 well
@@ -887,5 +908,6 @@ z'
 za
 zip
 zipinfo
+zs
 """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init))
 }
