@@ -125,12 +125,12 @@ public enum AlertPolicy {
 
     /// nil when this health check isn't worth an alert.
     public static func payload(forHealth record: HealthRecord, everyEvent: Bool) -> Payload? {
-        // every copy was a cloud placeholder nobody downloaded: benign, and not the
-        // same thing as a destination being offline.
-        if record.archivesChecked == 0 && record.skipped > 0 {
+        // every copy was skipped (a cloud placeholder nobody downloaded, a drill without
+        // room to join or unpack): not the same thing as a destination being offline.
+        if record.archivesChecked == 0, let skip = record.skipPhrase {
             guard everyEvent else { return nil }
             return Payload(title: "Cryoframe — archive health",
-                           body: "☁︎ \(record.jobName): \(record.skipped) cloud archive(s) not downloaded — skipped",
+                           body: "☁︎ \(record.jobName): \(skip) — skipped",
                            high: false, tags: "cloud")
         }
         if record.passed && record.archivesChecked > 0 {

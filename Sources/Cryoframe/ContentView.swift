@@ -410,9 +410,9 @@ private struct JobRow: View {
             }.font(.caption2)
         } else if let h = model.lastHealth[job.id] {
             HStack(spacing: 6) {
-                if h.archivesChecked == 0 && h.skipped > 0 {
+                if h.archivesChecked == 0, let skip = h.skipPhrase {
                     Image(systemName: "cloud").foregroundStyle(.secondary)
-                    Text("\(h.skipped) cloud archive\(h.skipped == 1 ? "" : "s") not downloaded").foregroundStyle(.secondary)
+                    Text(skip).foregroundStyle(.secondary)
                 } else if h.archivesChecked == 0 {
                     Image(systemName: "questionmark.circle.fill").foregroundStyle(.cryoWarn)
                     Text("No archives found to check").foregroundStyle(.secondary)

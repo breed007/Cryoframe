@@ -22,7 +22,12 @@ import Foundation
 
 public struct RecoveryRehearsal: Sendable {
     let runner: CommandRunner
-    public init(runner: CommandRunner = ProcessCommandRunner()) { self.runner = runner }
+    /// free bytes on the drive holding a folder (nil: unknown); injectable for tests
+    let freeSpace: @Sendable (URL) -> UInt64?
+    public init(runner: CommandRunner = ProcessCommandRunner(),
+                freeSpace: @escaping @Sendable (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) }) {
+        self.runner = runner; self.freeSpace = freeSpace
+    }
 
     public struct LibraryOutcome: Sendable, Equatable {
         public let library: String
@@ -101,7 +106,7 @@ public struct RecoveryRehearsal: Sendable {
                     return LibraryOutcome(library: a.libraryName, version: a.version, ok: false,
                                           detail: "checksums don't match — \(report.details)")
                 }
-                let opened = try ArchiveReader(runner: runner).open(a.archiveResult(), passphrase: key)
+                let opened = try ArchiveReader(runner: runner, freeSpace: freeSpace).open(a.archiveResult(), passphrase: key)
                 defer { opened.close() }
                 // A mirror holds the library at <volume>/<name>, which is what a restore
                 // copies. Its volume root is never empty (.fseventsd), so looking there
@@ -114,6 +119,15 @@ public struct RecoveryRehearsal: Sendable {
                 }
                 return LibraryOutcome(library: a.libraryName, version: a.version, ok: true,
                                       detail: "opened and readable")
+            } catch let e as RestoreError {
+                // no room on the startup disk to join or unpack it says nothing about the
+                // archive (as for a drill, see RestoreDriller): skipped, and why
+                if case .notEnoughRoom = e {
+                    return LibraryOutcome(library: a.libraryName, version: a.version, ok: true, skipped: true,
+                                          detail: "not rehearsed: " + Self.reason(e, encrypted: a.encrypted))
+                }
+                return LibraryOutcome(library: a.libraryName, version: a.version, ok: false,
+                                      detail: Self.reason(e, encrypted: a.encrypted))
             } catch {
                 return LibraryOutcome(library: a.libraryName, version: a.version, ok: false,
                                       detail: Self.reason(error, encrypted: a.encrypted))

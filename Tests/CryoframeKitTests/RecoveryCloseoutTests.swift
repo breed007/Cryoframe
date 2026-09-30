@@ -44,6 +44,54 @@ private final class Calls: @unchecked Sendable {
 
 @Suite(.serialized) struct RecoveryCloseoutTests {
 
+    // MARK: drills and rehearsals without room
+
+    // A zip is unpacked on the startup disk; with no room there the drill is refused
+    // before anything is written. That says nothing about the archive: a skipped
+    // check that says why, not a failure blaming the passphrase (and an alert).
+    @Test func aDrillWithoutRoomOnTheStartupDiskIsSkippedNotFailed() throws {
+        let base = folder("drill")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let job = try zippedNotes(base)
+        let report = RestoreDriller(freeSpace: { _ in 1024 }).drill(job: job)
+        try #require(report.checks.count == 1)
+        let check = report.checks[0]
+        #expect(check.skipped, "\(check.detail)")
+        #expect(report.passed)
+        #expect(check.detail.contains("not enough room"), "\(check.detail)")
+        #expect(!check.detail.contains("passphrase"))
+        let record = HealthRecord.from(job: job, report: report, at: Date(), kind: "drill")
+        #expect(record.failures.isEmpty)
+        let phrase = try #require(record.skipPhrase)
+        #expect(phrase.contains("not enough room") && !phrase.contains("cloud"), "\(phrase)")
+        // with room, the same archive drills clean
+        let roomy = RestoreDriller(freeSpace: { _ in 1 << 40 }).drill(job: job)
+        #expect(roomy.passed && roomy.checks.allSatisfy { !$0.skipped })
+    }
+
+    @Test func aRehearsalWithoutRoomIsSkippedNotFailed() throws {
+        let base = folder("rehearse")
+        defer { try? FileManager.default.removeItem(at: base) }
+        _ = try zippedNotes(base)
+        let report = RecoveryRehearsal(freeSpace: { _ in 1024 }).rehearse(destination: base.appendingPathComponent("dest"),
+                                                                           expecting: ["Notes"])
+        try #require(report.outcomes.count == 1)
+        #expect(report.outcomes[0].skipped && report.outcomes[0].ok, "\(report.outcomes[0].detail)")
+        #expect(report.asHealthReport(multiDestination: false).passed)
+    }
+
+    // A record from before the reasons were kept, a cloud skip, and an open mirror's
+    // unchecked copy (which used to be called "not downloaded" too).
+    @Test func aSkipIsWordedByWhatItWas() {
+        func record(_ notes: [String], skipped: Int) -> HealthRecord {
+            HealthRecord(jobID: "j", jobName: "J", checkedAt: Date(), archivesChecked: 0, failures: [], skipped: skipped, skipNotes: notes)
+        }
+        #expect(record([], skipped: 2).skipPhrase == "2 cloud archives not downloaded")
+        #expect(record(["Photos: not downloaded from iCloud Drive — skipped"], skipped: 1).skipPhrase == "1 cloud archive not downloaded")
+        #expect(record(["Photos: \(MirrorSeal.uncheckedDetail)"], skipped: 1).skipPhrase?.hasPrefix("1 not checked: Photos: ") == true)
+        #expect(record([], skipped: 0).skipPhrase == nil)
+    }
+
     // MARK: a zip whose listing can't be read
 
     // A zip can unpack to any size; its own size is no bound. When zipinfo can't read

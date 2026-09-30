@@ -77,7 +77,7 @@ enum Notifier {
         let content = UNMutableNotificationContent()
         content.title = "Cryoframe — \(record.jobName)"
         if allSkipped {
-            content.body = "☁︎ \(record.skipped) cloud archive\(record.skipped == 1 ? "" : "s") not downloaded — skipped"
+            content.body = "☁︎ \(record.skipPhrase ?? "\(record.skipped) not checked") — skipped"
         } else if record.archivesChecked == 0 {
             content.body = "⚠️ no archives found to check — is the target connected?"
         } else if record.passed {

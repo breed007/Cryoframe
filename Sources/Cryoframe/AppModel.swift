@@ -362,7 +362,7 @@ final class AppModel: ObservableObject {
         let when = r.checkedAt.formatted(date: .abbreviated, time: .shortened)
         let glyph = r.isRehearsal ? "🎯" : (r.isDrill ? "🧪" : "🔍")
         let verb = r.isRehearsal ? "rehearsed clean" : (r.isDrill ? "drilled clean" : "verified")
-        let skip = r.skipped > 0 ? " (\(r.skipped) not downloaded)" : ""
+        let skip = r.skipPhrase.map { " (\($0))" } ?? ""
         return r.passed
             ? "\(glyph) \(r.jobName): \(r.archivesChecked) archive\(r.archivesChecked == 1 ? "" : "s") \(verb)\(skip) · \(when)"
             : "⚠︎ \(r.jobName): \(r.failures.count) \(r.failureNoun) check(s) failed\(skip) · \(when)"

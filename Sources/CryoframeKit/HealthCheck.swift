@@ -112,7 +112,10 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
     public var archivesChecked: Int
     public var failures: [String]      // human lines: "Photos (2026-06-24): checksum mismatch …"
     public var kind: String            // "checksum" (re-hash) | "drill" (restore + reopen)
-    public var skipped: Int            // cloud placeholders not downloaded, so not checked
+    public var skipped: Int            // not checked: cloud placeholders not downloaded, drills without room
+    /// why each skipped archive wasn't checked, as "Library (version): why" lines
+    /// (empty on records before 1.6, when a skip was always a cloud placeholder)
+    public var skipNotes: [String]
     public var verified: [VerifiedArchive]   // per-version outcomes (empty on pre-1.4 records)
     public var trigger: String              // "manual" (you asked) | "scheduled" (the agent) — decides who alerts
 
@@ -147,13 +150,27 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
 
     public init(id: String = UUID().uuidString, jobID: String, jobName: String, checkedAt: Date,
                 archivesChecked: Int, failures: [String], kind: String = "checksum", skipped: Int = 0,
-                verified: [VerifiedArchive] = [], trigger: String = "manual") {
+                verified: [VerifiedArchive] = [], trigger: String = "manual", skipNotes: [String] = []) {
         self.id = id; self.jobID = jobID; self.jobName = jobName; self.checkedAt = checkedAt
         self.archivesChecked = archivesChecked; self.failures = failures; self.kind = kind
-        self.skipped = skipped; self.verified = verified; self.trigger = trigger
+        self.skipped = skipped; self.verified = verified; self.trigger = trigger; self.skipNotes = skipNotes
     }
 
-    enum CodingKeys: String, CodingKey { case id, jobID, jobName, checkedAt, archivesChecked, failures, kind, skipped, verified, trigger }
+    /// What the skipped archives were, in a few words: "2 cloud archives not
+    /// downloaded" when each was a cloud placeholder (or the record predates the
+    /// reasons), else "1 not checked: " and the first reason. nil when none was skipped.
+    public var skipPhrase: String? {
+        guard skipped > 0 else { return nil }
+        let cloud = skipNotes.allSatisfy { $0.contains(HealthRecord.notDownloaded) }
+        if cloud { return "\(skipped) cloud archive\(skipped == 1 ? "" : "s") not downloaded" }
+        let why = skipNotes.first { !$0.contains(HealthRecord.notDownloaded) } ?? ""
+        return "\(skipped) not checked: \(why)"
+    }
+
+    /// how a cloud placeholder's skip is worded (see HealthChecker, RestoreDriller)
+    static let notDownloaded = "not downloaded"
+
+    enum CodingKeys: String, CodingKey { case id, jobID, jobName, checkedAt, archivesChecked, failures, kind, skipped, verified, trigger, skipNotes }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -167,25 +184,27 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
         skipped = try c.decodeIfPresent(Int.self, forKey: .skipped) ?? 0          // pre-1.2 records
         verified = try c.decodeIfPresent([VerifiedArchive].self, forKey: .verified) ?? []   // pre-1.4 records
         trigger = try c.decodeIfPresent(String.self, forKey: .trigger) ?? "manual"          // pre-1.5 records
+        skipNotes = try c.decodeIfPresent([String].self, forKey: .skipNotes) ?? []           // pre-1.6 records
     }
 
     public static func from(job: BackupJob, report: HealthReport, at date: Date,
                             kind: String = "checksum", id: String = UUID().uuidString,
                             trigger: String = "manual") -> HealthRecord {
         let checked = report.checks.filter { !$0.skipped }
+        func line(_ c: ArchiveCheck) -> String {
+            let v = c.version.map { " (" + VersionStamp.string($0) + ")" } ?? ""
+            let d = c.destination.map { " → " + $0 } ?? ""
+            return "\(c.library)\(v)\(d): \(c.detail)"
+        }
         return HealthRecord(id: id, jobID: job.id, jobName: job.name, checkedAt: date,
                      archivesChecked: checked.count,
-                     failures: checked.filter { !$0.passed }.map { c in
-                        let v = c.version.map { " (" + VersionStamp.string($0) + ")" } ?? ""
-                        let d = c.destination.map { " → " + $0 } ?? ""
-                        return "\(c.library)\(v)\(d): \(c.detail)"
-                     }, kind: kind, skipped: report.checks.filter(\.skipped).count,
+                     failures: checked.filter { !$0.passed }.map(line), kind: kind, skipped: report.checks.filter(\.skipped).count,
                      // keep every check (including skipped) so the UI can tell
                      // "verified" from "never checked" from "not downloaded".
                      verified: report.checks.map {
                         VerifiedArchive(library: $0.library, version: $0.version,
                                         passed: $0.passed && !$0.skipped, skipped: $0.skipped)
-                     }, trigger: trigger)
+                     }, trigger: trigger, skipNotes: report.checks.filter(\.skipped).map(line))
     }
 }
 

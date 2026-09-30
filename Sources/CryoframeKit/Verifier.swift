@@ -82,11 +82,17 @@ public struct ChecksumVerifier: Sendable {
 
 public struct StrongVerifier: Sendable {
     let runner: CommandRunner
-    public init(runner: CommandRunner = ProcessCommandRunner()) { self.runner = runner }
+    /// free bytes on the drive holding a folder (nil: unknown), for the room an open
+    /// needs on the startup disk; injectable for tests
+    let freeSpace: @Sendable (URL) -> UInt64?
+    public init(runner: CommandRunner = ProcessCommandRunner(),
+                freeSpace: @escaping @Sendable (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) }) {
+        self.runner = runner; self.freeSpace = freeSpace
+    }
 
     public func verify(_ result: ArchiveResult, type: ContentType, passphrase: String? = nil) throws -> VerificationReport {
         let fm = FileManager.default
-        let opened = try ArchiveReader(runner: runner).open(result, passphrase: passphrase)
+        let opened = try ArchiveReader(runner: runner, freeSpace: freeSpace).open(result, passphrase: passphrase)
         defer { opened.close() }
 
         guard let libRoot = locateLibraryRoot(under: Self.searchRoot(opened.root, result, fm: fm),
