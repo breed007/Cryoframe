@@ -96,9 +96,11 @@ public enum LibraryFolderName {
         return s
     }
 
-    /// whether `folder` is named as the library's folder may be: its plain name or
-    /// `<name> [<short id>]`
+    /// whether `folder` is named as the library's folder may be: its plain name, its
+    /// name exactly as 1.5 wrote it, or `<name> [<short id>]`. 1.5 named a folder by
+    /// the library's name as it was ("Taxes 2024:25", ".config"); taken over in place,
+    /// it keeps that name, or a return to 1.5.6 wouldn't find it and would start over.
     static func fits(_ folder: String, name: String, key: String) -> Bool {
-        LibraryNames.same(folder, safe(name)) || LibraryNames.same(folder, make(name: name, key: key))
+        LibraryNames.same(folder, name) || LibraryNames.same(folder, safe(name)) || LibraryNames.same(folder, make(name: name, key: key))
     }
 }
