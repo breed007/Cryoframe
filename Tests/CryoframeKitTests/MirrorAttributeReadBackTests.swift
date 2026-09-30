@@ -140,6 +140,20 @@ private func inMirror<T>(_ bundle: URL, _ rel: String, _ body: (String) -> T) th
 }
 
 extension MirrorAttributeReadBackTests {
+    // copyfile(3) re-stamps a download's quarantine on every copy (flags, time and
+    // agent change; the id stays). The copy gets the library's value byte for byte.
+    @Test func aDownloadsQuarantineIsCopiedExactly() throws {
+        let dir = attrDir("qtn")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.pdf"), b = dir.appendingPathComponent("b.pdf")
+        for f in [a, b] { try Data("pdf".utf8).write(to: f) }
+        let value = Array("0083;66f9a1b2;Safari;8E3C2F7A-1B2C-4D5E-9F00-112233445566".utf8)
+        #expect(setxattr(a.path, "com.apple.quarantine", value, value.count, 0, 0) == 0)
+        try MirrorCopy.copyAttributes(from: a, to: b)
+        #expect(MirrorCopy.attributeValue(b.path, "com.apple.quarantine") == value)
+        #expect(MirrorCopy.differentAttributes(a.path, b.path) == nil)
+    }
+
     // A resource fork whose write is lost after the run has finished writing: the
     // read-back reads it from the drive, finds it neither the old fork nor the new,
     // and nothing is put in place.

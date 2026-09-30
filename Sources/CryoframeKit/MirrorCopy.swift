@@ -469,9 +469,22 @@ enum MirrorCopy {
             throw ArchiveError.toolFailed(tool: "copyfile", status: errno,
                                           stderr: "\(src.lastPathComponent): couldn't copy its attributes (\(String(cString: strerror(errno))))")
         }
-        if let kept = attributeNames(src.path).map(Set.init) {      // unreadable: leave the copy's alone
+        if let names = attributeNames(src.path) {                    // unreadable: leave the copy's alone
+            let kept = Set(names)
             for name in attributeNames(dst.path) ?? [] where !kept.contains(name) {
                 _ = removexattr(dst.path, name, XATTR_NOFOLLOW)
+            }
+            // copyfile doesn't copy every attribute as it is. It re-stamps
+            // com.apple.quarantine on every copy (measured: "0083;66f9a1b2;Safari;<id>"
+            // arrives as "0283;<time of the copy>;;<id>"), so every downloaded file read
+            // back different on every run. The library's own bytes, written as they
+            // are, stay so through the image (measured across a detach and attach).
+            for name in names {
+                guard let value = attributeValue(src.path, name), attributeValue(dst.path, name) != value else { continue }
+                guard setxattr(dst.path, name, value, value.count, 0, XATTR_NOFOLLOW) == 0 else {
+                    throw ArchiveError.toolFailed(tool: "setxattr", status: errno,
+                                                  stderr: "\(src.lastPathComponent): couldn't copy its \(name) attribute (\(String(cString: strerror(errno))))")
+                }
             }
         }
         if accessList(src.path) == nil, accessList(dst.path) != nil { clearACL(dst.path) }
