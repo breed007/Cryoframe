@@ -49,6 +49,7 @@ final class JobDraft: ObservableObject {
     // MARK: mutators
 
     func toggleLibrary(_ id: String) { state.toggleLibrary(id) }
+    func apply(_ preset: JobPreset) { state.apply(preset) }
     func toggleTarget(_ id: String) { state.toggleTarget(id) }
 
     func addLibrary(_ ct: ContentType, at url: URL) {

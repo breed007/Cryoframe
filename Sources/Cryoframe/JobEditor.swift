@@ -62,6 +62,7 @@ struct JobEditor: View {
             .padding([.horizontal, .top], 20).padding(.bottom, 8)
 
             Form {
+                if editing == nil { quickStartSection }
                 backUpSection
                 copiesSection
                 whenSection
@@ -119,6 +120,40 @@ struct JobEditor: View {
                            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                            onDeleted: { deleting = nil; isPresented = false })
         }
+    }
+
+    // MARK: Quick start (a new job)
+
+    private var quickStartSection: some View {
+        Section {
+            LazyVGrid(columns: [.init(.flexible()), .init(.flexible())], spacing: 8) {
+                ForEach(JobPreset.all) { p in presetCard(p) }
+            }
+        } header: { Text("Quick start") }
+        footer: { Text("Sets what to back up, what to keep and when. You can change any of it below.").font(.caption).foregroundStyle(.secondary) }
+    }
+
+    private func presetCard(_ p: JobPreset) -> some View {
+        let active = draft.state.matches(p)
+        return Button { draft.apply(p) } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: p.systemImage).font(.system(size: 15, weight: .medium)).foregroundStyle(.tint).frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(p.title).font(.callout.bold())
+                    Text(p.subtitle).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(active ? Color.cryoAccent.opacity(0.12) : Color.cryoElevated))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(active ? Color.cryoAccent : Color.cryoLine, lineWidth: active ? 1.5 : 1)
+                .allowsHitTesting(false))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(p.title). \(p.subtitle)")
+        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
     }
 
     // MARK: Back up
@@ -211,6 +246,17 @@ struct JobEditor: View {
             issueList(destinationIssues)
             ForEach(draft.pathIssues, id: \.self) { m in
                 Label(m, systemImage: "xmark.octagon.fill").font(.caption).foregroundStyle(.cryoCrit)
+            }
+            if editing == nil, let note = roomNote {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: note.mayNotFit ? "exclamationmark.triangle.fill" : "info.circle")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(note.line)
+                        if let advice = note.advice { Text(advice) }
+                    }
+                }
+                .font(.caption).foregroundStyle(note.mayNotFit ? Color.cryoWarn : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             if draft.hasDuplicateDestinations {
                 Label("Two destinations are the same folder; it gets one copy.", systemImage: "exclamationmark.triangle.fill")
@@ -332,6 +378,12 @@ struct JobEditor: View {
             return id
         }
         return nil
+    }
+
+    /// about how much there is to back up, against the room on the main destination
+    private var roomNote: RoomNote? {
+        let free = draft.primaryTarget.flatMap { model.volumeInfo(for: $0.destinationDir)?.free }
+        return draft.state.roomNote(sizes: model.librarySizes, free: free)
     }
 
     // MARK: When
