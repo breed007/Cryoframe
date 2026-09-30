@@ -173,30 +173,34 @@ public struct KeyCheck: Sendable {
            r.stdout.contains("encrypted: NO") {
             return .damaged("it doesn't read as an encrypted disk image any more, so it is damaged")
         }
-        guard let before = MirrorMounts.attachedImagesIfKnown(runner: look).map({ Set($0.flatMap(\.devices)) }) else { return cantTell }
-        let result: CommandResult
-        do {
-            result = try DiskImageGate.serialized {
-                try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach", "-nomount", "-readonly", "-noverify", "-noautofsck",
-                                                                "-stdinpass", image.path], stdin: Data(passphrase.utf8))
+        // attached without mounting, so held from before the attach until it is
+        // detached (see ImageLock)
+        return ImageLock.attaching(image, runner: runner) { () -> Proof in
+            guard let before = MirrorMounts.attachedImagesIfKnown(runner: look).map({ Set($0.flatMap(\.devices)) }) else { return cantTell }
+            let result: CommandResult
+            do {
+                result = try DiskImageGate.serialized {
+                    try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach", "-nomount", "-readonly", "-noverify", "-noautofsck",
+                                                                    "-stdinpass", image.path], stdin: Data(passphrase.utf8))
+                }
+            } catch {
+                return .unchecked(error.localizedDescription)
             }
-        } catch {
-            return .unchecked(error.localizedDescription)
+            guard result.ok else {
+                if result.stderr.localizedCaseInsensitiveContains("Authentication error") { return .wrongKey }
+                let line = result.stderr.split(separator: "\n").last.map(String.init) ?? "hdiutil failed"
+                return .unchecked(line.trimmingCharacters(in: .whitespaces))
+            }
+            // the first device listed is the image's own disk; detaching it detaches the rest
+            guard let device = result.stdout.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }).map(String.init),
+                  !before.contains(device) else {
+                return .unchecked("it was opened elsewhere on this Mac while it was being tried, so it is tried when it is restored")
+            }
+            if (try? look.runRetryingBusy("/usr/bin/hdiutil", ["detach", device], stdin: nil))?.ok != true {
+                _ = try? look.run("/usr/bin/hdiutil", ["detach", "-force", device], stdin: nil)
+            }
+            return .opens
         }
-        guard result.ok else {
-            if result.stderr.localizedCaseInsensitiveContains("Authentication error") { return .wrongKey }
-            let line = result.stderr.split(separator: "\n").last.map(String.init) ?? "hdiutil failed"
-            return .unchecked(line.trimmingCharacters(in: .whitespaces))
-        }
-        // the first device listed is the image's own disk; detaching it detaches the rest
-        guard let device = result.stdout.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }).map(String.init),
-              !before.contains(device) else {
-            return .unchecked("it was opened elsewhere on this Mac while it was being tried, so it is tried when it is restored")
-        }
-        if (try? look.runRetryingBusy("/usr/bin/hdiutil", ["detach", device], stdin: nil))?.ok != true {
-            _ = try? look.run("/usr/bin/hdiutil", ["detach", "-force", device], stdin: nil)
-        }
-        return .opens
     }
 
     /// The first of `candidates` that opens `archive`, with the proof. When none

@@ -209,13 +209,15 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             OpenedArchive.removeWork(work)
         }
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        let attached = try? DiskImageGate.serialized {
-            try runner.runRetryingBusy("/usr/bin/hdiutil",
-                                       ArchivePlan.attach(image: bundle, mountpoint: mnt, readonly: true, encrypted: passphrase != nil).args,
-                                       stdin: stdin)
-        }
-        guard attached?.ok == true, MountPoint.isMounted(mnt) else {
-            throw MirrorCopyError.couldNotConfirm(attached?.stderr.trimmingCharacters(in: .whitespacesAndNewlines) ?? "it wouldn't attach")
+        try ImageLock.attaching(bundle, runner: teardown) {
+            let attached = try? DiskImageGate.serialized {
+                try runner.runRetryingBusy("/usr/bin/hdiutil",
+                                           ArchivePlan.attach(image: bundle, mountpoint: mnt, readonly: true, encrypted: passphrase != nil).args,
+                                           stdin: stdin)
+            }
+            guard attached?.ok == true, MountPoint.isMounted(mnt) else {
+                throw MirrorCopyError.couldNotConfirm(attached?.stderr.trimmingCharacters(in: .whitespacesAndNewlines) ?? "it wouldn't attach")
+            }
         }
         let found = try MirrorCopy.structure(of: mnt.appendingPathComponent(name), against: source, previous: nil, control: runner.control)
         guard found.count == 0 else { throw MirrorCopyError.updateNotConfirmed(count: found.count, examples: found.examples) }
@@ -326,18 +328,20 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // attach read-write at `mountpoint`; also used to attach it again for the read-back
         func attach() throws {
             try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
-            do {
-                try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
-            } catch {
-                try MirrorMounts.refuseIfOpen(bundle, except: mountpoint, runner: teardown)   // opened elsewhere meanwhile
-                throw error
-            }
-            // An image already attached elsewhere fails to attach again ("Resource busy")
-            // on current macOS; older versions have answered 0 and mounted nothing, and
-            // then rsync would write onto the startup disk instead of into the image.
-            // Refuse rather than detach someone else's open copy.
-            guard MountPoint.isMounted(mountpoint) else {
-                throw DiskImageInUse(image: bundle.path, mountedAt: MirrorMounts.mountPoints(of: bundle, runner: teardown))
+            try ImageLock.attaching(bundle, runner: runner) {
+                do {
+                    try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
+                } catch {
+                    try MirrorMounts.refuseIfOpen(bundle, except: mountpoint, runner: teardown)   // opened elsewhere meanwhile
+                    throw error
+                }
+                // An image already attached elsewhere fails to attach again ("Resource busy")
+                // on current macOS; older versions have answered 0 and mounted nothing, and
+                // then rsync would write onto the startup disk instead of into the image.
+                // Refuse rather than detach someone else's open copy.
+                guard MountPoint.isMounted(mountpoint) else {
+                    throw DiskImageInUse(image: bundle.path, mountedAt: MirrorMounts.mountPoints(of: bundle, runner: teardown))
+                }
             }
         }
         try attach()

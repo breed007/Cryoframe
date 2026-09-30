@@ -183,16 +183,18 @@ public struct ArchiveReader: Sendable {
         let look = runner.forTeardown
         MirrorMounts.releaseAbandoned(image, runner: look)       // a crashed process's attach
         try MirrorMounts.refuseIfOpen(image, runner: look)
-        do {
-            try DiskImageGate.serialized {
-                try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
+        try ImageLock.attaching(image, runner: runner) {
+            do {
+                try DiskImageGate.serialized {
+                    try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
+                }
+            } catch {
+                try MirrorMounts.refuseIfOpen(image, except: mnt, runner: look)   // opened by someone else meanwhile
+                throw error
             }
-        } catch {
-            try MirrorMounts.refuseIfOpen(image, except: mnt, runner: look)   // opened by someone else meanwhile
-            throw error
-        }
-        guard MountPoint.isMounted(mnt) else {
-            throw DiskImageInUse(image: image.path, mountedAt: MirrorMounts.mountPoints(of: image, runner: look))
+            guard MountPoint.isMounted(mnt) else {
+                throw DiskImageInUse(image: image.path, mountedAt: MirrorMounts.mountPoints(of: image, runner: look))
+            }
         }
     }
 
@@ -275,7 +277,18 @@ public struct ArchiveReader: Sendable {
     /// Only those: this used to detach every device of the image, and the image being
     /// open elsewhere is the commonest reason an attach fails, so it unmounted a
     /// restore in the middle of its copy, or a mirror run in the middle of its rsync.
+    /// And only while no attach of the image is under way (see ImageLock): one caught
+    /// between attaching and mounting, or a check that attaches without mounting, has
+    /// a device with nothing mounted on it too. With an attach under way nothing is
+    /// detached; an orphan is left for the next attach, which detaches it.
     @Sendable static func detachOrphans(ofImage image: URL, runner: CommandRunner) {
+        guard let lock = ImageLock.acquire(image) else { return }
+        defer { lock.release() }
+        detachOrphans(ofImage: image, runner: runner, holding: lock)
+    }
+
+    /// detachOrphans, by one holding the image's lock
+    static func detachOrphans(ofImage image: URL, runner: CommandRunner, holding lock: ImageLock) {
         guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"]), r.ok,
               let data = r.stdout.data(using: .utf8),
               let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
