@@ -9,6 +9,7 @@ import SwiftUI
 
 struct HelpView: View {
     @Binding var isPresented: Bool
+    var onReportProblem: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -142,6 +143,13 @@ struct HelpView: View {
                         para("This covers the essentials. The full guide goes deeper on every feature, with worked examples and troubleshooting.")
                         Link("Open the Cryoframe user guide", destination: URL(string: "https://github.com/breed007/Cryoframe/blob/main/docs/guide/README.md")!)
                             .font(.callout)
+                    }
+
+                    if let onReportProblem {
+                        section("Something wrong?") {
+                            para("Report a Problem builds a report to attach to a GitHub issue: versions, how your jobs are set up, and what recent backups said, with your names, paths and files left out. You read it before you save it.")
+                            Button("Report a Problem…") { onReportProblem() }
+                        }
                     }
                 }
                 .padding(20)

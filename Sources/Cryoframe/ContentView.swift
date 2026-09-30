@@ -100,7 +100,13 @@ struct ContentView: View {
                         isPresented: Binding(get: { editingJob != nil }, set: { if !$0 { editingJob = nil } }),
                         editing: job)
         }
-        .sheet(isPresented: $model.showHelp) { HelpView(isPresented: $model.showHelp) }
+        .sheet(isPresented: $model.showHelp) {
+            HelpView(isPresented: $model.showHelp, onReportProblem: {
+                model.showHelp = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { model.showReportProblem = true }
+            })
+        }
+        .sheet(isPresented: $model.showReportProblem) { ReportProblemView(model: model, isPresented: $model.showReportProblem) }
         .sheet(isPresented: $model.showHistory) { HistoryView(model: model, isPresented: $model.showHistory) }
         // The restore sheets cover the whole window. At their own height they ended
         // part-way down it, cutting through the activity log, with the window's live

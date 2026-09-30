@@ -57,6 +57,7 @@ final class AppModel: ObservableObject {
     @Published var newJobLibraryID: String?   // preselect this library when the wizard opens
     @Published var showStorage = false
     @Published var showHistory = false
+    @Published var showReportProblem = false
     @Published var protectedBytes: UInt64?              // total on-disk footprint across all destinations (dashboard)
 
     private var queue: [String] = []                    // job ids waiting for a run slot

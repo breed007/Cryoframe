@@ -53,6 +53,10 @@ struct CryoframeApp: App {
                     model.showHelp = true
                 }
                 .keyboardShortcut("?", modifiers: .command)
+                Button("Report a Problem…") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    model.showReportProblem = true
+                }
             }
         }
 
