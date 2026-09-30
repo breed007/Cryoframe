@@ -44,8 +44,7 @@ public enum StorageReporter {
             job.targets.map { t in
                 var archives: [ArchiveSize] = []
                 for library in job.libraries {
-                    let libDir = t.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
-                    for a in RestoreDiscovery.scan(libDir) {
+                    for a in LibraryFolders.archives(job: job, library: library, in: t.destinationDir) {
                         archives.append(ArchiveSize(library: a.libraryName, version: a.version,
                                                     bytes: JobExecutor.directorySize(a.dir)))
                     }

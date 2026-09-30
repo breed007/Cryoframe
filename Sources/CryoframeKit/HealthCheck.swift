@@ -64,8 +64,7 @@ public struct HealthChecker: Sendable {
         for t in job.targets {
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             for library in job.libraries {
-                let libDir = t.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
-                var archives = RestoreDiscovery.scan(libDir)        // sorted newest-first per library
+                var archives = LibraryFolders.archives(job: job, library: library, in: t.destinationDir)   // newest first
                 if latestOnly {
                     var seen = Set<String>()
                     archives = archives.filter { seen.insert($0.libraryName).inserted }

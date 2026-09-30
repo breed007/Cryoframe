@@ -80,7 +80,7 @@ final class RecoveryModel: ObservableObject {
         return RecoveryPlan.selections(at: m, in: archives)
     }
     var encryptedLibraries: [String] {
-        Array(Set(archives.filter(\.encrypted).map(\.libraryName))).sorted()
+        Array(Set(archives.filter(\.encrypted).map(\.displayName))).sorted()
     }
     var hasEncrypted: Bool { !encryptedLibraries.isEmpty }
     /// encrypted libraries at this moment no recovered passphrase opens: they can't

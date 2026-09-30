@@ -124,7 +124,15 @@ public enum RestoreRoom {
 public struct RestorableArchive: Sendable, Identifiable, Equatable {
     public var id: String { dir.path }
     public var dir: URL
-    public var libraryName: String        // the archive subfolder name (the job's library display name)
+    /// the library's name: its folder's identity (see LibraryIdentity) or, for a
+    /// folder without one, the folder's name. Two libraries of one name found in one
+    /// scan are told apart by their folders ("Projects (Projects [a1b2c3])").
+    public var libraryName: String
+    /// whose backups these are, from the folder's identity; nil for a folder 1.5 wrote
+    public var libraryKey: String?
+    /// the library's own name, never told apart from another's: for matching a
+    /// library by name (a job's, a passphrase's), where `libraryName` is for showing
+    public var displayName: String
     public var format: ArchiveFormat
     public var bytes: UInt64
     public var artifactNames: [String]    // from the manifest, in order
@@ -132,10 +140,15 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
     public var version: Date?             // the timestamp of this sealed version (nil = single-copy / legacy)
 
     public init(dir: URL, libraryName: String, format: ArchiveFormat, bytes: UInt64,
-                artifactNames: [String], encrypted: Bool = false, version: Date? = nil) {
+                artifactNames: [String], encrypted: Bool = false, version: Date? = nil, libraryKey: String? = nil,
+                displayName: String? = nil) {
         self.dir = dir; self.libraryName = libraryName; self.format = format
         self.bytes = bytes; self.artifactNames = artifactNames; self.encrypted = encrypted; self.version = version
+        self.libraryKey = libraryKey; self.displayName = displayName ?? libraryName
     }
+
+    /// the folder holding the library's archives (a version's parent, or a mirror's own)
+    public var libraryFolder: URL { version != nil ? dir.deletingLastPathComponent() : dir }
 
     /// the original library/bundle name, recovered from the first artifact filename
     /// (e.g. "Photos Library.photoslibrary.dmg" → "Photos Library.photoslibrary";
@@ -168,6 +181,12 @@ public enum RestoreDiscovery {
     public static func scan(_ folder: URL, maxDepth: Int = 2) -> [RestorableArchive] {
         var out: [RestorableArchive] = []
         walk(folder, depth: 0, maxDepth: maxDepth, into: &out)
+        // two libraries of one name (two folders, or a library's folder and a 1.5
+        // folder of its name): tell them apart by folder
+        let folders = Dictionary(grouping: out, by: \.libraryName).mapValues { Set($0.map { $0.libraryFolder.lastPathComponent }) }
+        for i in out.indices where (folders[out[i].libraryName]?.count ?? 0) > 1 {
+            out[i].libraryName = "\(out[i].libraryName) (\(out[i].libraryFolder.lastPathComponent))"
+        }
         return out.sorted {
             $0.libraryName != $1.libraryName ? $0.libraryName < $1.libraryName
                 : ($0.version ?? .distantPast) > ($1.version ?? .distantPast)   // newest version first
@@ -228,10 +247,11 @@ public enum RestoreDiscovery {
         guard let m = try? ArchiveManifest.read(sidecar), !m.artifacts.isEmpty else { return nil }
         // a timestamped folder name means this is one version; the library name is its parent.
         let version = VersionStamp.date(dir.lastPathComponent)
-        let libraryName = version != nil ? dir.deletingLastPathComponent().lastPathComponent : dir.lastPathComponent
-        return RestorableArchive(dir: dir, libraryName: libraryName, format: m.format,
+        let folder = version != nil ? dir.deletingLastPathComponent() : dir
+        let identity = LibraryIdentity.read(in: folder)
+        return RestorableArchive(dir: dir, libraryName: identity?.name ?? folder.lastPathComponent, format: m.format,
                                  bytes: m.artifacts.reduce(0) { $0 + $1.size }, artifactNames: m.artifacts.map(\.name),
-                                 encrypted: m.encrypted ?? false, version: version)
+                                 encrypted: m.encrypted ?? false, version: version, libraryKey: identity?.key)
     }
 }
 

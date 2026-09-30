@@ -74,7 +74,8 @@ public enum RecoveryNote {
             guard let newest = versions.first else { continue }
             let encrypted = versions.contains(where: \.encrypted)
             add("\(lib) - \(formatName(newest.format))\(encrypted ? ", encrypted" : "")")
-            let folder = lib + "/"
+            // the folder as it is named on the drive, which needn't be the library's name
+            let folder = newest.libraryFolder.lastPathComponent + "/"
             if newest.format == .liveMirror || newest.version == nil {
                 add("  In the folder \(folder), one copy kept up to date: \(newest.artifactNames.first ?? "")")
             } else {

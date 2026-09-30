@@ -1,0 +1,104 @@
+//
+//  LibraryFolder.swift
+//  CryoframeKit
+//
+//  Which folder at a destination holds one library's backups.
+//
+//  Through 1.5 a library's archives lived in `<destination>/<library name>/`, found
+//  by name alone. Two libraries with one name wrote into one folder (1.5.6 refused
+//  such a job instead), a job's mirror and another job's sealed versions of the same
+//  library shared a folder, and renaming a library would have orphaned its backups.
+//
+//  A library folder now carries an identity file naming the job and the library it
+//  belongs to. The file, not the folder's name, says whose backups these are; the
+//  name is for people and may change. A new folder takes the library's name, as
+//  before, when no folder of that name is there; otherwise it is named
+//  `<library name> [<short id>]`, the short id taken from the job and library ids,
+//  so two libraries with one name get two folders side by side. A folder 1.5 wrote
+//  keeps its name when it is taken over (see LibraryFolders), and so does a new one
+//  with the plain name, so a return to 1.5.6 still finds them where it looks.
+//
+
+import Foundation
+import CryptoKit
+
+/// The identity file in a library folder.
+public struct LibraryIdentity: Codable, Sendable, Equatable {
+    public static let fileName = ".cryoframe-library.json"
+
+    /// "<job id>/<library id>": whose backups the folder holds
+    public var key: String
+    public var jobID: String
+    public var libraryID: String
+    /// the library's name, and its job's, when the folder was last written to
+    public var name: String
+    public var jobName: String
+
+    public init(jobID: String, libraryID: String, name: String, jobName: String) {
+        self.key = Self.key(jobID: jobID, libraryID: libraryID)
+        self.jobID = jobID; self.libraryID = libraryID; self.name = name; self.jobName = jobName
+    }
+
+    public init(job: BackupJob, library: ContentType) {
+        self.init(jobID: job.id, libraryID: library.id, name: library.displayName, jobName: job.name)
+    }
+
+    public static func key(jobID: String, libraryID: String) -> String { "\(jobID)/\(libraryID)" }
+
+    public static func key(job: BackupJob, library: ContentType) -> String { key(jobID: job.id, libraryID: library.id) }
+
+    /// six hex digits of the key's SHA-256: enough to tell apart the few libraries
+    /// one destination holds (the identity file settles any tie)
+    public static func shortID(_ key: String) -> String {
+        SHA256.hash(data: Data(key.utf8)).prefix(3).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// the identity in `folder`, if it has a readable one
+    public static func read(in folder: URL) -> LibraryIdentity? {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent(fileName)) else { return nil }
+        return try? JSONDecoder().decode(LibraryIdentity.self, from: data)
+    }
+
+    /// write it into `folder`, all at once (a crash leaves the old file or the new one)
+    public func write(in folder: URL) throws {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(self).write(to: folder.appendingPathComponent(Self.fileName), options: .atomic)
+    }
+}
+
+public enum LibraryFolderName {
+    /// `<name> [<short id>]`, the name made safe for a folder: no "/" (a subfolder),
+    /// no ":" (shown as "/" in Finder), no leading dot (hidden), not too long
+    public static func make(name: String, key: String) -> String {
+        "\(safe(name)) [\(LibraryIdentity.shortID(key))]"
+    }
+
+    public static func make(job: BackupJob, library: ContentType) -> String {
+        make(name: library.displayName, key: LibraryIdentity.key(job: job, library: library))
+    }
+
+    /// the name a new folder for the library takes in `destination`: its own name if
+    /// nothing there has it, else `<name> [<short id>]`
+    public static func choose(job: BackupJob, library: ContentType, in destination: URL) -> String {
+        let plain = safe(library.displayName)
+        let taken = ((try? FileManager.default.contentsOfDirectory(atPath: destination.path)) ?? [])
+            .contains { LibraryNames.same($0, plain) }
+        return taken ? make(job: job, library: library) : plain
+    }
+
+    static func safe(_ name: String) -> String {
+        var s = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        while s.hasPrefix(".") { s.removeFirst() }
+        if s.isEmpty { s = "Library" }
+        // a file name holds 255 bytes; leave room for " [abcdef]"
+        while s.utf8.count > 200 { s.removeLast() }
+        return s
+    }
+
+    /// whether `folder` is named as the library's folder may be: its plain name or
+    /// `<name> [<short id>]`
+    static func fits(_ folder: String, name: String, key: String) -> Bool {
+        LibraryNames.same(folder, safe(name)) || LibraryNames.same(folder, make(name: name, key: key))
+    }
+}

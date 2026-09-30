@@ -151,6 +151,12 @@ public struct JobExecutor: Sendable {
         let passphrase = job.encrypted ? passphraseProvider(job.id) : nil
         if job.encrypted, passphrase?.isEmpty ?? true { throw ArchiveError.passphraseUnavailable }
 
+        // Each library's folder at each destination it can reach, found by identity:
+        // taken over from 1.5 or made new (see LibraryFolders), before anything is
+        // frozen. A folder that can't be got ready fails that one copy.
+        let (folderOf, folderFailures, folderNotes) = Self.prepareFolders(job, at: dests.filter(\.available).map(\.target),
+                                                                          jobs: jobStore?.load().jobs ?? [])
+
         onStage(.preparing)
 
         // Where does each library actually live? A media library big enough to be
@@ -248,7 +254,12 @@ public struct JobExecutor: Sendable {
                         results.append(.failed(library: library.displayName, destination: d.target.displayName,
                                                error: "\(d.target.displayName) is unavailable — \(d.reason ?? "not reachable")"))
                     }
-                    let live = dests.filter(\.available).map(\.target)
+                    let reachable = dests.filter(\.available).map(\.target)
+                    for t in reachable where folderOf[t.id]?[library.id] == nil {
+                        results.append(.failed(library: library.displayName, destination: t.displayName,
+                                               error: folderFailures[t.id]?[library.id] ?? "\(t.displayName) is unavailable"))
+                    }
+                    let live = reachable.filter { folderOf[$0.id]?[library.id] != nil }
                     if live.isEmpty { continue }
                     let needed = sourceSize + sourceSize / 20
                     if (Self.freeSpace(for: self.scratchBase) ?? .max) < needed {
@@ -282,7 +293,11 @@ public struct JobExecutor: Sendable {
                                                    error: "\(t.displayName) is unavailable — \(d.reason ?? "not reachable")"))
                             continue
                         }
-                        let libDir = t.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
+                        guard let libDir = folderOf[t.id]?[library.id] else {
+                            results.append(.failed(library: library.displayName, destination: t.displayName,
+                                                   error: folderFailures[t.id]?[library.id] ?? "\(t.displayName) is unavailable"))
+                            continue
+                        }
                         let mirrorExists = FileManager.default.fileExists(atPath: libDir.appendingPathComponent(source.name + ".sparsebundle").path)
                         if !mirrorExists {
                             let needed = sourceSize + sourceSize / 20
@@ -313,8 +328,7 @@ public struct JobExecutor: Sendable {
         if pass.cancelled {
             pass.builds.forEach(cleanupBuild)
             if sealed != nil {
-                let checks = healthRecords()
-                for t in job.targets { Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention, checks: checks) }
+                Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords())
             }
             return .cancelled
         }
@@ -325,9 +339,8 @@ public struct JobExecutor: Sendable {
         // whole seconds so the name stays a parseable timestamp.
         var versionDate = now
         if !pass.builds.isEmpty {
-            let probeLib = job.libraries.first?.displayName ?? "Library"
-            let primaryLibDir = job.target.destinationDir.appendingPathComponent(probeLib, isDirectory: true)
-            while FileManager.default.fileExists(atPath: primaryLibDir.appendingPathComponent(VersionStamp.string(versionDate)).path) {
+            let folders = folderOf.values.flatMap(\.values)
+            while folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(VersionStamp.string(versionDate)).path) }) {
                 versionDate = versionDate.addingTimeInterval(1)
             }
         }
@@ -347,8 +360,8 @@ public struct JobExecutor: Sendable {
                         error: "not enough space on \(dest.displayName): needs ~\(Self.human(build.byteSize)), only \(Self.human(Self.freeSpace(for: dest.destinationDir) ?? 0)) free"))
                     continue
                 }
-                let destDir = dest.destinationDir.appendingPathComponent(build.library.displayName, isDirectory: true)
-                    .appendingPathComponent(versionStamp, isDirectory: true)
+                guard let libFolder = folderOf[dest.id]?[build.library.id] else { continue }     // dests were those with one
+                let destDir = libFolder.appendingPathComponent(versionStamp, isDirectory: true)
                 do {
                     if dest.constraints.resumableTransfer {
                         onStage(.transferring)
@@ -404,11 +417,7 @@ public struct JobExecutor: Sendable {
 
         var pruneFailures: [String] = []
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
-            let checks = healthRecords()
-            for t in job.targets {
-                pruneFailures += Self.pruneVersions(target: t.destinationDir, libraries: job.libraries, policy: job.retention,
-                                                    checks: checks)
-            }
+            pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords())
         }
         // the note on how to restore without Cryoframe, brought up to date in each
         // destination this run reached; a note that can't be written is logged, never
@@ -420,7 +429,7 @@ public struct JobExecutor: Sendable {
         // warning rather than failing it, but do not let it pass in silence.
         let pruneNote = pruneFailures.isEmpty ? nil
             : "couldn't remove \(pruneFailures.count) old version\(pruneFailures.count == 1 ? "" : "s") — \(pruneFailures.joined(separator: "; "))"
-        let warning = ([decision.warning, pruneNote].compactMap { $0 } + pass.notes).joined(separator: " · ")
+        let warning = ([decision.warning, pruneNote].compactMap { $0 } + folderNotes + pass.notes).joined(separator: " · ")
         return .finished(results: results, warning: warning.isEmpty ? nil : warning)
     }
 
@@ -438,10 +447,18 @@ public struct JobExecutor: Sendable {
     /// passed checksum check, in `checks`) is never deleted, whatever the policy says.
     static func pruneVersions(target: URL, libraries: [ContentType], policy: RetentionPolicy,
                               checks: [HealthRecord] = []) -> [String] {
+        pruneVersions(folders: libraries.map { ($0, target.appendingPathComponent($0.displayName, isDirectory: true)) },
+                      policy: policy, checks: checks)
+    }
+
+    /// the same, for each library's own folder (see LibraryFolders): only a folder a
+    /// run writes to is pruned, never a 1.5 folder left for reading
+    @discardableResult
+    static func pruneVersions(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
+                              checks: [HealthRecord] = []) -> [String] {
         let fm = FileManager.default
         var failures: [String] = []
-        for library in libraries {
-            let libDir = target.appendingPathComponent(library.displayName, isDirectory: true)
+        for (library, libDir) in folders {
             let entries = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
             var complete: [(url: URL, date: Date)] = []
             for e in entries {
@@ -462,6 +479,30 @@ public struct JobExecutor: Sendable {
             }
         }
         return failures
+    }
+
+    /// every library's folder at every destination `targets` names, ready to write to;
+    /// why for each that couldn't be got ready; and what the run should say about it
+    static func prepareFolders(_ job: BackupJob, at targets: [Target], jobs: [BackupJob])
+        -> (folders: [String: [String: URL]], failures: [String: [String: String]], notes: [String]) {
+        var folders: [String: [String: URL]] = [:], failures: [String: [String: String]] = [:], notes: [String] = []
+        for t in targets {
+            for lib in job.libraries {
+                do {
+                    let p = try LibraryFolders.prepare(job: job, library: lib, in: t.destinationDir, jobs: jobs)
+                    folders[t.id, default: [:]][lib.id] = p.folder
+                    for n in p.notes where !notes.contains(n) { notes.append(n) }
+                } catch {
+                    failures[t.id, default: [:]][lib.id] = "couldn't get \(lib.displayName)'s folder at \(t.displayName) ready — \(failureText(error))"
+                }
+            }
+        }
+        return (folders, failures, notes)
+    }
+
+    /// the folders retention prunes: the ones this run wrote to
+    static func prunable(_ job: BackupJob, _ folderOf: [String: [String: URL]]) -> [(library: ContentType, folder: URL)] {
+        job.targets.flatMap { t in job.libraries.compactMap { lib in folderOf[t.id]?[lib.id].map { (lib, $0) } } }
     }
 
     /// confirm a distributed copy matches the verified build. A single file is hashed

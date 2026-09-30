@@ -81,6 +81,7 @@ become
 been
 before
 being
+belongs
 below
 beside
 bigger
@@ -270,6 +271,7 @@ final
 finalcut
 find
 finder
+finds
 finish
 finished
 finishing
@@ -453,6 +455,7 @@ mount
 mounted
 mountpoint
 move
+moved
 movies
 ms
 much
@@ -691,6 +694,7 @@ starting
 startup
 static
 status
+stayed
 stderr
 stdinpass
 still
@@ -722,6 +726,7 @@ them
 then
 there
 these
+they
 they're
 this
 through

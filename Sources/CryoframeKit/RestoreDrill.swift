@@ -27,12 +27,10 @@ public struct RestoreDriller: Sendable {
                       materializeCloud: Bool = false) -> HealthReport {
         var checks: [ArchiveCheck] = []
         let multiDest = job.targets.count > 1
-        let typeByName = Dictionary(job.libraries.map { ($0.displayName, $0) }, uniquingKeysWith: { a, _ in a })
         for t in job.targets {
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             for library in job.libraries {
-                let libDir = t.destinationDir.appendingPathComponent(library.displayName, isDirectory: true)
-                var archives = RestoreDiscovery.scan(libDir)        // newest-first per library
+                var archives = LibraryFolders.archives(job: job, library: library, in: t.destinationDir)   // newest first
                 if latestOnly {
                     var seen = Set<String>()
                     archives = archives.filter { seen.insert($0.libraryName).inserted }
@@ -49,7 +47,7 @@ public struct RestoreDriller: Sendable {
                         }
                         CloudFile.materialize(archive.dir)
                     }
-                    let type = typeByName[archive.libraryName] ?? library
+                    let type = library
                     let (passed, detail, skipped) = drillOne(archive, type: type, passphrase: job.encrypted ? passphrase : nil)
                     checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
                                                passed: passed, detail: detail,

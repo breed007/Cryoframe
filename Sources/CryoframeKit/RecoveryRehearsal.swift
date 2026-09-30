@@ -76,7 +76,7 @@ public struct RecoveryRehearsal: Sendable {
                          materializeCloud: Bool = false,
                          passphrase: @Sendable (String) -> String? = { _ in nil }) -> Report {
         let archives = RestoreDiscovery.scan(destination)     // the recovery entry point
-        let found = Set(archives.map(\.libraryName))
+        let found = Set(archives.map(\.displayName))
         let missing = expecting.filter { !found.contains($0) }.sorted()
 
         let moment = RecoveryPlan.moments(in: archives).last
@@ -92,7 +92,7 @@ public struct RecoveryRehearsal: Sendable {
                 }
                 CloudFile.materialize(a.dir)
             }
-            let key = a.encrypted ? passphrase(a.libraryName) : nil
+            let key = a.encrypted ? passphrase(a.displayName) : nil
             if a.encrypted, key == nil {
                 return LibraryOutcome(library: a.libraryName, version: a.version, ok: false, locked: true,
                                       detail: "encrypted, and no passphrase is available on this Mac")

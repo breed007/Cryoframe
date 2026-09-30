@@ -44,7 +44,7 @@ final class RestoreModel: ObservableObject {
         return (type, url)
     }
 
-    func canRestoreInPlace(_ a: RestorableArchive) -> Bool { liveLocation(forLibraryNamed: a.libraryName) != nil }
+    func canRestoreInPlace(_ a: RestorableArchive) -> Bool { liveLocation(forLibraryNamed: a.displayName) != nil }
 
     // MARK: - timeline grouping
 
@@ -58,7 +58,7 @@ final class RestoreModel: ObservableObject {
 
     /// validate, then ask for confirmation (the actual replace runs in confirmInPlace).
     func requestInPlace(_ a: RestorableArchive) {
-        guard let (type, _) = liveLocation(forLibraryNamed: a.libraryName) else { return }
+        guard let (type, _) = liveLocation(forLibraryNamed: a.displayName) else { return }
         if a.encrypted, passphrase.isEmpty { errorMessage = "Enter the archive's passphrase first."; return }
         if let proc = type.owningProcess, WorkspaceProcessDetector().isRunning(proc) {
             errorMessage = "Quit \(proc.displayName) before replacing its library in place."; return
@@ -67,7 +67,7 @@ final class RestoreModel: ObservableObject {
     }
 
     func confirmInPlace() {
-        guard let a = pendingInPlace, let (_, liveURL) = liveLocation(forLibraryNamed: a.libraryName) else { pendingInPlace = nil; return }
+        guard let a = pendingInPlace, let (_, liveURL) = liveLocation(forLibraryNamed: a.displayName) else { pendingInPlace = nil; return }
         pendingInPlace = nil
         let pass = a.encrypted ? passphrase : nil
         running = true; stage = "\(a.bundleName): replacing in place…"; results = []
@@ -193,7 +193,7 @@ final class RestoreModel: ObservableObject {
     func checkRoom(for a: RestorableArchive, inPlace: Bool) async {
         let key = roomKey(for: a, inPlace: inPlace)
         guard roomWarning?.key != key else { return }
-        let dest = inPlace ? liveLocation(forLibraryNamed: a.libraryName)?.url.deletingLastPathComponent() : destFolder
+        let dest = inPlace ? liveLocation(forLibraryNamed: a.displayName)?.url.deletingLastPathComponent() : destFolder
         guard let dest, let floor = RestoreRoom.floor(for: a) else { roomWarning = (key, nil); return }
         let text = await Task.detached { () -> String? in
             guard let refusal = RestoreRoom.refusal(bytes: floor, free: JobExecutor.freeSpace(for: dest),
