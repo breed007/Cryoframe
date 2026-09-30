@@ -179,6 +179,21 @@ private func names(_ dir: URL) -> [String] {
         #expect(c.folder.path != legacy.path)
     }
 
+    // The Photos library can be another than the usual one (chosen in Cryoframe, or
+    // renamed since), and its 1.5 archives carry the name it had: still its own, read
+    // and taken over. A custom folder named "Photos" doesn't read them.
+    @Test func aBuiltInLibrarysArchiveUnderAnotherPackageNameIsStillItsOwn() throws {
+        let dest = folder("pkg"); defer { try? FileManager.default.removeItem(at: dest) }
+        let legacy = dest.appendingPathComponent("Photos")
+        try archive(in: legacy, bundle: "Photos Library 2.photoslibrary", version: v1)
+        let j = job("a", [.photos], dest: dest)
+        #expect(LibraryFolders.archives(job: j, library: .photos, in: dest).count == 1)
+        let custom = lib("custom", "Photos", root: "Desktop/Photos"), c = job("c", [custom], dest: dest)
+        #expect(LibraryFolders.archives(job: c, library: custom, in: dest).isEmpty)
+        let p = try LibraryFolders.prepare(job: j, library: .photos, in: dest, jobs: [j, c], isOpen: { _ in false })
+        #expect(p.folder.path == legacy.path, "not taken over: \(p.folder.lastPathComponent)")
+    }
+
     // MARK: renaming
 
     @Test func aRenamedLibrarysFolderFollowsItsName() throws {

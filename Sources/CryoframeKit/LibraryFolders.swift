@@ -66,7 +66,6 @@ public enum LibraryFolders {
         let key = LibraryIdentity.key(job: job, library: library)
         let mirror = !job.format.isSealed
         func ofItsKind(_ a: RestorableArchive) -> Bool { mirror ? a.format == .liveMirror && a.version == nil : a.format != .liveMirror }
-        let roots = rootNames(of: library)
         let entries = listing(destination)
         var out: [(folder: URL, archives: [RestorableArchive])] = entries.filter { $0.identity?.key == key }
             .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
@@ -74,7 +73,7 @@ public enum LibraryFolders {
         for e in entries where e.identity?.key != key && e.identity?.jobID != job.id
             && LibraryNames.same(e.url.lastPathComponent, library.displayName) {
             let found = RestoreDiscovery.scan(e.url, maxDepth: 1)
-            let mine = found.filter { ofItsKind($0) && roots.contains($0.bundleName) }
+            let mine = found.filter { ofItsKind($0) && isOf(library, bundle: $0.bundleName) }
             if !mine.isEmpty || (e.identity == nil && found.isEmpty) { out.append((e.url, mine)) }
         }
         return out
@@ -87,9 +86,18 @@ public enum LibraryFolders {
             || job.libraries.contains { lib in holdings(job: job, library: lib, in: destination).contains { !$0.archives.isEmpty } }
     }
 
-    /// the names of a library's folders on disk: what its archives' bundles are named
-    static func rootNames(of library: ContentType) -> Set<String> {
-        Set(library.paths.map { $0.liveURL(home: NSHomeDirectory()).lastPathComponent })
+    /// Whether an archive whose bundle is named `bundle` can be `library`'s: its folder
+    /// on disk has that name, or, for a built-in library kept in a package, the bundle
+    /// is a package of the same kind. The Photos library can be one other than the
+    /// usual "Photos Library.photoslibrary" (chosen in Cryoframe, or since renamed),
+    /// and its older archives carry the name it had; a custom folder "Photos" is still
+    /// told from it.
+    static func isOf(_ library: ContentType, bundle: String) -> Bool {
+        let roots = library.paths.map { $0.liveURL(home: NSHomeDirectory()).lastPathComponent }
+        if roots.contains(bundle) { return true }
+        guard ContentTypeRegistry.builtIns.contains(where: { $0.id == library.id }) else { return false }
+        let kind = (bundle as NSString).pathExtension.lowercased()
+        return !kind.isEmpty && roots.contains { ($0 as NSString).pathExtension.lowercased() == kind }
     }
 
     /// the folder a library's backups for `job` are written to, if there is one yet
@@ -171,7 +179,7 @@ public enum LibraryFolders {
         // longer updated. Say so once a run.
         for other in others {
             guard let top = RestoreDiscovery.archive(at: other.url), top.format == .liveMirror, top.version == nil,
-                  rootNames(of: library).contains(top.bundleName) else { continue }
+                  isOf(library, bundle: top.bundleName) else { continue }
             let mirrors = claimants(named: other.url.lastPathComponent, bundles: [top.bundleName], in: destination, jobs: jobs + [job])
                 .filter(\.mirror).map(\.key)
             if let id = other.identity?.key, mirrors.contains(id) { continue }          // another mirror job's own copy
@@ -213,7 +221,7 @@ public enum LibraryFolders {
         for job in jobs where job.targets.contains(where: { samePlace($0.destinationDir, destination) }) {
             for lib in job.libraries where LibraryNames.same(lib.displayName, name) {
                 if !bundles.isEmpty {
-                    guard !rootNames(of: lib).isDisjoint(with: bundles) else { continue }
+                    guard bundles.contains(where: { isOf(lib, bundle: $0) }) else { continue }
                 }
                 let key = LibraryIdentity.key(job: job, library: lib)
                 if seen.insert(key).inserted { out.append(Claimant(key: key, mirror: !job.format.isSealed)) }
