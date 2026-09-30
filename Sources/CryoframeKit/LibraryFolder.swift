@@ -36,6 +36,15 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
     /// the names the library had before it was renamed, oldest first: checks recorded
     /// before 1.6 know a library only by its name (see KnownGood)
     public var formerNames: [String]?
+    /// true when the library's job made a mirror when it last wrote here (nil: sealed
+    /// versions)
+    public var mirror: Bool?
+    /// The version folders that were here when the library's job changed between a
+    /// mirror and sealed versions. Whose they are can't be told: a mirror job's folder
+    /// holds other jobs' versions (a 1.5 folder it shared, or what 1.5.6 wrote into it),
+    /// and a sealed job's holds its own. They stay where they are, never pruned and
+    /// never moved.
+    public var heldVersions: [String]?
 
     public init(jobID: String, libraryID: String, name: String, jobName: String) {
         self.key = Self.key(jobID: jobID, libraryID: libraryID)
@@ -44,6 +53,7 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
 
     public init(job: BackupJob, library: ContentType) {
         self.init(jobID: job.id, libraryID: library.id, name: library.displayName, jobName: job.name)
+        mirror = job.format.isSealed ? nil : true
     }
 
     public static func key(jobID: String, libraryID: String) -> String { "\(jobID)/\(libraryID)" }
@@ -63,7 +73,8 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
     }
 
     /// this identity, carrying over the names `previous` (the folder's identity until
-    /// now) had, and its name if the library has since been renamed
+    /// now) had, and its name if the library has since been renamed, and the versions
+    /// it held
     public func following(_ previous: LibraryIdentity?) -> LibraryIdentity {
         guard let previous, previous.key == key else { return self }
         var names = previous.formerNames ?? []
@@ -71,8 +82,13 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
         names.removeAll { $0 == name }
         var out = self
         out.formerNames = names.isEmpty ? nil : Array(names.suffix(20))
+        out.heldVersions = previous.heldVersions
         return out
     }
+
+    /// whether `version`, a version folder's name, is one of those held (see
+    /// `heldVersions`)
+    public func holds(_ version: String) -> Bool { heldVersions?.contains(version) == true }
 
     /// write it into `folder`, all at once (a crash leaves the old file or the new one)
     public func write(in folder: URL) throws {

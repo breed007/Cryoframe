@@ -558,10 +558,12 @@ public struct JobExecutor: Sendable {
         var failures: [String] = []
         for (library, libDir) in folders {
             let entries = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+            let identity = LibraryIdentity.read(in: libDir)
             var complete: [(url: URL, date: Date)] = []
             for e in entries {
+                // held versions aren't provably this library's (see heldVersions)
                 guard (try? e.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
-                      let d = VersionStamp.date(e.lastPathComponent) else { continue }
+                      let d = VersionStamp.date(e.lastPathComponent), identity?.holds(e.lastPathComponent) != true else { continue }
                 if fm.fileExists(atPath: e.appendingPathComponent(ArchiveManifest.sidecarName).path) {
                     complete.append((e, d))
                 } else {
@@ -569,7 +571,6 @@ public struct JobExecutor: Sendable {
                 }
             }
             guard policy != .keepAll else { continue }
-            let identity = LibraryIdentity.read(in: libDir)
             let known = KnownGood.version(of: library.displayName, key: identity?.key, formerNames: identity?.formerNames ?? [],
                                           among: complete.map(\.date), records: checks)
             let prune = retentionPrune(complete.map(\.date), policy: policy, keeping: Set([known].compactMap { $0 }))

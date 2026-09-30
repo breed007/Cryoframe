@@ -75,14 +75,23 @@ public enum LibraryFolders {
         }
         var out: [(folder: URL, archives: [RestorableArchive])] = entries.filter { $0.identity?.key == key }
             .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
-            .map { ($0.url, owned(RestoreDiscovery.scan($0.url, maxDepth: 1).filter(ofItsKind))) }
+            .map { e in (e.url, owned(RestoreDiscovery.scan(e.url, maxDepth: 1).filter { a in
+                // not a version it holds: that may be another job's (see heldVersions)
+                ofItsKind(a) && (a.version == nil || e.identity?.holds(a.dir.lastPathComponent) != true)
+            })) }
         for e in entries where e.identity?.key != key && e.identity?.jobID != job.id
             && LibraryNames.same(e.url.lastPathComponent, library.displayName) {
             // another job's folder only if it's a mirror job's: the one kind of folder
             // 1.5.6 writes another job's versions into. A sealed job's folder, deleted
-            // or no longer written to, holds that job's backups, under its key.
-            if e.identity != nil, mirror || !holdsMirror(e.url) { continue }
-            let found = RestoreDiscovery.scan(e.url, maxDepth: 1)
+            // or no longer written to, holds that job's backups, under its key. Of a
+            // mirror job's folder, the versions it doesn't hold (those are its own, from
+            // before it was made a mirror job); of a folder that was a mirror job's
+            // before its job was made a sealed job, only those it holds.
+            if let identity = e.identity, mirror || !holdsMirror(e.url) && identity.heldVersions == nil { continue }
+            let found = RestoreDiscovery.scan(e.url, maxDepth: 1).filter { a in
+                guard let identity = e.identity, a.version != nil else { return true }
+                return identity.holds(a.dir.lastPathComponent) != (identity.mirror == true)
+            }
             let mine = found.filter { ofItsKind($0) && isOf(library, bundle: $0.bundleName) }
             if !mine.isEmpty || (e.identity == nil && found.isEmpty) { out.append((e.url, owned(mine))) }
         }
@@ -194,7 +203,19 @@ public enum LibraryFolders {
                 folder = renamed
             }
         }
-        let current = LibraryIdentity.read(in: folder), updated = identity.following(current)
+        let current = LibraryIdentity.read(in: folder)
+        var updated = identity.following(current)
+        if let current, current.key == key {
+            // The job was changed between a mirror and sealed versions (the job editor
+            // allows it): the versions here now are held (see heldVersions). A mirror
+            // job's were other jobs', which its retention as a sealed job would delete;
+            // a sealed job's are its own, which another sealed job would take.
+            let versions = versionNames(in: folder)
+            var held = Set(current.heldVersions ?? [])
+            if (current.mirror == true) != (updated.mirror == true) { held.formUnion(versions) }
+            held.formIntersection(versions)
+            updated.heldVersions = held.isEmpty ? nil : held.sorted()
+        }
         if current != updated { try updated.write(in: folder) }
 
         // Its sealed versions in any other folder of its name move in: a 1.5 folder it
@@ -207,11 +228,13 @@ public enum LibraryFolders {
             $0.url.path != folder.path && $0.identity?.key != key && $0.identity?.jobID != job.id
                 && LibraryNames.same($0.url.lastPathComponent, library.displayName)
         }
-        // Out of another job's folder only when that job is a mirror job writing here:
-        // a sealed job's folder, the job deleted (its backups stay) or writing
-        // elsewhere, holds its own versions, and this job's retention would delete them.
+        // Out of another job's folder only when that job is a mirror job writing here,
+        // and was one when it last wrote to it: a sealed job's folder, the job deleted
+        // (its backups stay), writing elsewhere, or made a mirror job since, holds its
+        // own versions, and this job's retention would delete them. Never its held ones.
         let mirrorJobs = Set(jobs.filter { !$0.format.isSealed }.map(\.id))
-        for other in others where job.format.isSealed && (other.identity.map { mirrorJobs.contains($0.jobID) } ?? true) {
+        for other in others where job.format.isSealed
+            && (other.identity.map { mirrorJobs.contains($0.jobID) && $0.mirror == true } ?? true) {
             let r = moveVersions(from: other.url, to: folder, key: key, in: destination, jobs: jobs + [job], isOpen: isOpen)
             // emptied (a folder only 1.5.6 wrote, say): gone, so nothing looks for it
             if r.moved > 0, other.identity == nil { rmdir(other.url.path) }
@@ -290,8 +313,10 @@ public enum LibraryFolders {
                              isOpen: (URL) -> Bool) -> (moved: Int, left: Int, busy: Int) {
         let fm = FileManager.default
         var moved = 0, left = 0, busy = 0
+        let identity = LibraryIdentity.read(in: other)
         for e in (try? fm.contentsOfDirectory(at: other, includingPropertiesForKeys: nil)) ?? [] {
-            guard VersionStamp.date(e.lastPathComponent) != nil, let a = RestoreDiscovery.archive(at: e), a.format != .liveMirror else { continue }
+            guard VersionStamp.date(e.lastPathComponent) != nil, identity?.holds(e.lastPathComponent) != true,
+                  let a = RestoreDiscovery.archive(at: e), a.format != .liveMirror else { continue }
             let sealed = claimants(named: other.lastPathComponent, bundles: [a.bundleName], in: destination, jobs: jobs).filter { !$0.mirror }
             guard sealed.map(\.key) == [key] else { continue }
             let to = folder.appendingPathComponent(e.lastPathComponent, isDirectory: true)
@@ -315,6 +340,16 @@ public enum LibraryFolders {
             guard fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { return nil }
             return Entry(url: u, identity: LibraryIdentity.read(in: u))
         }
+    }
+
+    /// the names of the version folders (named by their time) in `folder`
+    static func versionNames(in folder: URL) -> Set<String> {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return Set(names.filter { name in
+            var isDir: ObjCBool = false
+            return VersionStamp.date(name) != nil
+                && FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path, isDirectory: &isDir) && isDir.boolValue
+        })
     }
 
     /// among folders with the library's identity (a copy made by hand, say), the one
