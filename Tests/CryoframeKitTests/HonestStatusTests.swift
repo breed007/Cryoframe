@@ -220,4 +220,25 @@ private func record(_ job: BackupJob, _ outcome: RunOutcomeKind, at t: TimeInter
         #expect(!AlertPolicy.wasDelivered(answer(403)) && !AlertPolicy.wasDelivered(answer(500)))
         #expect(!AlertPolicy.wasDelivered(nil), "a request that failed")
     }
+
+    // The app's notice on this Mac and the agent's alert to the phone keep their own
+    // throttles: a notice shown on a screen nobody is looking at must not hold the
+    // alert back for a day, nor the other way round.
+    @Test func aLocalOverdueNoticeDoesntHoldBackTheRemoteAlert() throws {
+        let suite = "cf-overdue-both-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        #expect(AlertThrottle.overdueLocalKey != AlertThrottle.overdueRemoteKey)
+        let local = AlertThrottle(defaults: defaults, key: AlertThrottle.overdueLocalKey)
+        let remote = AlertThrottle(defaults: defaults, key: AlertThrottle.overdueRemoteKey)
+        let d = job("d")
+        let now = Date(timeIntervalSince1970: 100 * 86_400)
+        let latest = ["d": record(d, .deferred, at: now.timeIntervalSince1970 - 60)]     // overdue: put off for three days
+        let good = ["d": now.addingTimeInterval(-3 * 86_400)]
+        let shown = AlertPolicy.overdueAlerts(jobs: [d], latest: latest, lastGood: good, now: now, throttle: local)
+        #expect(shown.count == 1)
+        for a in shown { local.recordSent(a.subject, now: now) }
+        #expect(AlertPolicy.overdueAlerts(jobs: [d], latest: latest, lastGood: good, now: now, throttle: local).isEmpty)
+        #expect(AlertPolicy.overdueAlerts(jobs: [d], latest: latest, lastGood: good, now: now, throttle: remote).count == 1)
+    }
 }

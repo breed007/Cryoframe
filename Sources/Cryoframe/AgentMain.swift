@@ -158,7 +158,7 @@ enum AgentMain {
     /// at the next pass.
     private static func overdueNotices(jobs: [BackupJob], history: RunHistoryStore, lastRun: [String: Date],
                                        now: Date) -> [(AlertPolicy.Payload, @Sendable () -> Void)] {
-        let throttle = AlertThrottle(key: "overdue.lastAlerted")
+        let throttle = AlertThrottle(key: AlertThrottle.overdueRemoteKey)
         let all = history.all()
         var latest: [String: RunRecord] = [:]
         for r in all where latest[r.jobID] == nil { latest[r.jobID] = r }

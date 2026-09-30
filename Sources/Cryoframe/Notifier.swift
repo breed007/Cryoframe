@@ -47,6 +47,22 @@ enum Notifier {
         if record.trigger != "scheduled" { RemoteAlert.send(for: record) }
     }
 
+    /// Post an overdue notice; `posted` runs once macOS has taken it, so one that
+    /// couldn't be shown (notifications turned off for Cryoframe) is owed, not counted.
+    static func notifyOverdue(_ payload: AlertPolicy.Payload, id: String, posted: @escaping @MainActor () -> Void) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+            let content = UNMutableNotificationContent()
+            content.title = payload.title
+            content.body = payload.body
+            if payload.high { content.sound = .default }
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "overdue-\(id)-\(Int(Date().timeIntervalSince1970))", content: content, trigger: nil)) { error in
+                guard error == nil else { return }
+                Task { @MainActor in posted() }
+            }
+        }
+    }
+
     /// post for an archive health check. Failures alert unless notifications are off;
     /// clean results alert only on the "every run" policy.
     static func notifyHealth(_ record: HealthRecord) {

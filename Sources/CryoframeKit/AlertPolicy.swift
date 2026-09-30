@@ -145,6 +145,13 @@ public struct AlertThrottle: @unchecked Sendable {
     let key: String
     let interval: TimeInterval
 
+    /// overdue alerts sent to ntfy or a webhook, by the scheduled agent
+    public static let overdueRemoteKey = "overdue.lastAlerted"
+    /// overdue notices posted on this Mac by the app while it runs. Kept apart from
+    /// the remote ones: the same subject in one key would let a notice on a screen
+    /// nobody is looking at hold back the alert to the phone for a day.
+    public static let overdueLocalKey = "overdue.lastNotified"
+
     public init(defaults: UserDefaults = .standard, key: String, interval: TimeInterval = 24 * 60 * 60) {
         self.defaults = defaults; self.key = key; self.interval = interval
     }
