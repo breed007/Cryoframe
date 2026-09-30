@@ -57,6 +57,9 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
             Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
             let snap = try self.backend.create(on: vol)
             self.ledger.record(snap.name)         // own it before anything can fail
+            // which volume, so reconcile looks for it there (an external source drive,
+            // say), wherever that drive is mounted by then
+            self.owners.recordSnapshotVolume(snap.name, volume: .at(vol.mountPoint))
             if let client = self.client { self.owners.recordSnapshot(snap.name, owner: client) }
             return snap
         }
