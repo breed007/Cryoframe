@@ -27,129 +27,131 @@ private func reassemble(_ parts: [URL]) throws -> Data {
     return out
 }
 
-@Test func shipsArchiveAsPartsThatReassemble() throws {
-    let work = tempDir(); defer { try? FileManager.default.removeItem(at: work) }
-    let source = work.appendingPathComponent("Lib.dmg")
-    try writeRandom(5_000_000, to: source)
-    let target = tempDir(); defer { try? FileManager.default.removeItem(at: target) }
+@Suite struct TransferTests {
+    @Test func shipsArchiveAsPartsThatReassemble() throws {
+        let work = tempDir(); defer { try? FileManager.default.removeItem(at: work) }
+        let source = work.appendingPathComponent("Lib.dmg")
+        try writeRandom(5_000_000, to: source)
+        let target = tempDir(); defer { try? FileManager.default.removeItem(at: target) }
 
-    let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
-                                  totalBytes: 5_000_000, chunkSize: 2_000_000,
-                                  targetDir: target.path, format: .sealedDMG)
-    let manifest = try ChunkedShipper().ship(pending, persist: { _ in })
+        let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
+                                      totalBytes: 5_000_000, chunkSize: 2_000_000,
+                                      targetDir: target.path, format: .sealedDMG)
+        let manifest = try ChunkedShipper().ship(pending, persist: { _ in })
 
-    #expect(manifest.artifacts.map(\.size) == [2_000_000, 2_000_000, 1_000_000])   // 2+2+1
-    for a in manifest.artifacts {
-        #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(a.name).path))
+        #expect(manifest.artifacts.map(\.size) == [2_000_000, 2_000_000, 1_000_000])   // 2+2+1
+        for a in manifest.artifacts {
+            #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(a.name).path))
+        }
+        #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(ArchiveManifest.sidecarName).path))
+        let reassembled = try reassemble(manifest.artifacts.map { target.appendingPathComponent($0.name) })
+        #expect(reassembled == (try Data(contentsOf: source)))
     }
-    #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(ArchiveManifest.sidecarName).path))
-    let reassembled = try reassemble(manifest.artifacts.map { target.appendingPathComponent($0.name) })
-    #expect(reassembled == (try Data(contentsOf: source)))
-}
 
-@Test func resumeReshipsOnlyMissingParts() throws {
-    let work = tempDir(); defer { try? FileManager.default.removeItem(at: work) }
-    let source = work.appendingPathComponent("Lib.dmg")
-    try writeRandom(5_000_000, to: source)
-    let target = tempDir(); defer { try? FileManager.default.removeItem(at: target) }
-    let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
-                                  totalBytes: 5_000_000, chunkSize: 2_000_000,
-                                  targetDir: target.path, format: .sealedDMG)
+    @Test func resumeReshipsOnlyMissingParts() throws {
+        let work = tempDir(); defer { try? FileManager.default.removeItem(at: work) }
+        let source = work.appendingPathComponent("Lib.dmg")
+        try writeRandom(5_000_000, to: source)
+        let target = tempDir(); defer { try? FileManager.default.removeItem(at: target) }
+        let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
+                                      totalBytes: 5_000_000, chunkSize: 2_000_000,
+                                      targetDir: target.path, format: .sealedDMG)
 
-    let full = try ChunkedShipper().ship(pending, persist: { _ in })
-    let last = full.artifacts.last!.name
-    try FileManager.default.removeItem(at: target.appendingPathComponent(last))   // simulate the dropped part
+        let full = try ChunkedShipper().ship(pending, persist: { _ in })
+        let last = full.artifacts.last!.name
+        try FileManager.default.removeItem(at: target.appendingPathComponent(last))   // simulate the dropped part
 
-    var resumed = pending
-    resumed.completed = Array(full.artifacts.prefix(2))                           // first two already done
-    let m2 = try ChunkedShipper().ship(resumed, persist: { _ in })
+        var resumed = pending
+        resumed.completed = Array(full.artifacts.prefix(2))                           // first two already done
+        let m2 = try ChunkedShipper().ship(resumed, persist: { _ in })
 
-    #expect(m2.artifacts.count == 3)
-    #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(last).path))   // re-shipped
-    let reassembled = try reassemble(m2.artifacts.map { target.appendingPathComponent($0.name) })
-    #expect(reassembled == (try Data(contentsOf: source)))
-}
-
-// A part recorded as sent that isn't there at its size (swept, cut short, the
-// folder made again) is sent again, with every part after it.
-@Test func resumeResendsFromTheFirstEarlierPartThatIsntWhole() throws {
-    let work = tempDir(), target = tempDir()
-    let source = work.appendingPathComponent("Lib.dmg")
-    try writeRandom(5_000_000, to: source)
-    let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
-                                  totalBytes: 5_000_000, chunkSize: 2_000_000,
-                                  targetDir: target.path, format: .sealedDMG)
-    let full = try ChunkedShipper().ship(pending, persist: { _ in })
-    try FileManager.default.removeItem(at: target.appendingPathComponent(ArchiveManifest.sidecarName))
-    let second = target.appendingPathComponent(full.artifacts[1].name)
-    try Data(repeating: 0, count: 10).write(to: second)                          // cut short
-
-    var resumed = pending
-    resumed.completed = Array(full.artifacts.prefix(2))
-    let saved = Box()
-    let m = try ChunkedShipper().ship(resumed, persist: { saved.states.append($0.completed.count) })
-    #expect(saved.states.first == 1)                                             // back to the whole one
-    #expect(m.artifacts.map(\.size) == [2_000_000, 2_000_000, 1_000_000])
-    #expect(try reassemble(m.artifacts.map { target.appendingPathComponent($0.name) }) == (try Data(contentsOf: source)))
-}
-
-// A part that goes missing while the rest is sent: no manifest, and the record
-// goes back to before it, so the next pass sends it again.
-@Test func aPartGoneBeforeTheManifestLeavesTheVersionIncomplete() throws {
-    let work = tempDir(), target = tempDir()
-    let source = work.appendingPathComponent("Lib.dmg")
-    try writeRandom(5_000_000, to: source)
-    let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
-                                  totalBytes: 5_000_000, chunkSize: 2_000_000,
-                                  targetDir: target.path, format: .sealedDMG)
-    let saved = Box()
-    let first = target.appendingPathComponent(ChunkedShipper.partName("Lib.dmg", 0))
-    #expect(throws: TransferPartMissing.self) {
-        try ChunkedShipper().ship(pending, persist: { saved.states.append($0.completed.count) },
-                                  onPart: { done, _ in if done == 3 { try? FileManager.default.removeItem(at: first) } })
+        #expect(m2.artifacts.count == 3)
+        #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(last).path))   // re-shipped
+        let reassembled = try reassemble(m2.artifacts.map { target.appendingPathComponent($0.name) })
+        #expect(reassembled == (try Data(contentsOf: source)))
     }
-    #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent(ArchiveManifest.sidecarName).path))
-    #expect(saved.states.last == 0)
-}
 
-private final class Box: @unchecked Sendable { var states: [Int] = [] }
+    // A part recorded as sent that isn't there at its size (swept, cut short, the
+    // folder made again) is sent again, with every part after it.
+    @Test func resumeResendsFromTheFirstEarlierPartThatIsntWhole() throws {
+        let work = tempDir(), target = tempDir()
+        let source = work.appendingPathComponent("Lib.dmg")
+        try writeRandom(5_000_000, to: source)
+        let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
+                                      totalBytes: 5_000_000, chunkSize: 2_000_000,
+                                      targetDir: target.path, format: .sealedDMG)
+        let full = try ChunkedShipper().ship(pending, persist: { _ in })
+        try FileManager.default.removeItem(at: target.appendingPathComponent(ArchiveManifest.sidecarName))
+        let second = target.appendingPathComponent(full.artifacts[1].name)
+        try Data(repeating: 0, count: 10).write(to: second)                          // cut short
 
-@Test func pendingTransferStoreRoundTrips() {
-    let store = PendingTransferStore(url: tempDir().appendingPathComponent("p.json"))
-    let t = PendingTransfer(jobID: "j", sourceFile: "/s", baseName: "b",
-                            totalBytes: 10, chunkSize: 4, targetDir: "/t", format: .sealedZip)
-    store.save(t)
-    #expect(store.all().count == 1)
-    #expect(store.all().first?.totalParts == 3)         // ceil(10/4)
-    store.remove(jobID: "j")
-    #expect(store.all().isEmpty)
-}
+        var resumed = pending
+        resumed.completed = Array(full.artifacts.prefix(2))
+        let saved = Box()
+        let m = try ChunkedShipper().ship(resumed, persist: { saved.states.append($0.completed.count) })
+        #expect(saved.states.first == 1)                                             // back to the whole one
+        #expect(m.artifacts.map(\.size) == [2_000_000, 2_000_000, 1_000_000])
+        #expect(try reassemble(m.artifacts.map { target.appendingPathComponent($0.name) }) == (try Data(contentsOf: source)))
+    }
 
-@Test func resumerShipsPendingThenClearsIt() throws {
-    let scratch = tempDir()
-    let source = scratch.appendingPathComponent("Lib.dmg")
-    try writeRandom(3_000_000, to: source)
-    let target = tempDir(); defer { try? FileManager.default.removeItem(at: target) }
-    let store = PendingTransferStore(url: tempDir().appendingPathComponent("p.json"))
-    store.save(PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
-                               totalBytes: 3_000_000, chunkSize: 2_000_000,
-                               targetDir: target.path, format: .sealedDMG))
+    // A part that goes missing while the rest is sent: no manifest, and the record
+    // goes back to before it, so the next pass sends it again.
+    @Test func aPartGoneBeforeTheManifestLeavesTheVersionIncomplete() throws {
+        let work = tempDir(), target = tempDir()
+        let source = work.appendingPathComponent("Lib.dmg")
+        try writeRandom(5_000_000, to: source)
+        let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
+                                      totalBytes: 5_000_000, chunkSize: 2_000_000,
+                                      targetDir: target.path, format: .sealedDMG)
+        let saved = Box()
+        let first = target.appendingPathComponent(ChunkedShipper.partName("Lib.dmg", 0))
+        #expect(throws: TransferPartMissing.self) {
+            try ChunkedShipper().ship(pending, persist: { saved.states.append($0.completed.count) },
+                                      onPart: { done, _ in if done == 3 { try? FileManager.default.removeItem(at: first) } })
+        }
+        #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent(ArchiveManifest.sidecarName).path))
+        #expect(saved.states.last == 0)
+    }
 
-    let resumed = TransferResumer.resumeAll(store: store)
+    private final class Box: @unchecked Sendable { var states: [Int] = [] }
 
-    #expect(resumed == ["j"])
-    #expect(store.all().isEmpty)                                          // record cleared
-    #expect(!FileManager.default.fileExists(atPath: scratch.path))       // scratch removed
-    #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(ArchiveManifest.sidecarName).path))
-    #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(ChunkedShipper.partName("Lib.dmg", 0)).path))
-}
+    @Test func pendingTransferStoreRoundTrips() {
+        let store = PendingTransferStore(url: tempDir().appendingPathComponent("p.json"))
+        let t = PendingTransfer(jobID: "j", sourceFile: "/s", baseName: "b",
+                                totalBytes: 10, chunkSize: 4, targetDir: "/t", format: .sealedZip)
+        store.save(t)
+        #expect(store.all().count == 1)
+        #expect(store.all().first?.totalParts == 3)         // ceil(10/4)
+        store.remove(jobID: "j")
+        #expect(store.all().isEmpty)
+    }
 
-@Test func fragileTargetsShipResumablyButLocalDoesNot() {
-    let ext = Target.externalDrive(id: "e", name: "Ext", dir: URL(fileURLWithPath: "/Volumes/Ext"))
-    let nas = Target.networkShare(id: "n", name: "NAS", dir: URL(fileURLWithPath: "/Volumes/NAS"),
-                                  mount: NetworkMountSpec(url: URL(string: "smb://nas/s")!, mountpoint: "/Volumes/NAS"))
-    let local = Target.localVolume(id: "l", name: "Disk", dir: URL(fileURLWithPath: "/tmp"))
-    #expect(ext.constraints.resumableTransfer)
-    #expect(nas.constraints.resumableTransfer)
-    #expect(!local.constraints.resumableTransfer)
+    @Test func resumerShipsPendingThenClearsIt() throws {
+        let scratch = tempDir()
+        let source = scratch.appendingPathComponent("Lib.dmg")
+        try writeRandom(3_000_000, to: source)
+        let target = tempDir(); defer { try? FileManager.default.removeItem(at: target) }
+        let store = PendingTransferStore(url: tempDir().appendingPathComponent("p.json"))
+        store.save(PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
+                                   totalBytes: 3_000_000, chunkSize: 2_000_000,
+                                   targetDir: target.path, format: .sealedDMG))
+
+        let resumed = TransferResumer.resumeAll(store: store)
+
+        #expect(resumed == ["j"])
+        #expect(store.all().isEmpty)                                          // record cleared
+        #expect(!FileManager.default.fileExists(atPath: scratch.path))       // scratch removed
+        #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(ArchiveManifest.sidecarName).path))
+        #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent(ChunkedShipper.partName("Lib.dmg", 0)).path))
+    }
+
+    @Test func fragileTargetsShipResumablyButLocalDoesNot() {
+        let ext = Target.externalDrive(id: "e", name: "Ext", dir: URL(fileURLWithPath: "/Volumes/Ext"))
+        let nas = Target.networkShare(id: "n", name: "NAS", dir: URL(fileURLWithPath: "/Volumes/NAS"),
+                                      mount: NetworkMountSpec(url: URL(string: "smb://nas/s")!, mountpoint: "/Volumes/NAS"))
+        let local = Target.localVolume(id: "l", name: "Disk", dir: URL(fileURLWithPath: "/tmp"))
+        #expect(ext.constraints.resumableTransfer)
+        #expect(nas.constraints.resumableTransfer)
+        #expect(!local.constraints.resumableTransfer)
+    }
 }
