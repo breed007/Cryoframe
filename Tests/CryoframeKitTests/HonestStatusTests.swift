@@ -191,4 +191,13 @@ private func record(_ job: BackupJob, _ outcome: RunOutcomeKind, at t: TimeInter
         #expect(AlertPolicy.overdueAlerts(jobs: [h], latest: ["h": record(h, .deferred, at: lateAgain.timeIntervalSince1970)],
                                           lastGood: ["h": later], now: lateAgain, throttle: throttle).count == 1)
     }
+
+    // Only an answer in the 2xx range counts as delivered.
+    @Test func onlyAnAcceptedAlertCountsAsDelivered() throws {
+        let url = try #require(URL(string: "https://ntfy.example/topic"))
+        func answer(_ code: Int) -> URLResponse? { HTTPURLResponse(url: url, statusCode: code, httpVersion: nil, headerFields: nil) }
+        #expect(AlertPolicy.wasDelivered(answer(200)) && AlertPolicy.wasDelivered(answer(204)))
+        #expect(!AlertPolicy.wasDelivered(answer(403)) && !AlertPolicy.wasDelivered(answer(500)))
+        #expect(!AlertPolicy.wasDelivered(nil), "a request that failed")
+    }
 }

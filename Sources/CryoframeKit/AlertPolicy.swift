@@ -53,6 +53,14 @@ public enum AlertPolicy {
                        high: false, tags: "hourglass")
     }
 
+    /// Whether an alert reached the service: an HTTP answer in the 2xx range. A
+    /// request that failed, or was refused (a wrong topic, a webhook gone), wasn't
+    /// delivered, and used to be counted as sent all the same.
+    public static func wasDelivered(_ response: URLResponse?) -> Bool {
+        guard let http = response as? HTTPURLResponse else { return false }
+        return (200..<300).contains(http.statusCode)
+    }
+
     /// A scheduled job gone twice its interval without a good run. The agent decides
     /// how often to repeat it (see AlertThrottle); this decides what it says.
     public static func payload(forOverdue job: BackupJob, standing: ProtectionVerdict.Standing, now: Date) -> Payload? {

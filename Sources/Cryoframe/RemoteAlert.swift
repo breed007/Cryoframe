@@ -67,13 +67,15 @@ enum RemoteAlert {
     @discardableResult
     static func deliverPayload(_ p: AlertPolicy.Payload) async -> Bool {
         guard isConfigured else { return false }
-        await deliver(p)
-        return true
+        return await deliver(p)
     }
 
-    private static func deliver(_ p: AlertPolicy.Payload) async {
-        guard let req = request(title: p.title, body: p.body, high: p.high, tags: p.tags) else { return }
-        _ = try? await URLSession.shared.data(for: req)
+    /// true only if the service answered 2xx
+    @discardableResult
+    private static func deliver(_ p: AlertPolicy.Payload) async -> Bool {
+        guard let req = request(title: p.title, body: p.body, high: p.high, tags: p.tags) else { return false }
+        let response = try? await URLSession.shared.data(for: req).1
+        return AlertPolicy.wasDelivered(response)
     }
 
     /// for the Settings test button — awaits the result so the UI can report success/failure.
