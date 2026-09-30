@@ -132,15 +132,13 @@ public enum LibraryFolders {
     /// can belong to only one. The libraries that could have written it are those of
     /// the jobs writing to `destination` that carry its name, and, when it holds an
     /// archive, whose source folder has the archive's bundle name. When it holds a
-    /// mirror, only a mirror job's library can own it.
+    /// mirror, only a mirror job's library can own it: a sealed job that took it over
+    /// would sit on a full copy nothing updates, and say nothing of it.
     public static func owner(of legacy: URL, in destination: URL, jobs: [BackupJob]) -> String? {
         let all = claimants(of: legacy, in: destination, jobs: jobs)
         let holdsMirror = RestoreDiscovery.archive(at: legacy)?.format == .liveMirror
         let mirrors = all.filter { $0.mirror }, sealed = all.filter { !$0.mirror }
-        if holdsMirror {
-            if mirrors.count == 1 { return mirrors[0].key }
-            return mirrors.isEmpty && all.count == 1 ? all[0].key : nil
-        }
+        if holdsMirror { return mirrors.count == 1 ? mirrors[0].key : nil }
         if sealed.count == 1 && mirrors.isEmpty { return sealed[0].key }
         return all.count == 1 ? all[0].key : nil
     }
