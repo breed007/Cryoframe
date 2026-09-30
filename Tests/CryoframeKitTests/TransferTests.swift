@@ -70,6 +70,50 @@ private func reassemble(_ parts: [URL]) throws -> Data {
     #expect(reassembled == (try Data(contentsOf: source)))
 }
 
+// A part recorded as sent that isn't there at its size (swept, cut short, the
+// folder made again) is sent again, with every part after it.
+@Test func resumeResendsFromTheFirstEarlierPartThatIsntWhole() throws {
+    let work = tempDir(), target = tempDir()
+    let source = work.appendingPathComponent("Lib.dmg")
+    try writeRandom(5_000_000, to: source)
+    let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
+                                  totalBytes: 5_000_000, chunkSize: 2_000_000,
+                                  targetDir: target.path, format: .sealedDMG)
+    let full = try ChunkedShipper().ship(pending, persist: { _ in })
+    try FileManager.default.removeItem(at: target.appendingPathComponent(ArchiveManifest.sidecarName))
+    let second = target.appendingPathComponent(full.artifacts[1].name)
+    try Data(repeating: 0, count: 10).write(to: second)                          // cut short
+
+    var resumed = pending
+    resumed.completed = Array(full.artifacts.prefix(2))
+    let saved = Box()
+    let m = try ChunkedShipper().ship(resumed, persist: { saved.states.append($0.completed.count) })
+    #expect(saved.states.first == 1)                                             // back to the whole one
+    #expect(m.artifacts.map(\.size) == [2_000_000, 2_000_000, 1_000_000])
+    #expect(try reassemble(m.artifacts.map { target.appendingPathComponent($0.name) }) == (try Data(contentsOf: source)))
+}
+
+// A part that goes missing while the rest is sent: no manifest, and the record
+// goes back to before it, so the next pass sends it again.
+@Test func aPartGoneBeforeTheManifestLeavesTheVersionIncomplete() throws {
+    let work = tempDir(), target = tempDir()
+    let source = work.appendingPathComponent("Lib.dmg")
+    try writeRandom(5_000_000, to: source)
+    let pending = PendingTransfer(jobID: "j", sourceFile: source.path, baseName: "Lib.dmg",
+                                  totalBytes: 5_000_000, chunkSize: 2_000_000,
+                                  targetDir: target.path, format: .sealedDMG)
+    let saved = Box()
+    let first = target.appendingPathComponent(ChunkedShipper.partName("Lib.dmg", 0))
+    #expect(throws: TransferPartMissing.self) {
+        try ChunkedShipper().ship(pending, persist: { saved.states.append($0.completed.count) },
+                                  onPart: { done, _ in if done == 3 { try? FileManager.default.removeItem(at: first) } })
+    }
+    #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent(ArchiveManifest.sidecarName).path))
+    #expect(saved.states.last == 0)
+}
+
+private final class Box: @unchecked Sendable { var states: [Int] = [] }
+
 @Test func pendingTransferStoreRoundTrips() {
     let store = PendingTransferStore(url: tempDir().appendingPathComponent("p.json"))
     let t = PendingTransfer(jobID: "j", sourceFile: "/s", baseName: "b",

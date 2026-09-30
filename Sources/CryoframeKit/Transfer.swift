@@ -121,6 +121,11 @@ public struct ChunkedShipper: Sendable {
     /// manifest last (its presence marks the archive complete). Throws if the
     /// target becomes unreachable mid-part — the saved progress lets a later run
     /// pick up from the next part.
+    ///
+    /// Parts recorded as sent are looked at first: from the first one that isn't
+    /// there at its size (its folder was swept or made again), they are sent again.
+    /// The manifest is written only over every part, each there at its size; if one
+    /// went missing meanwhile this throws, and the version is never marked complete.
     @discardableResult
     public func ship(_ pending: PendingTransfer,
                      persist: @Sendable (PendingTransfer) -> Void,
@@ -134,6 +139,11 @@ public struct ChunkedShipper: Sendable {
         let reader = try FileHandle(forReadingFrom: URL(fileURLWithPath: state.sourceFile))
         defer { try? reader.close() }
         let bufferSize = 8 * 1024 * 1024
+
+        if let gone = Self.firstMissingPart(state, in: targetDir) {
+            state.completed.removeSubrange(gone...)
+            persist(state)
+        }
 
         for index in state.completed.count..<state.totalParts {
             control?.waitWhilePaused()
@@ -171,11 +181,36 @@ public struct ChunkedShipper: Sendable {
             onPart?(state.completed.count, state.totalParts)
         }
 
+        if let gone = Self.firstMissingPart(state, in: targetDir) {
+            state.completed.removeSubrange(gone...)
+            persist(state)
+            throw TransferPartMissing(part: Self.partName(state.baseName, gone))
+        }
         let manifest = VerificationManifest(format: state.format, artifacts: state.completed,
                                             encrypted: state.encrypted ? true : nil)
         try ArchiveManifest.write(manifest, toDir: targetDir)   // completion marker, written last
         return manifest
     }
+
+    /// the index of the first part recorded as sent that isn't in `dir` as a file of
+    /// its size; nil when every one is
+    static func firstMissingPart(_ p: PendingTransfer, in dir: URL) -> Int? {
+        for (i, part) in p.completed.enumerated() {
+            let expected = min(p.chunkSize, p.totalBytes - min(p.totalBytes, UInt64(i) * p.chunkSize))
+            let url = dir.appendingPathComponent(Self.partName(p.baseName, i))
+            var st = stat()
+            guard part.name == Self.partName(p.baseName, i), lstat(url.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG,
+                  UInt64(st.st_size) == expected, part.size == expected else { return i }
+        }
+        return nil
+    }
+}
+
+/// A part an interrupted transfer had sent was gone when its last part was: the
+/// version isn't complete, and the parts from it on are sent again next time.
+public struct TransferPartMissing: Error, LocalizedError, Equatable {
+    public var part: String
+    public var errorDescription: String? { "\(part) went missing from the destination while the rest was being copied; it's copied again next time." }
 }
 
 /// resumes interrupted transfers whose target is reachable again. Call on app
