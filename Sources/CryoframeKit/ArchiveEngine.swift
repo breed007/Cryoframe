@@ -134,8 +134,12 @@ public enum ArchivePlan {
     /// the DEFAULT format the one lossy path in the app: sealed zip goes through
     /// ditto and sealed DMG through a filesystem image, both faithful, while the
     /// mirror quietly discarded Finder tags and every resource fork on every run.
+    ///
+    /// -S keeps a sparse file sparse. Without it a virtual machine's 1 GiB disk
+    /// holding 8 KB was written out whole inside the image (1 GB of bands, measured),
+    /// where the room check and the image's cap count what the file takes on disk.
     public static func rsync(root: URL, into destination: URL, extra: [String] = []) -> Command {
-        Command("/usr/bin/rsync", ["-aE", "--delete", "--partial"] + extra + [root.path + "/", destination.path + "/"])
+        Command("/usr/bin/rsync", ["-aE", "-S", "--delete", "--partial"] + extra + [root.path + "/", destination.path + "/"])
     }
 }
 

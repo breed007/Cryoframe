@@ -360,13 +360,13 @@ enum MirrorCopy {
             // and only for this.
             let others = lists.appendingPathComponent("others")
             try Data(everythingBut(readOnly + leftOut, in: source).map { "./" + $0 + "\0" }.joined().utf8).write(to: others)
-            try execute(Command("/usr/bin/rsync", ["-rlptgo", "--delete", "--partial", source.path + "/", next.path + "/"]))
-            try execute(Command("/usr/bin/rsync", ["-lptgoDE", "-0", "--files-from=\(others.path)", source.path + "/", next.path + "/"]))
+            try execute(Command("/usr/bin/rsync", ["-rlptgo", "-S", "--delete", "--partial", source.path + "/", next.path + "/"]))
+            try execute(Command("/usr/bin/rsync", ["-lptgoDE", "-S", "-0", "--files-from=\(others.path)", source.path + "/", next.path + "/"]))
             try copyAttributes(from: source, to: next)
         } else {
             try execute(ArchivePlan.rsync(root: source, into: next, extra: ["-0", "--exclude-from=\(exclude.path)"]))
             if !readOnly.isEmpty {
-                try execute(Command("/usr/bin/rsync", ["-a", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
+                try execute(Command("/usr/bin/rsync", ["-a", "-S", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
             }
         }
         for (i, rel) in readOnly.enumerated() {

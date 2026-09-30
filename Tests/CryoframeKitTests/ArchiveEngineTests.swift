@@ -60,7 +60,7 @@ private func tempOutDir() -> URL {
 @Test func rsyncPlanIsArchiveDeleteWithTrailingSlashes() {
     let c = ArchivePlan.rsync(root: URL(fileURLWithPath: "/m/lib"), into: URL(fileURLWithPath: "/v/lib"))
     #expect(c.tool == "/usr/bin/rsync")
-    #expect(c.args == ["-aE", "--delete", "--partial", "/m/lib/", "/v/lib/"])
+    #expect(c.args == ["-aE", "-S", "--delete", "--partial", "/m/lib/", "/v/lib/"])
 }
 
 /// The argv check above would keep passing if -E stopped meaning what we think it
