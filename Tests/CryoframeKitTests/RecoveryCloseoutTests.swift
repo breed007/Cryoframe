@@ -123,6 +123,31 @@ private final class Calls: @unchecked Sendable {
         #expect(ArchiveReader.unpackedSize(of: URL(fileURLWithPath: "/x.zip"), runner: runner) == 12_900_000 + 144_100 * 4096)
     }
 
+    // MARK: the key check when hdiutil can't be asked
+
+    // hdiutil info failing is "can't tell". Taken for "nothing attached", a holder's
+    // disk handed back by the attach (with any passphrase) was counted as proof, and
+    // detached from under its holder.
+    @Test func aKeyCheckThatCantAskWhatIsAttachedTriesNothing() throws {
+        let base = folder("keyinfo")
+        defer { try? FileManager.default.removeItem(at: base) }
+        try Data("image".utf8).write(to: base.appendingPathComponent("Notes.dmg"))
+        let archive = RestorableArchive(dir: base, libraryName: "Notes", format: .sealedDMG, bytes: 5,
+                                        artifactNames: ["Notes.dmg"], encrypted: true)
+        let calls = Calls()
+        let runner = ScriptedCommandRunner { _, args in
+            calls.add(args.joined(separator: " "))
+            switch args.first {
+            case "info": return CommandResult(status: 1, stdout: "", stderr: "hdiutil: info failed - Resource temporarily unavailable")
+            case "attach": return CommandResult(status: 0, stdout: "/dev/disk42\tGUID_partition_scheme\n", stderr: "")
+            default: return CommandResult(status: 0, stdout: "", stderr: "")
+            }
+        }
+        let proof = KeyCheck(runner: runner, isEvicted: { _ in false }).check(archive, passphrase: "wrong")
+        guard case .unchecked = proof else { Issue.record("called \(proof)"); return }
+        #expect(!calls.all.contains { $0.hasPrefix("attach") || $0.hasPrefix("detach") }, "\(calls.all)")
+    }
+
     // MARK: what the report keeps
 
     // Short numbers and numbers with a unit, dates and times, codes and versions stay,

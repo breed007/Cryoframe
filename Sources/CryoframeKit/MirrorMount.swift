@@ -84,10 +84,16 @@ public enum MirrorMounts {
     }
 
     static func attachedImages(runner: CommandRunner) -> [(path: String, devices: [String])] {
+        attachedImagesIfKnown(runner: runner) ?? []
+    }
+
+    /// every attached disk image and its devices; nil when hdiutil couldn't be asked
+    /// or its answer couldn't be read, which isn't the same as nothing attached
+    static func attachedImagesIfKnown(runner: CommandRunner) -> [(path: String, devices: [String])]? {
         guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"], stdin: nil), r.ok,
               let data = r.stdout.data(using: .utf8),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let images = root["images"] as? [[String: Any]] else { return [] }
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return nil }
+        let images = root["images"] as? [[String: Any]] ?? []       // absent when nothing is attached
         return images.compactMap { img in
             guard let path = img["image-path"] as? String else { return nil }
             let entities = img["system-entities"] as? [[String: Any]] ?? []

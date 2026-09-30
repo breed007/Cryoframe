@@ -158,7 +158,12 @@ public struct KeyCheck: Sendable {
         // an image that is open anywhere isn't tried, and only a disk that wasn't
         // attached before this attach is counted, or detached.
         let look = runner.forTeardown
-        guard MirrorMounts.attachedDevices(of: image, runner: look).isEmpty else {
+        // hdiutil info failing is "can't tell", not "nothing attached": taken for the
+        // latter, a holder's disk would be counted as this attach's, and detached.
+        let cantTell = Proof.unchecked("whether it is open elsewhere on this Mac couldn't be told, so it is tried when it is restored")
+        guard let attached = MirrorMounts.attachedImagesIfKnown(runner: look) else { return cantTell }
+        let target = image.resolvingSymlinksInPath().path
+        guard !attached.contains(where: { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == target && !$0.devices.isEmpty }) else {
             return .unchecked("it is open elsewhere on this Mac, so it is tried when it is restored")
         }
         // A damaged header makes an encrypted image attach as a plain raw disk, with any
@@ -168,7 +173,7 @@ public struct KeyCheck: Sendable {
            r.stdout.contains("encrypted: NO") {
             return .damaged("it doesn't read as an encrypted disk image any more, so it is damaged")
         }
-        let before = MirrorMounts.allDevices(runner: look)
+        guard let before = MirrorMounts.attachedImagesIfKnown(runner: look).map({ Set($0.flatMap(\.devices)) }) else { return cantTell }
         let result: CommandResult
         do {
             result = try DiskImageGate.serialized {
