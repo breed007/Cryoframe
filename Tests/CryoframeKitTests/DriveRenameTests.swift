@@ -195,6 +195,32 @@ private func unique() -> String { "CF" + UUID().uuidString.filter(\.isHexDigit).
         #expect(!locks.isBusy(job.id))                                           // every lock given back
     }
 
+    // Its own name again: the new destination would have the same folder, and so
+    // the same id, as the job's own, and replaced it.
+    @Test func aDriveIsNotRenamedToTheNameItHas() throws {
+        let base = scratch("same")
+        let name = unique()
+        let drive = try TestDrive.make("APFS", name: name, in: base)
+        defer { drive.eject() }
+        let store = JobStore(url: base.appendingPathComponent("jobs.json"))
+        var t = Target.externalDrive(id: drive.mount.appendingPathComponent("Backups").path, name: "Backups on \(name)",
+                                     dir: drive.mount.appendingPathComponent("Backups"))
+        t.volume = VolumeIdentity(uuid: "DRIVE-A", name: "Old A", relativePath: "Backups", learnedAt: start)
+        t.otherVolumes = [VolumeIdentity(uuid: drive.uuid, name: name, relativePath: "Backups")]
+        let job = BackupJob(id: "job-same", name: "Papers",
+                            libraries: [.genericFolder(id: "papers", displayName: "Papers", path: .absolute("/Users/me/Papers"))],
+                            target: t, format: .liveMirror(sizeGB: 1), frequency: .manual, createdAt: start)
+        store.upsert(job)
+        do {
+            _ = try DriveRename.rename(drive.uuid, to: name, targetID: t.id, jobID: job.id, store: store,
+                                       locks: RunLocks(directory: base.appendingPathComponent("locks")),
+                                       pending: PendingTransferStore(url: base.appendingPathComponent("p.json")), isOpen: { _ in false })
+            Issue.record("renamed to its own name")
+        } catch DriveRename.Refusal.invalidName { }
+        #expect(store.load().jobs.first?.targets.map(\.id) == [t.id])
+        #expect(store.load().jobs.first?.targets.first?.volume?.uuid == "DRIVE-A")
+    }
+
     // MARK: without a drive
 
     private func drive(_ fs: String = "apfs", onBoard: Bool = false, writable: Bool = true) -> DriveRename.Drive {

@@ -199,6 +199,7 @@ public enum DriveRename {
                       pending: [PendingTransfer], isQueued: (String) -> Bool, volumes: VolumeTable,
                       runner: CommandRunner, isOpen: (URL) -> Bool) throws {
         if drive.isInternal { throw Refusal.notExternal(drive.name) }
+        if LibraryNames.same(newName, drive.name) { throw Refusal.invalidName("That's the name it has. Choose another one.") }
         if !drive.isWritable { throw Refusal.readOnly(drive.name) }
         if let why = nameProblem(newName, fileSystem: drive.fileSystem) { throw Refusal.invalidName(why) }
         if takenNames(except: drive.uuid, jobs: jobs, volumes: volumes).contains(where: { LibraryNames.same($0, newName) }) {
@@ -336,10 +337,11 @@ public enum DriveRename {
             let group = t.rotation?.group ?? UUID().uuidString
             if t.rotation == nil { t.rotation = Rotation(group: group) }
             var new = DestinationResolver(volumes: volumes).target(for: moved)
+            // never in place of one of the job's destinations (the same folder is the same id)
+            guard !s.jobs[j].targets.contains(where: { $0.id == new.id }) else { return }
             new.volume = VolumeIdentity(uuid: after.uuid, name: after.name, relativePath: relative)
             new.rotation = Rotation(group: group, maxAwayDays: t.rotation?.maxAwayDays ?? Rotation.defaultMaxAwayDays, addedAt: now)
             s.jobs[j].targets[i] = t
-            s.jobs[j].targets.removeAll { $0.id == new.id }
             s.jobs[j].targets.insert(new, at: i + 1)
             saved = Outcome(drive: after, job: s.jobs[j], newTarget: new)
         }
