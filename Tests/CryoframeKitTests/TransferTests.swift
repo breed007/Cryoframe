@@ -14,7 +14,7 @@ import Security
 private func tempDir() -> URL {
     let d = FileManager.default.temporaryDirectory.appendingPathComponent("cf-xfer-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-    return d
+    return TempTracker.track(d)
 }
 private func writeRandom(_ bytes: Int, to url: URL) throws {
     var buf = [UInt8](repeating: 0, count: bytes)

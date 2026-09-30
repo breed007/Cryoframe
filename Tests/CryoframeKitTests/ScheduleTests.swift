@@ -18,7 +18,7 @@ private func at(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
     cal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))!
 }
 private func tempURL() -> URL {
-    FileManager.default.temporaryDirectory.appendingPathComponent("cf-sch-\(UUID().uuidString).json")
+    TempTracker.track(FileManager.default.temporaryDirectory.appendingPathComponent("cf-sch-\(UUID().uuidString).json"))
 }
 private func job(_ freq: BackupFrequency, policy: RunPolicy = .proceed,
                  created: Date, dir: URL = URL(fileURLWithPath: "/tmp")) -> BackupJob {

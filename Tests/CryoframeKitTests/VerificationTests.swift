@@ -13,7 +13,7 @@ import Foundation
 private func tempDir() -> URL {
     let d = FileManager.default.temporaryDirectory.appendingPathComponent("cf-vrf-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-    return d
+    return TempTracker.track(d)
 }
 
 /// a minimal Photos-shaped library: database/Photos.sqlite, valid or corrupt.

@@ -14,7 +14,7 @@ import Foundation
 private func tempDir() -> URL {
     let d = FileManager.default.temporaryDirectory.appendingPathComponent("cf-reh-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-    return d
+    return TempTracker.track(d)
 }
 
 /// a destination laid out the way a job writes one: <dest>/<library>/<stamp>/…
