@@ -146,7 +146,38 @@ public struct CloudDownload: Sendable {
                 if now != last { last = now; quietSince = clock(); continue }
                 if clock() - quietSince >= quietLimit { throw CloudDownloadStalled(path: url.path, quiet: clock() - quietSince) }
             }
+            // The fetch has returned, but that doesn't mean the archive came down: offline,
+            // or refused by the provider, it is still a placeholder, and the open went on
+            // to hand it to hdiutil or ditto, which then failed with a message about the
+            // image or waited on the download themselves. iCloud's download can also
+            // still be finishing after the kick returns, so it is given until it goes
+            // quiet (a few seconds at most) before the archive is called not downloaded.
+            let grace = min(quietLimit, Self.settleLimit)
+            quietSince = clock(); last = progress(url)
+            while isEvicted(url) {
+                if control?.isCancelled == true { throw CancelledError() }
+                if clock() - quietSince >= grace { throw CloudDownloadIncomplete(path: url.path) }
+                Thread.sleep(forTimeInterval: tick)
+                let now = progress(url)
+                if now != last { last = now; quietSince = clock() }
+            }
         }
+    }
+
+    /// how long a fetch that has returned may go without progress while the archive
+    /// is still evicted, before it is called not downloaded
+    static let settleLimit: TimeInterval = 5
+}
+
+/// An evicted archive the cloud provider didn't bring down: the fetch finished and
+/// the archive is still a placeholder (offline, or the provider refused).
+public struct CloudDownloadIncomplete: Error, Equatable {
+    public let path: String
+}
+
+extension CloudDownloadIncomplete: LocalizedError {
+    public var errorDescription: String? {
+        "this archive is in a cloud folder and the cloud copy couldn't be downloaded to this Mac. Check that you're online and signed in to the cloud service, and that the file is still in the cloud folder, then try again."
     }
 }
 

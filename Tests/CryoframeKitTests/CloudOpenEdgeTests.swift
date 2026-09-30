@@ -58,7 +58,10 @@ private final class Box: @unchecked Sendable {
     // archive on a local drive isn't fetched at all.
     @Test func onlyEvictedPartsAreFetched() throws {
         let box = Box()
-        let cloud = CloudDownload(isEvicted: { $0.lastPathComponent.hasPrefix("evicted") }, fetch: { box.fetch($0) }, progress: { _ in 0 })
+        // a fetched part is local afterwards (one still evicted after its fetch is reported:
+        // aFetchThatLeavesTheArchiveEvictedIsReported)
+        let cloud = CloudDownload(isEvicted: { $0.lastPathComponent.hasPrefix("evicted") && !box.fetched.contains($0.lastPathComponent) },
+                                  fetch: { box.fetch($0) }, progress: { _ in 0 })
         let parts = ["local.aa", "evicted.ab", "local.ac", "evicted.ad"].map { URL(fileURLWithPath: "/nowhere/\($0)") }
         try cloud.bringDown(parts, quietLimit: 5, control: nil)
         #expect(box.fetched == ["evicted.ab", "evicted.ad"])

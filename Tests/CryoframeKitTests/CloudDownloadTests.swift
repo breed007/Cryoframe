@@ -100,4 +100,45 @@ private func tempDir(_ tag: String) -> URL {
         }
         #expect(ProcessInfo.processInfo.systemUptime - start < 5)
     }
+
+    // The fetch came back and the archive is still a placeholder (offline, refused):
+    // the open says the cloud copy couldn't be downloaded, soon after the fetch
+    // returned, instead of handing the placeholder to a tool.
+    @Test func aFetchThatBringsNothingDownSaysSoPlainly() throws {
+        let start = ProcessInfo.processInfo.systemUptime
+        let cloud = CloudDownload(isEvicted: { _ in true }, fetch: { _ in }, progress: { _ in 7 })
+        #expect {
+            try cloud.bringDown([URL(fileURLWithPath: "/nowhere/a.dmg")], quietLimit: 900, control: nil)
+        } throws: { error in
+            (error as? CloudDownloadIncomplete) != nil
+                && error.localizedDescription.contains("the cloud copy couldn't be downloaded")
+                && error.localizedDescription.contains("online")
+        }
+        let took = ProcessInfo.processInfo.systemUptime - start
+        #expect(took < CloudDownload.settleLimit + 2, "took \(took) s")
+    }
+
+    // iCloud's kick returns before its download has finished. While the download
+    // still moves, it is waited for, and the open goes on once it is local.
+    @Test func aDownloadStillFinishingAfterTheFetchReturnsIsWaitedFor() throws {
+        let start = ProcessInfo.processInfo.systemUptime
+        let local: @Sendable () -> Bool = { ProcessInfo.processInfo.systemUptime - start > 3 }
+        let cloud = CloudDownload(isEvicted: { _ in !local() }, fetch: { _ in },
+                                  progress: { _ in UInt64((ProcessInfo.processInfo.systemUptime - start) * 10) })
+        try cloud.bringDown([URL(fileURLWithPath: "/nowhere/a.dmg")], quietLimit: 1, control: nil)
+        #expect(local())
+    }
+
+    // Stop still ends the wait after the fetch returned.
+    @Test func stopEndsTheWaitAfterTheFetch() throws {
+        let control = RunControl(quietLimit: 30)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { control.cancel() }
+        let start = ProcessInfo.processInfo.systemUptime
+        let cloud = CloudDownload(isEvicted: { _ in true }, fetch: { _ in },
+                                  progress: { _ in UInt64(ProcessInfo.processInfo.systemUptime * 10) })
+        #expect(throws: CancelledError.self) {
+            try cloud.bringDown([URL(fileURLWithPath: "/nowhere/a.dmg")], quietLimit: 30, control: control)
+        }
+        #expect(ProcessInfo.processInfo.systemUptime - start < 3)
+    }
 }
