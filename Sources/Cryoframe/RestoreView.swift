@@ -419,15 +419,28 @@ struct RestoreView: View {
                     }
                 }
             }
-            if enc { passphraseField }
+            if enc { passphraseField(vers) }
             Divider()
         }
         .padding(.bottom, 4)
     }
 
-    private var passphraseField: some View {
+    /// the job an encrypted library's backups were made by (its folder's identity), when
+    /// this Mac still has its passphrase: a deleted job's is kept for exactly this
+    private func savedPassphraseJob(_ vers: [RestorableArchive]) -> String? {
+        vers.lazy.compactMap { $0.libraryKey?.split(separator: "/").first.map(String.init) }
+            .first { KeychainArchiveKey.exists(jobID: $0) }
+    }
+
+    private func passphraseField(_ vers: [RestorableArchive]) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            SecureField("Passphrase", text: $r.passphrase).textFieldStyle(.roundedBorder).frame(maxWidth: 280)
+            HStack {
+                SecureField("Passphrase", text: $r.passphrase).textFieldStyle(.roundedBorder).frame(maxWidth: 280)
+                if r.passphrase.isEmpty, let id = savedPassphraseJob(vers) {
+                    Button("Use the passphrase saved on this Mac") { r.passphrase = KeychainArchiveKey.load(jobID: id) ?? "" }
+                        .buttonStyle(.link).font(.caption)
+                }
+            }
             Text("This library is encrypted — enter its passphrase to restore or browse a version.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
@@ -481,6 +494,12 @@ struct RestoreView: View {
                 HStack(spacing: 6) {
                     if isLatest { pill("Latest", accent: true) }
                     pill(formatLabel(v.format), accent: false)
+                    // made before the job changed kind: kept as it is, never pruned
+                    // or read as the job's current backup
+                    if LibraryFolders.isKept(v) {
+                        pill("Kept", accent: false)
+                            .help("Kept from before its job changed between one up-to-date copy and dated versions. Nothing deletes it; you can restore from it like any other.")
+                    }
                     if v.encrypted {
                         Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
                             .accessibilityLabel("encrypted")

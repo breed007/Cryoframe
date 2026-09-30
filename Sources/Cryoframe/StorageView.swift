@@ -69,6 +69,11 @@ struct StorageView: View {
                     ForEach(s.archives) { a in
                         HStack {
                             Text(a.version.map { "\(a.library) · \($0.formatted(date: .abbreviated, time: .shortened))" } ?? a.library)
+                            if a.kept {
+                                Text("Kept").font(.caption2.weight(.semibold)).padding(.horizontal, 5)
+                                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                                    .help("Kept from before its job changed kind: nothing deletes it.")
+                            }
                             Spacer()
                             Text(size(a.bytes)).monospacedDigit()
                         }

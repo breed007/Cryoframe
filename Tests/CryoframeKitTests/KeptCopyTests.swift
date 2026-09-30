@@ -86,3 +86,21 @@ private func version(in dir: URL, _ name: String) throws {
         #expect(RestoreDiscovery.scan(dest).filter { $0.version != nil }.allSatisfy(LibraryFolders.isKept))
     }
 }
+
+extension KeptCopyTests {
+    @Test func storageCountsTheCopyAFormatChangeLeftAsKept() throws {
+        let dest = scratch("storage")
+        var job = BackupJob(id: "a", name: "Photos", libraries: [photos], target: .localVolume(id: "d", name: "Dest", dir: dest),
+                            format: .liveMirror(sizeGB: 1), frequency: .manual, createdAt: start)
+        let folder = try LibraryFolders.prepare(job: job, library: photos, in: dest, jobs: [job], isOpen: { _ in false }).folder
+        try mirrorTop(in: folder)
+        job.format = .sealedZip
+        _ = try LibraryFolders.prepare(job: job, library: photos, in: dest, jobs: [job], isOpen: { _ in false })
+        try version(in: folder, "2026-10-01-020000")
+        let rows = StorageReporter.report([job], volumes: FixedVolumeTable([]))
+        let archives = try #require(rows.first?.archives)
+        #expect(archives.count == 2)
+        #expect(archives.filter(\.kept).count == 1 && archives.first(where: \.kept)?.version == nil)
+        #expect(archives.first(where: \.kept)!.bytes > 0)
+    }
+}

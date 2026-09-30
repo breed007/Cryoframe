@@ -15,6 +15,8 @@ public struct ArchiveSize: Sendable, Identifiable {
     public var library: String
     public var version: Date?
     public var bytes: UInt64
+    /// kept from before its job changed kind (see LibraryFolders.isKept)
+    public var kept: Bool = false
 }
 
 public struct JobStorage: Sendable, Identifiable {
@@ -47,7 +49,14 @@ public enum StorageReporter {
                 for library in job.libraries {
                     for a in LibraryFolders.archives(job: job, library: library, in: t.destinationDir) {
                         archives.append(ArchiveSize(library: a.libraryName, version: a.version,
-                                                    bytes: JobExecutor.directorySize(a.dir)))
+                                                    bytes: JobExecutor.directorySize(a.dir), kept: LibraryFolders.isKept(a)))
+                    }
+                    // the up-to-date copy a format change left: not the job's current
+                    // backup, but on its destination all the same
+                    if let f = LibraryFolders.folder(job: job, library: library, in: t.destinationDir),
+                       let kept = LibraryFolders.kept(in: f).mirror {
+                        archives.append(ArchiveSize(library: library.displayName, version: nil,
+                                                    bytes: JobExecutor.directorySize(f.appendingPathComponent(kept.name)), kept: true))
                     }
                 }
                 let v = volume(of: t.destinationDir)
