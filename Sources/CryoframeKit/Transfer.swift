@@ -27,6 +27,11 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
     /// can't say whether the drive plugged in now is the one holding the first parts.
     /// nil: recorded before 1.6, or on a volume that couldn't be told.
     public var volumeUUID: String?
+    /// The staged archive the parts are read from, as it was when the first part was
+    /// sent. A later run of the job builds its next archive at the same path, so a
+    /// resume could otherwise read a different archive from the one its first parts
+    /// came from. nil: recorded before this was.
+    public var source: SourceStamp?
 
     public var totalParts: Int { Int((totalBytes + chunkSize - 1) / max(chunkSize, 1)) }
 
@@ -51,6 +56,7 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
         encrypted = try c.decodeIfPresent(Bool.self, forKey: .encrypted) ?? false
         completed = try c.decodeIfPresent([ArtifactDigest].self, forKey: .completed) ?? []
         volumeUUID = try c.decodeIfPresent(String.self, forKey: .volumeUUID)
+        source = try? c.decodeIfPresent(SourceStamp.self, forKey: .source)
     }
 
     /// The job this transfer belongs to: records are keyed `<job>:<dest>:<lib>`
@@ -78,6 +84,25 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
         if DestinationRules.samePath(recorded, versionDir) { return true }
         guard let key, jobID == key, recorded.lastPathComponent == versionDir.lastPathComponent else { return false }
         return volume == nil || isOnItsDrive(volume)
+    }
+}
+
+/// Which file a staged archive is: its file system, inode, size and last change.
+/// A rebuilt archive at the same path differs in at least one of them.
+public struct SourceStamp: Codable, Sendable, Equatable {
+    public var device: Int64
+    public var inode: UInt64
+    public var size: UInt64
+    /// seconds and nanoseconds of its last modification
+    public var modified: Int64
+    public var modifiedNanos: Int64
+
+    /// the file open at `fd`
+    static func of(_ fd: Int32) -> SourceStamp? {
+        var st = stat()
+        guard fstat(fd, &st) == 0 else { return nil }
+        return SourceStamp(device: Int64(st.st_dev), inode: UInt64(st.st_ino), size: UInt64(st.st_size),
+                           modified: Int64(st.st_mtimespec.tv_sec), modifiedNanos: Int64(st.st_mtimespec.tv_nsec))
     }
 }
 
@@ -153,6 +178,31 @@ public struct ChunkedShipper: Sendable {
         defer { try? reader.close() }
         let bufferSize = 8 * 1024 * 1024
 
+        // The file read now must be the one the parts sent so far came from. Unless it
+        // is the very file recorded, each part sent is checked against it by its hash:
+        // one that doesn't match means a later run rebuilt the archive, and this
+        // transfer can't be finished. Never a version made of two archives.
+        guard let stamp = SourceStamp.of(reader.fileDescriptor), stamp.size == state.totalBytes else {
+            throw TransferSourceChanged(file: state.baseName)
+        }
+        if state.source != stamp {
+            for (i, part) in state.completed.enumerated() {
+                try reader.seek(toOffset: UInt64(i) * state.chunkSize)
+                var remaining = Int(min(state.chunkSize, state.totalBytes - min(state.totalBytes, UInt64(i) * state.chunkSize)))
+                var hasher = SHA256()
+                while remaining > 0 {
+                    if control?.isCancelled == true { throw CancelledError() }
+                    let chunk = try reader.read(upToCount: min(bufferSize, remaining)) ?? Data()
+                    if chunk.isEmpty { break }
+                    hasher.update(data: chunk)
+                    remaining -= chunk.count
+                }
+                let sha = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+                guard remaining == 0, sha == part.sha256 else { throw TransferSourceChanged(file: state.baseName) }
+            }
+            state.source = stamp            // saved with the next part
+        }
+
         if let gone = Self.firstMissingPart(state, in: targetDir) {
             state.completed.removeSubrange(gone...)
             persist(state)
@@ -217,6 +267,15 @@ public struct ChunkedShipper: Sendable {
         }
         return nil
     }
+}
+
+/// The staged archive an interrupted transfer reads its parts from isn't the one its
+/// first parts came from: a later run built the next one at the same path. The
+/// transfer can't be finished; its record is dropped, and its unfinished version
+/// folder is cleared away like any other.
+public struct TransferSourceChanged: Error, LocalizedError, Equatable {
+    public var file: String
+    public var errorDescription: String? { "\(file) was built again before its upload finished, so the upload can't be finished; the next backup copies a new version." }
 }
 
 /// A part an interrupted transfer had sent was gone when its last part was: the
@@ -301,6 +360,10 @@ public enum TransferResumer {
                 resumed.append(pending.jobID)
             } catch is CancelledError {
                 stopped.insert(jobID(of: pending))
+            } catch is TransferSourceChanged {
+                // it can't be finished: dropped. The staged file is another run's now
+                // (or nobody's, and swept with the rest of scratch).
+                store.remove(jobID: pending.jobID)
             } catch {
                 // target dropped again — leave the record, retry next launch/tick
             }

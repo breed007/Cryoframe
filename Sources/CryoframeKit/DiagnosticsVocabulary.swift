@@ -53,6 +53,8 @@ app
 appeared
 apple
 applications
+applies
+apply
 apps
 archive
 archived
@@ -185,6 +187,7 @@ corrupted
 could
 couldn't
 count
+counted
 counts
 covers
 cp
@@ -198,6 +201,7 @@ current
 cut
 daily
 damaged
+dashboard
 data
 database
 date
@@ -463,6 +467,7 @@ leaves
 left
 leftovers
 less
+let
 letters
 libraries
 library
@@ -720,6 +725,7 @@ restored
 result
 resuming
 retention
+review
 rewrites
 right
 rlptgo
