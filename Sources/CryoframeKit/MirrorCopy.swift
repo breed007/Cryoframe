@@ -417,7 +417,13 @@ enum MirrorCopy {
         while let rel = walker.nextObject() as? String {
             var st = stat()
             let path = copy.appendingPathComponent(rel).path
-            if lstat(path, &st) == 0, isLeftOut(st.st_mode) { unlink(path) }
+            guard lstat(path, &st) == 0, isLeftOut(st.st_mode), unlink(path) != 0, errno == EACCES || errno == EPERM else { continue }
+            // a read-only folder, kept read-only by the clone: writable for the moment
+            let parent = (path as NSString).deletingLastPathComponent
+            var p = stat()
+            guard lstat(parent, &p) == 0, chmod(parent, (p.st_mode & 0o7777) | S_IWUSR) == 0 else { continue }
+            unlink(path)
+            chmod(parent, p.st_mode & 0o7777)
         }
     }
 
