@@ -239,4 +239,28 @@ private let boot = vol("/System/Volumes/Data", "DATA-UUID", "Macintosh HD", onMa
         let gone = FixedVolumeTable([boot])
         #expect(lib.located(volumes: gone, home: "/Users/j").paths == lib.paths)
     }
+
+    // A folder at a source's path on another volume isn't the source: on another
+    // drive of its drive's name it's refused and said so; on the startup disk (a
+    // folder left where the drive mounted), the drive isn't connected.
+    @Test func aFolderAtASourcesPathOnAnotherVolumeIsntTheSource() throws {
+        let base = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("cf-src-\(UUID().uuidString.prefix(8))")
+        let papers = base.appendingPathComponent("T7/Papers")
+        try FileManager.default.createDirectory(at: papers, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        var lib = ContentType.genericFolder(id: "p", displayName: "Papers", path: .absolute(papers.path))
+        lib.volume = VolumeIdentity(uuid: "REAL", name: "T7", relativePath: "Papers")
+        let mount = base.appendingPathComponent("T7")
+        let same = FixedVolumeTable([MountedVolume(mountPoint: mount, uuid: "REAL", name: "T7", isInternal: false)])
+        #expect(lib.whereabouts(volumes: same, home: "/Users/j") == .here(lib))
+        let impostor = FixedVolumeTable([MountedVolume(mountPoint: mount, uuid: "OTHER", name: "T7", isInternal: false)])
+        guard case .otherDrive(let why) = lib.whereabouts(volumes: impostor, home: "/Users/j") else {
+            Issue.record("another drive of its name was taken for it"); return
+        }
+        #expect(why.contains("different drive named “T7”"), "\(why)")
+        let leftover = FixedVolumeTable([MountedVolume(mountPoint: URL(fileURLWithPath: "/"), uuid: "DATA", name: "Macintosh HD", isRoot: true)])
+        guard case .away = lib.whereabouts(volumes: leftover, home: "/Users/j") else {
+            Issue.record("a folder on the startup disk was taken for the drive's"); return
+        }
+    }
 }

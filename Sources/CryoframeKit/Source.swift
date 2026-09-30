@@ -71,19 +71,52 @@ public enum SourceRules {
     }
 }
 
+/// Where a folder to back up is right now, for a folder on a drive whose volume is
+/// recorded (see `ContentType.whereabouts`).
+public enum SourcePresence: Sendable, Equatable {
+    /// here, at this library's folder (moved to where its drive is mounted now)
+    case here(ContentType)
+    /// the folder at its path is on a different drive of its drive's name, not the one
+    /// it was set up on; why, to say so
+    case otherDrive(String)
+    /// its drive isn't connected (what is at its path is on another volume)
+    case away(String)
+}
+
 extension ContentType {
-    /// where this library is now: its recorded folder if it's there, else the same
+    /// Where this library is now. A folder whose volume is recorded is found by the
+    /// volume: at its recorded path when that is still on its drive, else at the same
     /// place on its drive wherever that drive is mounted now (a renamed drive mounts
-    /// under its new name). Only a folder whose volume is recorded can be found again.
-    public func located(volumes: VolumeTable, home: String) -> ContentType {
-        guard let id = volume, paths.count == 1 else { return self }
+    /// under its new name). A folder at its path on any other volume isn't it: the
+    /// week the real drive died and a replacement took its name, that replacement's
+    /// folder was backed up as the library, a mirror was made to match it, and
+    /// retention aged the real versions out behind it. A folder with no volume
+    /// recorded is found by its path, as before 1.6.
+    public func whereabouts(volumes: VolumeTable, home: String) -> SourcePresence {
+        guard let id = volume, !id.isShare, paths.count == 1 else { return .here(self) }
         let live = paths[0].liveURL(home: home)
-        if FileManager.default.fileExists(atPath: live.path) { return self }
-        guard let v = volumes.mounted().first(where: { $0.uuid == id.uuid }) else { return self }
-        let now = id.relativePath.isEmpty ? v.mountPoint : v.mountPoint.appendingPathComponent(id.relativePath)
-        var copy = self
-        copy.paths = [.absolute(now.path)]
-        return copy
+        if FileManager.default.fileExists(atPath: live.path) {
+            // on its drive (or on a volume whose UUID can't be told: nothing to go on)
+            guard let v = volumes.volume(containing: live), let uuid = v.uuid, uuid != id.uuid else { return .here(self) }
+        }
+        let mounted = volumes.mounted()
+        if let v = mounted.first(where: { $0.uuid == id.uuid }) {
+            let now = id.relativePath.isEmpty ? v.mountPoint : v.mountPoint.appendingPathComponent(id.relativePath)
+            var copy = self
+            copy.paths = [.absolute(now.path)]
+            return .here(copy)
+        }
+        guard FileManager.default.fileExists(atPath: live.path) else { return .here(self) }       // not found: said as such
+        if mounted.contains(where: { LibraryNames.same($0.name, id.name) }) {
+            return .otherDrive("a different drive named “\(id.name)” is connected, not the one \(displayName) is on, so it wasn't backed up")
+        }
+        return .away("\(id.name), the drive \(displayName) is on, isn't connected")
+    }
+
+    /// where this library is now (see `whereabouts`); itself when it isn't here
+    public func located(volumes: VolumeTable, home: String) -> ContentType {
+        if case .here(let lib) = whereabouts(volumes: volumes, home: home) { return lib }
+        return self
     }
 }
 

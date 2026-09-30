@@ -140,11 +140,21 @@ public struct JobExecutor: Sendable {
         // found the same way (see ContentType.located).
         let resolved = DestinationResolver(volumes: self.volumes).resolve(saved)
         let presence = resolved.presence
+        // a folder whose drive is another drive of its drive's name, or isn't here: not
+        // backed up, and said why (by library id)
+        var refused: [String: String] = [:], away = Set<String>()
         let job: BackupJob = {
             var j = resolved.job
-            j.libraries = j.libraries.map { $0.located(volumes: self.volumes, home: locator.home) }
+            j.libraries = j.libraries.map { lib in
+                switch lib.whereabouts(volumes: self.volumes, home: locator.home) {
+                case .here(let found): return found
+                case .otherDrive(let why): refused[lib.id] = why; return lib
+                case .away: away.insert(lib.id); return lib
+                }
+            }
             return j
         }()
+        let refusedSources = refused, awaySources = away
         let decision = decide(job.runPolicy, libraries: job.libraries, detector: detector)
         if case .deferred(let reason) = decision { return .deferred(reason) }
 
@@ -212,6 +222,7 @@ public struct JobExecutor: Sendable {
         // distinct volume involved — all of them at once, so a job spanning two disks
         // still captures a single moment.
         let placements = job.libraries.map { lib -> LibraryPlacement in
+            if refusedSources[lib.id] != nil || awaySources.contains(lib.id) { return LibraryPlacement(library: lib, liveRoot: nil, volume: nil) }
             let live = self.locator.liveRoots(of: lib).first
             return LibraryPlacement(library: lib, liveRoot: live,
                                     volume: live.flatMap { VolumeInspector.volume(for: $0) })
@@ -242,6 +253,10 @@ public struct JobExecutor: Sendable {
                 let idx = offset + 1
                 if control.isCancelled { cancelled = true; break }
                 onLibrary(library.displayName)
+                if let why = refusedSources[library.id] {
+                    for d in dests { results.append(.failed(library: library.displayName, destination: d.target.displayName, error: why)) }
+                    continue
+                }
                 guard let placement = placements.first(where: { $0.library.id == library.id }),
                       let root = placement.root(in: mounts) else {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
