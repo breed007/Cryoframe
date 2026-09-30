@@ -28,7 +28,8 @@ struct ProtectionStatus {
     static func compute(_ model: AppModel) -> ProtectionStatus {
         let v = ProtectionVerdict.compute(jobs: model.jobs, lastRecords: model.lastRecords,
                                           lastHealth: model.lastHealth, runningCount: model.backingUpJobIDs.count,
-                                          lastGood: model.lastGood, now: model.clock, scheduleOn: model.scheduleOn)
+                                          lastGood: model.lastGood, now: model.clock, scheduleOn: model.scheduleOn,
+                                          unrecordedRuns: model.unrecordedRuns)
         return ProtectionStatus(level: v.level, title: v.title, subtitle: v.subtitle, glyph: v.glyph, tint: tint(v.level))
     }
 

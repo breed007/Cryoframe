@@ -33,10 +33,12 @@ public struct ProtectionVerdict: Sendable, Equatable {
     ///   - now: the time to judge how long ago that was.
     ///   - scheduleOn: whether the scheduled agent is switched on. Off, no job runs on
     ///     its own.
+    ///   - unrecordedRuns: runs the job store saw finish that the history no longer
+    ///     holds (see `unrecordedRun`), by job id.
     public static func compute(jobs: [BackupJob], lastRecords: [String: RunRecord],
                                lastHealth: [String: HealthRecord], runningCount: Int,
                                lastGood: [String: Date] = [:], now: Date = Date(),
-                               scheduleOn: Bool = true) -> ProtectionVerdict {
+                               scheduleOn: Bool = true, unrecordedRuns: [String: Date] = [:]) -> ProtectionVerdict {
         guard !jobs.isEmpty else {
             return .init(level: .idle, title: "No backup jobs yet",
                          subtitle: "Create a job to start protecting a library.",
@@ -51,7 +53,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
         let standings = jobs.map { job in
             (job: job, standing: standing(of: job, latest: lastRecords[job.id],
                                           lastGood: lastGood[job.id] ?? goodDate(lastRecords[job.id]),
-                                          health: lastHealth[job.id], now: now))
+                                          health: lastHealth[job.id], now: now, unrecordedRun: unrecordedRuns[job.id]))
         }
         let healthy = standings.filter { $0.standing == .healthy }.count
         let neverRan = standings.filter { $0.standing == .neverRan }
@@ -133,6 +135,10 @@ public struct ProtectionVerdict: Sendable, Equatable {
         case notBackedUpLately(lastGood: Date)
         /// has tried, and never finished a good run (put off, say); not overdue yet
         case noGoodRunYet(note: String?)
+        /// ran (the job store says so), but the history no longer says how: 1.5
+        /// trimmed it without keeping the last good run. Critical only if the job
+        /// hasn't run at all for twice its interval and a week.
+        case noRecordOfGoodRun(lastRan: Date, critical: Bool)
 
         public var level: Level {
             switch self {
@@ -140,6 +146,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
             case .neverRan: return .idle
             case .failed: return .critical
             case .overdue(_, _, let critical, _): return critical ? .critical : .attention
+            case .noRecordOfGoodRun(_, let critical): return critical ? .critical : .attention
             case .paused, .partial, .checkFailed, .stopped, .notBackedUpLately, .noGoodRunYet: return .attention
             }
         }
@@ -148,6 +155,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
         var rank: Int {
             switch self {
             case .overdue: return 0
+            case .noRecordOfGoodRun: return 1
             case .partial: return 1
             case .checkFailed: return 2
             case .stopped: return 3
@@ -177,13 +185,18 @@ public struct ProtectionVerdict: Sendable, Equatable {
                 return "hasn't been backed up in \(ProtectionVerdict.age(from: lastGood, to: now)); it runs only when you press Run now"
             case .noGoodRunYet(let note):
                 return note.map { "hasn't finished a backup yet (\($0))" } ?? "hasn't finished a backup yet"
+            case .noRecordOfGoodRun(let ran, _):
+                return "has no record of its last good backup (older history wasn't kept); it last ran \(ProtectionVerdict.age(from: ran, to: now)) ago"
             }
         }
 
-        /// late enough for an alert: overdue
+        /// late enough for an alert: overdue, or not run at all for a week
         public var isLate: (late: Bool, critical: Bool) {
-            if case .overdue(_, _, let critical, _) = self { return (true, critical) }
-            return (false, false)
+            switch self {
+            case .overdue(_, _, let critical, _): return (true, critical)
+            case .noRecordOfGoodRun(_, let critical): return (critical, critical)
+            default: return (false, false)
+            }
         }
     }
 
@@ -191,10 +204,20 @@ public struct ProtectionVerdict: Sendable, Equatable {
     /// completed run counts as the job's last good one, and a job is judged by how long
     /// ago that was. A partial run doesn't count either: part of what the job covers
     /// wasn't backed up.
+    ///
+    /// `unrecordedRun`: a run the job store saw finish and the history no longer
+    /// holds. With no good run on record, that run is judged unknown rather than
+    /// absent: a job upgraded from 1.5, whose good runs were trimmed out of the
+    /// history, read as never backed up, critical, with a high-priority alert.
     public static func standing(of job: BackupJob, latest: RunRecord?, lastGood: Date?,
-                                health: HealthRecord?, now: Date) -> Standing {
+                                health: HealthRecord?, now: Date, unrecordedRun: Date? = nil) -> Standing {
         if latest?.outcome == .failed { return .failed }
         if !job.enabled { return .paused }
+        if lastGood == nil, let ran = unrecordedRun {
+            let age = now.timeIntervalSince(ran)
+            let critical = job.frequency.interval.map { age >= $0 * Staleness.overdueFactor && age >= Staleness.critical } ?? false
+            return .noRecordOfGoodRun(lastRan: ran, critical: critical)
+        }
         let note = latest.flatMap(attemptNote)
         if let interval = job.frequency.interval {
             let since = lastGood ?? job.createdAt
@@ -212,6 +235,19 @@ public struct ProtectionVerdict: Sendable, Equatable {
             return .notBackedUpLately(lastGood: lastGood)
         }
         return .healthy
+    }
+
+    /// The run the job store last saw finish (`lastRun`, recorded at the end of every
+    /// finished run, whatever came of it), if the history holds no record of it.
+    /// Before 1.6 the history was trimmed at 200 records with nothing kept per job.
+    /// `records`: this job's records.
+    public static func unrecordedRun(lastRun: Date?, records: [RunRecord]) -> Date? {
+        guard let lastRun else { return nil }
+        // lastRun is the time the run started; its record runs from then to its finish
+        let held = records.contains { r in
+            r.outcome != .deferred && lastRun >= r.startedAt.addingTimeInterval(-300) && lastRun <= r.finishedAt.addingTimeInterval(300)
+        }
+        return held ? nil : lastRun
     }
 
     /// what the latest attempt came to, when it wasn't a finished run

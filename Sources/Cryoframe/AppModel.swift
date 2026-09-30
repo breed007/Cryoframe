@@ -32,6 +32,7 @@ final class AppModel: ObservableObject {
     @Published var activity: [String] = []
     @Published var lastRecords: [String: RunRecord] = [:]   // latest run per job (persisted)
     @Published var lastGood: [String: Date] = [:]           // when each job last finished a good run
+    @Published var unrecordedRuns: [String: Date] = [:]     // runs the job store saw that the history no longer holds
     @Published var clock = Date()                           // moves every few minutes, so "overdue" arrives on its own
     @Published var scheduleOn = true                        // the scheduled agent is switched on
     @Published var lastHealth: [String: HealthRecord] = [:] // latest archive health check per job
@@ -111,6 +112,12 @@ final class AppModel: ObservableObject {
         for r in history.all() where latest[r.jobID] == nil { latest[r.jobID] = r }   // newest-first → first wins
         lastRecords = latest
         lastGood = history.lastGood()
+        let all = history.all(), ran = store.load().lastRun
+        var unrecorded: [String: Date] = [:]
+        for job in jobs {
+            unrecorded[job.id] = ProtectionVerdict.unrecordedRun(lastRun: ran[job.id], records: all.filter { $0.jobID == job.id })
+        }
+        unrecordedRuns = unrecorded
     }
 
     /// recent runs across all jobs, newest first, for the History view.
@@ -686,6 +693,7 @@ final class AppModel: ObservableObject {
         history.append(record)
         lastRecords[record.jobID] = record
         if record.outcome.isGood { lastGood[record.jobID] = record.finishedAt }
+        if record.outcome != .deferred { unrecordedRuns[record.jobID] = nil }      // this run is on record now
         if let w = record.warning { log("⚠︎ \(w)") }
         logFinished(record)
         maybeNotify(record)

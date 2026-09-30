@@ -132,6 +132,37 @@ private func record(_ job: BackupJob, _ outcome: RunOutcomeKind, at t: TimeInter
         t.clear("a")
         #expect(t.shouldSend("a", now: t0.addingTimeInterval(60)))
     }
+    // Upgraded from 1.5, whose history kept 200 records and nothing per job: a job
+    // whose good runs were trimmed out read as never backed up since it was set up,
+    // critical, with a high-priority alert. The job store still knows it ran.
+    @Test func anUpgradedJobWhoseGoodRunsWereTrimmedIsNotCritical() {
+        let a = job("a")                                // daily, set up in 1970
+        let now = Date(timeIntervalSince1970: 1_000 * 86_400)
+        let ranYesterday = now.addingTimeInterval(-86_400)
+        // nothing in the history for it: the run the job store saw isn't on record
+        #expect(ProtectionVerdict.unrecordedRun(lastRun: ranYesterday, records: []) == ranYesterday)
+        let v = ProtectionVerdict.compute(jobs: [a], lastRecords: [:], lastHealth: [:], runningCount: 0,
+                                          now: now, unrecordedRuns: ["a": ranYesterday])
+        #expect(v.level == .attention, "\(v)")
+        #expect(v.subtitle.hasPrefix("Job a has no record of its last good backup (older history wasn't kept); it last ran 24 hours ago"), "\(v.subtitle)")
+        let quiet = ProtectionVerdict.standing(of: a, latest: nil, lastGood: nil, health: nil, now: now, unrecordedRun: ranYesterday)
+        #expect(AlertPolicy.payload(forOverdue: a, standing: quiet, now: now) == nil)
+        // a job that hasn't run at all for over a week is critical, and says so
+        let ranLongAgo = now.addingTimeInterval(-10 * 86_400)
+        let late = ProtectionVerdict.standing(of: a, latest: nil, lastGood: nil, health: nil, now: now, unrecordedRun: ranLongAgo)
+        #expect(late.level == .critical)
+        #expect(AlertPolicy.payload(forOverdue: a, standing: late, now: now)?.high == true)
+        // the run is on record (a 1.6 history): judged by the record, as before
+        let failedThen = RunRecord(id: "r", jobID: "a", jobName: "Job a", startedAt: ranYesterday, finishedAt: ranYesterday.addingTimeInterval(60),
+                                   trigger: "scheduled", outcome: .partial, summary: "", libraries: [], bytes: 0, warning: nil)
+        #expect(ProtectionVerdict.unrecordedRun(lastRun: ranYesterday, records: [failedThen]) == nil)
+        // a deferral isn't a run the job store records
+        let putOff = RunRecord(id: "d", jobID: "a", jobName: "Job a", startedAt: ranYesterday, finishedAt: ranYesterday,
+                               trigger: "scheduled", outcome: .deferred, summary: "", libraries: [], bytes: 0, warning: nil)
+        #expect(ProtectionVerdict.unrecordedRun(lastRun: ranYesterday, records: [putOff]) == ranYesterday)
+        #expect(ProtectionVerdict.unrecordedRun(lastRun: nil, records: []) == nil)
+    }
+
     // An hourly job whose runs alternate failed and put off, a week without a good
     // one: told once, not every other hour. A good run clears it, and the next
     // trouble is told at once.

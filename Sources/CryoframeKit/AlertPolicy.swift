@@ -73,7 +73,8 @@ public enum AlertPolicy {
     /// isn't overdue (it is failed), so an hourly job alternating failed and put-off
     /// runs was told it was overdue about every other hour.
     public static func overdueAlerts(jobs: [BackupJob], latest: [String: RunRecord], lastGood: [String: Date],
-                                     now: Date, throttle: AlertThrottle) -> [(payload: Payload, subject: String)] {
+                                     unrecordedRuns: [String: Date] = [:], now: Date,
+                                     throttle: AlertThrottle) -> [(payload: Payload, subject: String)] {
         var out: [(payload: Payload, subject: String)] = []
         for job in jobs where job.enabled && job.frequency.isRecurring {
             if latest[job.id]?.outcome.isGood == true {
@@ -81,7 +82,7 @@ public enum AlertPolicy {
                 continue
             }
             let standing = ProtectionVerdict.standing(of: job, latest: latest[job.id], lastGood: lastGood[job.id],
-                                                      health: nil, now: now)
+                                                      health: nil, now: now, unrecordedRun: unrecordedRuns[job.id])
             guard let p = payload(forOverdue: job, standing: standing, now: now) else { continue }
             let subject = standing.isLate.critical ? job.id + ".critical" : job.id
             guard throttle.shouldSend(subject, now: now) else { continue }

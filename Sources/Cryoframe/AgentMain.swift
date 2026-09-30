@@ -122,7 +122,7 @@ enum AgentMain {
             storage: StorageReporter.report(store.load().jobs),
             retention: Dictionary(uniqueKeysWithValues: store.load().jobs.map { ($0.id, $0.retention) })
         ).filter { $0.kind == .tight && StorageNag.shouldWarn($0.destination, now: Date()) }
-        let overdue = overdueNotices(jobs: store.load().jobs, history: historyStore, now: Date())
+        let overdue = overdueNotices(jobs: store.load().jobs, history: historyStore, lastRun: store.load().lastRun, now: Date())
         sleepGuard.end()
 
         // Send everything before exiting. This process is the ONLY thing that will
@@ -152,12 +152,17 @@ enum AgentMain {
     /// Scheduled jobs gone late, as alerts (see AlertPolicy.overdueAlerts), each with
     /// what to call once it has been delivered, so one that couldn't go is tried again
     /// at the next pass.
-    private static func overdueNotices(jobs: [BackupJob], history: RunHistoryStore,
+    private static func overdueNotices(jobs: [BackupJob], history: RunHistoryStore, lastRun: [String: Date],
                                        now: Date) -> [(AlertPolicy.Payload, @Sendable () -> Void)] {
         let throttle = AlertThrottle(key: "overdue.lastAlerted")
+        let all = history.all()
         var latest: [String: RunRecord] = [:]
-        for r in history.all() where latest[r.jobID] == nil { latest[r.jobID] = r }
-        return AlertPolicy.overdueAlerts(jobs: jobs, latest: latest, lastGood: history.lastGood(),
+        for r in all where latest[r.jobID] == nil { latest[r.jobID] = r }
+        var unrecorded: [String: Date] = [:]
+        for job in jobs {
+            unrecorded[job.id] = ProtectionVerdict.unrecordedRun(lastRun: lastRun[job.id], records: all.filter { $0.jobID == job.id })
+        }
+        return AlertPolicy.overdueAlerts(jobs: jobs, latest: latest, lastGood: history.lastGood(), unrecordedRuns: unrecorded,
                                          now: now, throttle: throttle)
             .map { alert in (alert.payload, { throttle.recordSent(alert.subject, now: now) }) }
     }
