@@ -35,4 +35,5 @@ enum Prefs {
     static let remoteAlertType = "remote.alertType"        // "off" | "webhook" | "ntfy", default "off"
     static let remoteAlertURL = "remote.alertURL"          // webhook endpoint or ntfy topic URL
     static let remoteAlertEvents = "remote.alertEvents"    // "failure" | "all", default "failure"
+    static let escrowExport = "escrow.lastExport"          // JSON EscrowFreshness.Export — when the recovery file was last exported, and what it covered (no passphrases)
 }

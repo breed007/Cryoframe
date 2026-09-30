@@ -45,4 +45,16 @@ enum KeychainArchiveKey {
     }
 
     static func exists(jobID: String) -> Bool { load(jobID: jobID) != nil }
+
+    /// when the passphrase was last saved (the item's modification date), read
+    /// without the passphrase itself; nil if there is none
+    static func savedAt(jobID: String) -> Date? {
+        var query = base(jobID)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let attrs = item as? [String: Any] else { return nil }
+        return attrs[kSecAttrModificationDate as String] as? Date
+    }
 }

@@ -57,6 +57,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         StoragePressureCard(model: model)
                         CoverageCard(model: model)
+                        RecoveryFileCard(model: model)
                         HStack {
                             Text("Jobs").font(.headline).foregroundStyle(.secondary)
                             Spacer()

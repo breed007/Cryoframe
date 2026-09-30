@@ -16,6 +16,7 @@ struct EscrowView: View {
     @State private var jobCount = 0
     @State private var encryptedCount = 0
     @State private var status: (text: String, ok: Bool)?
+    @State private var freshness: EscrowFreshness.Status = .notNeeded
 
     private var missingKeys: Int { max(0, encryptedCount - jobCount) }
 
@@ -32,6 +33,7 @@ struct EscrowView: View {
                           systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.cryoWarn).font(.callout)
                 }
+                freshnessLine
                 Button("Export passphrases…") { exportFlow() }
                     .disabled(jobCount == 0)
             } header: {
@@ -56,6 +58,25 @@ struct EscrowView: View {
         .onAppear {
             jobCount = PassphraseEscrow.collect().count
             encryptedCount = JobStore.standard().load().jobs.filter(\.encrypted).count
+            freshness = EscrowFreshness.current()
+        }
+    }
+
+    @ViewBuilder private var freshnessLine: some View {
+        switch freshness {
+        case .notNeeded:
+            EmptyView()
+        case .neverExported:
+            Label("No recovery file has been exported from this Mac yet.", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.cryoWarn).font(.callout)
+        case .current(let date):
+            Label("Last exported \(date.formatted(date: .abbreviated, time: .shortened)); it covers every encrypted job.",
+                  systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.secondary).font(.callout)
+        case .outOfDate(let date, let why):
+            Label("Last exported \(date.formatted(date: .abbreviated, time: .shortened)), and it's out of date: \(why.joined(separator: "; ")). Export a new one and keep it in place of the old.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.cryoWarn).font(.callout)
         }
     }
 
@@ -76,6 +97,8 @@ struct EscrowView: View {
         guard save.runModal() == .OK, let url = save.url else { return }
         do {
             try data.write(to: url, options: .atomic)
+            EscrowFreshness.remember(entries)
+            freshness = EscrowFreshness.current()
             let omitted = missingKeys > 0 ? " (\(missingKeys) encrypted job\(missingKeys == 1 ? "" : "s") without a saved passphrase were skipped)" : ""
             status = ("Exported \(entries.count) passphrase\(entries.count == 1 ? "" : "s") to \(url.lastPathComponent).\(omitted)", missingKeys == 0)
         } catch {

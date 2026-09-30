@@ -25,13 +25,32 @@ final class RecoveryModel: ObservableObject {
     @Published var keyFile: URL?
     @Published var masterPassword = ""
     @Published var unlockError: String?
-    /// library display name → passphrase, recovered from the escrow file. On a new Mac
-    /// there are no jobs, so escrow entries are matched by library name, not job id.
-    @Published var passphrases: [String: String] = [:]
+    /// the recovery file's entries, once opened. On a new Mac there are no jobs, so
+    /// they are matched to archives by library name, and a name can have several
+    /// passphrases (two jobs, or a job made again): each is tried on the archive.
+    @Published var entries: [PassphraseEscrow.Entry] = []
     @Published var unlockedCount = 0
+    /// per archive (its folder): the passphrase that opened it, and the proof. Only
+    /// `.opens` counts as unlocked.
+    @Published var keys: [String: KeyResult] = [:]
+    @Published var checking: Set<String> = []
+
+    struct KeyResult: Equatable { let passphrase: String?; let proof: KeyCheck.Proof }
+
+    enum KeyState: Equatable {
+        case notEncrypted, noKey, checking, unlocked, wrongKey
+        /// a candidate that couldn't be tried now; tried at the restore
+        case unchecked(String)
+        var canRestore: Bool {
+            switch self {
+            case .notEncrypted, .unlocked, .unchecked: return true
+            case .noKey, .checking, .wrongKey: return false
+            }
+        }
+    }
 
     // moment
-    @Published var momentIndex: Int = 0
+    @Published var momentIndex: Int = 0 { didSet { checkKeys() } }
 
     // destination
     @Published var toOriginalLocations = true
@@ -48,6 +67,8 @@ final class RecoveryModel: ObservableObject {
         let id = UUID(); let library: String; let ok: Bool; let detail: String; let url: URL?
         var clashed: RestorableArchive? = nil
         var dest: URL? = nil
+        /// the archive refused the passphrase
+        var wrongKey = false
     }
 
     var moments: [Date] { RecoveryPlan.moments(in: archives) }
@@ -60,8 +81,42 @@ final class RecoveryModel: ObservableObject {
         Array(Set(archives.filter(\.encrypted).map(\.libraryName))).sorted()
     }
     var hasEncrypted: Bool { !encryptedLibraries.isEmpty }
-    /// encrypted libraries we still have no passphrase for — they can't be restored.
-    var lockedOut: [String] { encryptedLibraries.filter { passphrases[$0] == nil } }
+    /// encrypted libraries at this moment no recovered passphrase opens: they can't
+    /// be restored
+    var lockedOut: [String] {
+        selections.filter { let k = keyState($0); return k == .noKey || k == .wrongKey }.map(\.library)
+    }
+
+    func candidates(for library: String) -> [String] { PassphraseEscrow.candidates(for: library, in: entries) }
+
+    func keyState(_ s: RecoveryPlan.Selection) -> KeyState {
+        guard s.archive.encrypted else { return .notEncrypted }
+        if candidates(for: s.library).isEmpty { return .noKey }
+        guard let k = keys[s.archive.id] else { return .checking }
+        switch k.proof {
+        case .opens: return .unlocked
+        case .wrongKey: return .wrongKey
+        case .unchecked(let why): return .unchecked(why)
+        }
+    }
+
+    /// Prove the recovered passphrases against the archives this moment restores, by
+    /// opening each (see KeyCheck). Nothing is called unlocked until it has opened.
+    func checkKeys() {
+        guard !entries.isEmpty else { return }
+        let todo = selections.filter { $0.archive.encrypted && keys[$0.archive.id] == nil && !checking.contains($0.archive.id) }
+            .map { ($0.archive, candidates(for: $0.library)) }
+            .filter { !$0.1.isEmpty }
+        guard !todo.isEmpty else { return }
+        for (a, _) in todo { checking.insert(a.id) }
+        Task {
+            for (a, cands) in todo {
+                let found = await Task.detached { KeyCheck().firstOpening(a, candidates: cands) }.value
+                keys[a.id] = KeyResult(passphrase: found.passphrase, proof: found.proof)
+                checking.remove(a.id)
+            }
+        }
+    }
     var totalBytes: UInt64 { RecoveryPlan.totalBytes(selections) }
 
     func scan(_ folder: URL) {
@@ -70,8 +125,10 @@ final class RecoveryModel: ObservableObject {
         Task {
             let found = await Task.detached { RestoreDiscovery.scan(folder) }.value
             archives = found
+            keys = [:]
             momentIndex = max(0, RecoveryPlan.moments(in: found).count - 1)   // default: the latest moment
             scanning = false
+            checkKeys()
         }
     }
 
@@ -84,19 +141,18 @@ final class RecoveryModel: ObservableObject {
         guard let entries = PassphraseEscrow.importEntries(data, password: masterPassword) else {
             unlockError = "Wrong master password, or this isn't a Cryoframe recovery file."; return
         }
-        passphrases = PassphraseEscrow.passphrasesByLibrary(entries)
+        self.entries = entries
+        keys = [:]
         unlockedCount = entries.count
         masterPassword = ""                       // don't keep it around once it's been used
+        checkKeys()
     }
-
-    func passphrase(for library: String) -> String? { passphrases[library] }
 
     /// restore every selected version, one library at a time.
     func run(destinationFor: @escaping @Sendable (String) -> URL?) {
         guard !running else { return }
         let items = selections
         guard !items.isEmpty else { return }
-        let keys = passphrases
         running = true; results = []
         Task {
             var out: [Outcome] = []
@@ -107,18 +163,36 @@ final class RecoveryModel: ObservableObject {
                                        detail: "couldn't work out where this library belongs — restore it from the timeline instead", url: nil))
                     continue
                 }
-                if s.archive.encrypted, keys[lib] == nil {
-                    out.append(Outcome(library: lib, ok: false, detail: "encrypted, and no passphrase was recovered", url: nil))
+                let state = keyState(s)
+                guard state.canRestore else {
+                    out.append(Outcome(library: lib, ok: false, detail: state == .wrongKey
+                                       ? "encrypted, and no passphrase in the recovery file opens this backup"
+                                       : "encrypted, and no passphrase was recovered", url: nil))
                     continue
                 }
                 stage = "\(lib): starting"
-                let pass = s.archive.encrypted ? keys[lib] : nil
-                out.append(await Self.restoreOne(s.archive, library: lib, to: dest, passphrase: pass, onClash: .refuse) { st in
-                    Task { @MainActor in self.stage = "\(lib): \(st.rawValue)" }
-                })
+                out.append(await restoreTrying(s.archive, library: lib, to: dest, onClash: .refuse))
             }
             results = out; running = false; stage = ""
         }
+    }
+
+    /// restore with the passphrase proven to open it; one that couldn't be tried
+    /// beforehand (split, in the cloud) is tried with each candidate in turn
+    private func restoreTrying(_ a: RestorableArchive, library lib: String, to dest: URL, onClash: RestoreClash) async -> Outcome {
+        let passes: [String?]
+        if !a.encrypted { passes = [nil] }
+        else if let k = keys[a.id], k.proof == .opens, let p = k.passphrase { passes = [p] }
+        else { passes = candidates(for: lib) }
+        var last: Outcome?
+        for pass in passes {
+            let o = await Self.restoreOne(a, library: lib, to: dest, passphrase: pass, onClash: onClash) { st in
+                Task { @MainActor in self.stage = "\(lib): \(st.rawValue)" }
+            }
+            if !o.wrongKey { return o }
+            last = o
+        }
+        return last ?? Outcome(library: lib, ok: false, detail: "encrypted, and no passphrase was recovered", url: nil)
     }
 
     /// restore the libraries that met something already in place beside it, under a
@@ -127,16 +201,12 @@ final class RecoveryModel: ObservableObject {
         guard !running else { return }
         let items = which.filter { $0.clashed != nil && $0.dest != nil }
         guard !items.isEmpty else { return }
-        let keys = passphrases
         running = true
         Task {
             for o in items {
                 guard let a = o.clashed, let dest = o.dest else { continue }
                 stage = "\(o.library): starting"
-                let redone = await Self.restoreOne(a, library: o.library, to: dest, passphrase: a.encrypted ? keys[o.library] : nil,
-                                                   onClash: .alongside) { st in
-                    Task { @MainActor in self.stage = "\(o.library): \(st.rawValue)" }
-                }
+                let redone = await restoreTrying(a, library: o.library, to: dest, onClash: .alongside)
                 if let i = results.firstIndex(where: { $0.id == o.id }) { results[i] = redone }
             }
             running = false; stage = ""
@@ -157,7 +227,7 @@ final class RecoveryModel: ObservableObject {
                 var clash: RestorableArchive?
                 if case .destinationExists? = error as? RestoreError { clash = a }
                 return Outcome(library: library, ok: false, detail: RestoreFailureText.recoveryMessage(error, encrypted: a.encrypted),
-                               url: nil, clashed: clash, dest: dest)
+                               url: nil, clashed: clash, dest: dest, wrongKey: KeyCheck.isWrongKey(error))
             }
         }.value
     }
@@ -285,7 +355,7 @@ struct RecoveryWizard: View {
             if !r.hasEncrypted {
                 noticeBox(icon: "checkmark.circle.fill", tint: .cryoGood,
                           text: "Nothing here is encrypted — there's nothing to unlock. Carry on.")
-            } else if r.passphrases.isEmpty {
+            } else if r.entries.isEmpty {
                 Text("\(r.encryptedLibraries.count) of \(RestoreDiscovery.libraries(in: r.archives).count) libraries are encrypted. Open the recovery-key file you exported and kept somewhere safe — it recovers every passphrase at once.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
@@ -309,22 +379,24 @@ struct RecoveryWizard: View {
             } else {
                 noticeBox(icon: "checkmark.circle.fill", tint: .cryoGood,
                           text: "Recovered \(r.unlockedCount) passphrase\(r.unlockedCount == 1 ? "" : "s").")
+                Text("Each passphrase counts only once it has opened the backup it's for.")
+                    .font(.caption).foregroundStyle(.secondary)
                 VStack(spacing: 2) {
-                    ForEach(r.encryptedLibraries, id: \.self) { lib in
+                    ForEach(r.selections.filter(\.archive.encrypted)) { s in
                         HStack(spacing: 8) {
-                            Image(systemName: r.passphrase(for: lib) != nil ? "lock.open.fill" : "lock.fill")
-                                .font(.caption).foregroundStyle(r.passphrase(for: lib) != nil ? .cryoGood : .cryoWarn)
-                            Text(lib).font(.callout)
+                            keyIcon(r.keyState(s)).font(.caption)
+                            Text(s.library).font(.callout)
                             Spacer()
-                            Text(r.passphrase(for: lib) != nil ? "unlocked" : "still locked")
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text(keyWords(r.keyState(s))).font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(2).multilineTextAlignment(.trailing)
                         }
                         .padding(.vertical, 6).padding(.horizontal, 10)
+                        .accessibilityElement(children: .combine)
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.cryoElevated))
                 if !r.lockedOut.isEmpty {
-                    Text("\(r.lockedOut.count) encrypted \(r.lockedOut.count == 1 ? "library has" : "libraries have") no matching passphrase — \(r.lockedOut.count == 1 ? "it" : "they") will be skipped.")
+                    Text("\(r.lockedOut.count) encrypted \(r.lockedOut.count == 1 ? "library has" : "libraries have") no passphrase in the recovery file that opens \(r.lockedOut.count == 1 ? "it" : "them") — \(r.lockedOut.count == 1 ? "it" : "they") will be skipped.")
                         .font(.caption).foregroundStyle(.cryoWarn)
                 }
             }
@@ -376,8 +448,7 @@ struct RecoveryWizard: View {
             }
             Spacer()
             if s.archive.encrypted {
-                Image(systemName: r.passphrase(for: s.library) != nil ? "lock.open.fill" : "lock.fill")
-                    .font(.caption2).foregroundStyle(r.passphrase(for: s.library) != nil ? .cryoGood : .cryoWarn)
+                keyIcon(r.keyState(s)).font(.caption2).help(keyWords(r.keyState(s)))
             }
             Text(ByteCountFormatter.string(fromByteCount: Int64(s.archive.bytes), countStyle: .file))
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
@@ -535,7 +606,7 @@ struct RecoveryWizard: View {
             } else {
                 Button("Restore everything") { startRestore() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(r.running || r.selections.isEmpty || r.selections.count == r.lockedOut.count)
+                    .disabled(r.running || !r.checking.isEmpty || r.selections.isEmpty || r.selections.count == r.lockedOut.count)
             }
         }
         .padding(.horizontal, 22).padding(.vertical, 13)
@@ -595,6 +666,26 @@ struct RecoveryWizard: View {
         panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
         panel.message = "Choose your Cryoframe recovery file"
         if panel.runModal() == .OK, let url = panel.url { r.keyFile = url; r.unlockError = nil }
+    }
+
+    @ViewBuilder private func keyIcon(_ state: RecoveryModel.KeyState) -> some View {
+        switch state {
+        case .checking: ProgressView().controlSize(.mini)
+        case .unlocked, .notEncrypted: Image(systemName: "lock.open.fill").foregroundStyle(.cryoGood)
+        case .unchecked: Image(systemName: "key.fill").foregroundStyle(.secondary)
+        case .noKey, .wrongKey: Image(systemName: "lock.fill").foregroundStyle(.cryoWarn)
+        }
+    }
+
+    private func keyWords(_ state: RecoveryModel.KeyState) -> String {
+        switch state {
+        case .notEncrypted: return "not encrypted"
+        case .checking: return "checking the passphrase…"
+        case .unlocked: return "unlocked"
+        case .noKey: return "no passphrase in the recovery file"
+        case .wrongKey: return "the recovery file's passphrase doesn't open it"
+        case .unchecked(let why): return "passphrase found, not yet tried: \(why)"
+        }
     }
 
     private func noticeBox(icon: String, tint: Color, text: String) -> some View {
