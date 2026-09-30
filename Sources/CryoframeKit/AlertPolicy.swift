@@ -92,6 +92,15 @@ public enum AlertPolicy {
                 throttle.clear(job.id); throttle.clear(job.id + ".critical")
                 continue
             }
+            // A good run since the last alert ends that stretch even if no look saw it
+            // as the latest: the app looks only while it runs, and the agent's good run
+            // overnight was followed by more put-off runs before the app next looked,
+            // so a new overdue stretch was held back until a day after the old alert.
+            if let good = lastGood[job.id] {
+                for subject in [job.id, job.id + ".critical"] {
+                    if let sent = throttle.lastSent(subject), sent < good { throttle.clear(subject) }
+                }
+            }
             let standing = ProtectionVerdict.standing(of: job, latest: latest[job.id], lastGood: lastGood[job.id],
                                                       health: nil, now: now, unrecordedRun: unrecordedRuns[job.id])
             guard let p = payload(forOverdue: job, standing: standing, now: now) else { continue }
@@ -159,6 +168,11 @@ public struct AlertThrottle: @unchecked Sendable {
     public func shouldSend(_ subject: String, now: Date) -> Bool {
         guard let last = (defaults.dictionary(forKey: key) as? [String: Double])?[subject] else { return true }
         return now.timeIntervalSince1970 - last >= interval || now.timeIntervalSince1970 < last
+    }
+
+    /// when an alert about `subject` was last recorded as sent
+    public func lastSent(_ subject: String) -> Date? {
+        ((defaults.dictionary(forKey: key) as? [String: Double])?[subject]).map { Date(timeIntervalSince1970: $0) }
     }
 
     public func recordSent(_ subject: String, now: Date) {
