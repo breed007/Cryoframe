@@ -174,6 +174,10 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             // sound, and holding a complete copy that isn't the new one
             try? MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted)
             throw MirrorCopyError.updateNotConfirmed(count: count, examples: examples)
+        } catch MirrorCopyError.topFolderNotRestored(let why) {
+            // sound, and holding the new copy, bar its top folder's attributes
+            try? MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted)
+            throw MirrorCopyError.topFolderNotRestored(why)
         }
         try MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted)
         return result
@@ -211,6 +215,11 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         }
         let found = try MirrorCopy.structure(of: mnt.appendingPathComponent(name), against: source, previous: nil, control: runner.control)
         guard found.count == 0 else { throw MirrorCopyError.updateNotConfirmed(count: found.count, examples: found.examples) }
+        // The swap lifts and restores the top folder's access list after the read-back
+        // (see MirrorCopy.putInPlace), so it is the one thing written unverified.
+        if let why = MirrorCopy.differentAttributes(source.path, mnt.appendingPathComponent(name).path) {
+            throw MirrorCopyError.topFolderNotRestored(why)
+        }
     }
 
     /// Give the drive back the bands the image no longer uses.

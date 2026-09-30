@@ -256,6 +256,58 @@ extension MirrorAttributeReadBackTests {
     }
 }
 
+/// Takes the access list off the new copy's top folder just before the image is
+/// detached after the swap: what a refused acl_set_file in the swap leaves.
+private final class LosesTheTopACLAfterTheSwap: CommandRunner, @unchecked Sendable {
+    let inner = ProcessCommandRunner()
+    private var detaches = 0
+    private(set) var lost = false
+    var forTeardown: CommandRunner { self }
+    func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+        if (launchPath as NSString).lastPathComponent == "hdiutil", args.first == "detach", let mnt = args.last, mnt.contains("cf-mirror-") {
+            detaches += 1
+            let top = URL(fileURLWithPath: mnt).appendingPathComponent("Lib").path
+            if detaches == 2, MirrorCopy.accessList(top) != nil {      // the first is the read-back's
+                lost = (try? inner.run("/bin/chmod", ["-N", top], stdin: nil))?.ok == true
+            }
+        }
+        return try inner.run(launchPath, args, stdin: stdin)
+    }
+}
+
+extension MirrorAttributeReadBackTests {
+    // The swap lifts the top folder's access list (a deny-delete list, as every
+    // standard home folder has) and puts it back, after the read-back. Put back
+    // unchecked, and not compared afterwards, a copy missing it passed as a success.
+    @Test func aTopFolderAccessListLostInTheSwapIsCaught() throws {
+        let src = attrDir("topsrc").appendingPathComponent("Lib")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: src.appendingPathComponent("a.txt"))
+        #expect(try ProcessCommandRunner().run("/bin/chmod", ["+a", "everyone deny delete", src.path]).ok)
+        let out = attrDir("top"), base = attrDir("base")
+        defer {
+            _ = try? ProcessCommandRunner().run("/bin/chmod", ["-N", src.path])
+            for d in [out, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) }
+        }
+        _ = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        try Data("y".utf8).write(to: src.appendingPathComponent("a.txt"))
+        let loses = LosesTheTopACLAfterTheSwap()
+        var failure: Error?
+        do { _ = try SparseBundleMirrorEngine(sizeGB: 1, runner: loses, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out) }
+        catch { failure = error }
+        try #require(loses.lost, "no access list was lost, so this proves nothing")
+        guard case .topFolderNotRestored(let why)? = failure as? MirrorCopyError else {
+            Issue.record("a copy missing its top folder's access list passed: \(String(describing: failure))"); return
+        }
+        #expect(why == "is missing its access list")
+        #expect(!MirrorSeal.isOpen(out), "a sound image holding the new copy is sealed")
+        // the next run puts it back
+        #expect(throws: Never.self) {
+            _ = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        }
+    }
+}
+
 /// Damages the staging copy the way a lost write would (and says whether it did), at
 /// the last moment before the read-back: when the run detaches the image to attach it
 /// again, after every rsync pass and the attribute pass are done.

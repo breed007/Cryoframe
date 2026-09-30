@@ -543,8 +543,12 @@ enum MirrorCopy {
             if let currentACL { acl_set_file(current.path, ACL_TYPE_EXTENDED, currentACL) }
             throw MirrorCopyError.swapFailed(String(cString: strerror(e)))
         }
-        // the paths have traded places: `current` now names the new copy
-        if let nextACL { acl_set_file(current.path, ACL_TYPE_EXTENDED, nextACL) }
+        // The paths have traded places: `current` now names the new copy. Its access
+        // list goes back on; if it won't, the run says so rather than leave the top
+        // folder without it unseen (the read-back was before this).
+        if let nextACL, acl_set_file(current.path, ACL_TYPE_EXTENDED, nextACL) != 0 {
+            throw MirrorCopyError.topFolderNotRestored("its access list couldn't be put back: \(String(cString: strerror(errno)))")
+        }
     }
 
     private static func clearACL(_ path: String) {
@@ -589,6 +593,9 @@ public enum MirrorCopyError: Error, Equatable {
     case updateNotConfirmed(count: Int, examples: [String])
     /// after the swap, the image couldn't be checked
     case couldNotConfirm(String)
+    /// the new copy is in place, but its top folder's attributes or access list,
+    /// written after the read-back, didn't come through
+    case topFolderNotRestored(String)
 }
 
 extension MirrorCopyError: LocalizedError {
@@ -616,6 +623,8 @@ extension MirrorCopyError: LocalizedError {
             return "the mirror was updated, but its disk image couldn't be checked afterwards (\(why)), so this run doesn't count as a success. Run again."
         case .stagingStuck(let path):
             return "an unfinished copy a previous run left inside the mirror (\(path)) couldn't be removed, and it can't be trusted, so nothing was updated. The previous copy is intact; run again, and if this repeats, start this mirror afresh."
+        case .topFolderNotRestored(let why):
+            return "the mirror was updated, but its top folder didn't come through as the library has it (\(why)), so this run doesn't count. Everything inside it is in place; the next run puts it right."
         case .swapFailed(let why):
             return "couldn't put the updated copy in place (\(why)); the previous copy is untouched — run again"
         }
