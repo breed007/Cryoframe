@@ -4,8 +4,8 @@
 //
 //  A job changed between a mirror and sealed versions holds the versions in its
 //  folder where they are: neither its retention nor another job's takes them. And
-//  the run history keeps each job's runs that made versions for a month, however
-//  busy the jobs beside it, within a bound.
+//  the run history keeps the runs 1.5 recorded that made versions for a month,
+//  however busy the jobs beside it, within a bound.
 //
 
 import Testing
@@ -111,25 +111,36 @@ private func versions(_ dir: URL) -> [String] {
                 "the changed job reads only its own")
     }
 
-    // The history keeps an hourly job's runs that made versions for a month, bounded:
-    // two a day, beside the cap and its newest good run.
+    // The history keeps the runs 1.5 recorded that made versions for a month, all of
+    // them (1.5 kept its newest 200), and past that only the cap and the newest good
+    // run: a run 1.6 made isn't needed as evidence, as its folders carry their identity.
     @Test func theHistoryKeepsEvidenceWithinABound() {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("cf-kind-history-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
         let store = RunHistoryStore(url: url, cap: 20)
         let job = BackupJob(name: "Hourly", libraries: [photos], target: .localVolume(id: "d", name: "Dest", dir: URL(fileURLWithPath: "/tmp")),
                             format: .sealedZip, frequency: .everyHours(1), createdAt: start)
-        for h in 0..<(60 * 24) {
+        let made = JobOutcome.finished(results: [.completed(library: "Photos", destination: "T7", parts: 1, bytes: 1, verified: true)], warning: nil)
+        let old = (0..<200).map { h in
             let at = start.addingTimeInterval(Double(h) * 3600)
-            store.append(RunRecord(id: UUID().uuidString, jobID: job.id, jobName: job.name, startedAt: at, finishedAt: at.addingTimeInterval(60),
-                                   trigger: "scheduled", outcome: .completed, summary: "",
-                                   libraries: [LibraryOutcome(from: .completed(library: "Photos", destination: "T7", parts: 1, bytes: 1, verified: true))],
-                                   bytes: 1, warning: nil))
+            return RunRecord(id: UUID().uuidString, jobID: job.id, jobName: job.name, startedAt: at, finishedAt: at.addingTimeInterval(60),
+                             trigger: "scheduled", outcome: .completed, summary: "",
+                             libraries: [LibraryOutcome(from: .completed(library: "Photos", destination: "T7", parts: 1, bytes: 1, verified: true))],
+                             bytes: 1, warning: nil)
+        }
+        for r in old.reversed() { store.append(r) }       // the newest first, as 1.5 left them
+        let upgraded = start.addingTimeInterval(200 * 3600)
+        for h in 0..<(60 * 24) {
+            let at = upgraded.addingTimeInterval(Double(h) * 3600)
+            store.append(RunRecord.make(job: job, outcome: made, startedAt: at, finishedAt: at.addingTimeInterval(60), trigger: "scheduled"))
+            if h == 10 * 24 {
+                let all = store.all()
+                #expect(all.filter { $0.identityFolders != true }.count == 200, "a month of 1.5's evidence")
+                #expect(all.count <= 20 + 1 + 200, "\(all.count) records")
+            }
         }
         let all = store.all()
-        #expect(all.count <= 20 + 1 + 2 * (RunHistoryStore.evidenceDays + 2), "\(all.count) records")
-        let oldest = all.map(\.startedAt).min() ?? .distantFuture
-        #expect(all.map(\.startedAt).max()!.timeIntervalSince(oldest) >= Double(RunHistoryStore.evidenceDays - 1) * 86_400,
-                "a month of evidence")
+        #expect(all.count <= 20 + 1, "\(all.count) records")
+        #expect(!all.contains { $0.identityFolders != true }, "1.5's evidence ages out")
     }
 }

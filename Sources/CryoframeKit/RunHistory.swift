@@ -122,6 +122,10 @@ public struct RunRecord: Codable, Sendable, Identifiable {
     /// for a run of deferrals: its alert fell due and couldn't be delivered, so it is
     /// owed at the next deferral of the same run (nil when nothing is owed)
     public var deferralAlertPending: Bool?
+    /// true for a run of 1.6 or later, which writes an identity file into every library
+    /// folder it writes to (see LibraryIdentity): the folder, not the run, says whose
+    /// backups it holds. nil in a record 1.5 made, or rewrote after a return to it.
+    public var identityFolders: Bool?
 
     public var duration: TimeInterval { max(0, finishedAt.timeIntervalSince(startedAt)) }
 
@@ -137,6 +141,13 @@ public struct RunRecord: Codable, Sendable, Identifiable {
     /// build from a completed run.
     public static func make(job: BackupJob, outcome: JobOutcome, startedAt: Date, finishedAt: Date,
                             trigger: String, id: String = UUID().uuidString) -> RunRecord {
+        var r = made(job: job, outcome: outcome, startedAt: startedAt, finishedAt: finishedAt, trigger: trigger, id: id)
+        r.identityFolders = true
+        return r
+    }
+
+    private static func made(job: BackupJob, outcome: JobOutcome, startedAt: Date, finishedAt: Date,
+                             trigger: String, id: String) -> RunRecord {
         switch outcome {
         case .deferred(let reason):
             return RunRecord(id: id, jobID: job.id, jobName: job.name, startedAt: startedAt, finishedAt: finishedAt,
@@ -240,13 +251,16 @@ public final class RunHistoryStore: @unchecked Sendable {
     /// what says how long a job has gone without one, and a job failing for weeks
     /// alongside busier ones would otherwise lose it and read as never backed up.
     ///
-    /// Also each job's first and last run of each day that wrote something, over the
-    /// `evidenceDays` before the newest record. A 1.5 pair's other drive is known by a
-    /// version one of the job's runs made there (see LibraryFolders.holdsBackups), and
-    /// an hourly job beside it pushed those runs out within days, while that drive was
-    /// away. The last run of a day made the version a daily retention keeps; the
-    /// first, when the drives were swapped that day, one on the drive that left. At
-    /// most two records a day for each job.
+    /// Also every run 1.5 recorded that wrote something, over the `evidenceDays` before
+    /// the newest record. A 1.5 pair's other drive is known by a version one of the
+    /// job's runs made there (see LibraryFolders.holdsBackups), and an hourly job beside
+    /// it pushed those runs out within days, while that drive was away. Which drive a
+    /// run wrote to isn't recorded, and which of its versions a drive still holds
+    /// depends on when the drives were swapped, so no one run a day (or a few) can
+    /// stand for a drive: an hourly job keeping its last 14 versions leaves a drive
+    /// that went away at 17:00 holding the runs of 04:00 to 17:00. Only 1.5 runs are
+    /// needed: a folder a 1.6 run wrote to carries its identity. Bounded by 1.5 itself,
+    /// which kept its newest 200 records.
     private func trimmed(_ list: [RunRecord]) -> [RunRecord] {
         guard list.count > cap else { return list }
         var keep = Set(list.prefix(cap).map(\.id))
@@ -256,13 +270,9 @@ public final class RunHistoryStore: @unchecked Sendable {
         }
         keep.formUnion(newestGood.values.map(\.id))
         let since = (list.map(\.startedAt).max() ?? .distantPast).addingTimeInterval(-Double(Self.evidenceDays) * 86_400)
-        var days: [String: (first: RunRecord, last: RunRecord)] = [:]
-        for r in list where r.startedAt >= since && r.libraries.contains(where: { $0.parts > 0 }) {
-            let day = "\(r.jobID) \(Calendar.current.startOfDay(for: r.startedAt).timeIntervalSince1970)"
-            let seen = days[day] ?? (r, r)
-            days[day] = (r.startedAt < seen.first.startedAt ? r : seen.first, r.startedAt > seen.last.startedAt ? r : seen.last)
+        for r in list where r.identityFolders != true && r.startedAt >= since && r.libraries.contains(where: { $0.parts > 0 }) {
+            keep.insert(r.id)
         }
-        keep.formUnion(days.values.flatMap { [$0.first.id, $0.last.id] })
         return list.filter { keep.contains($0.id) }
     }
 
