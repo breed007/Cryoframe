@@ -42,6 +42,7 @@ always
 an
 anchor
 and
+angled
 another
 any
 anything
@@ -100,6 +101,7 @@ bin
 block
 blocks
 borrowed
+both
 box
 build
 built
@@ -136,6 +138,7 @@ checksums
 chmod
 choose
 chose
+chosen
 circle
 circlepath
 clamping
@@ -158,7 +161,9 @@ compare
 compared
 complete
 completed
+compressed
 computer
+confirm
 confirmed
 connect
 connected
@@ -298,6 +303,7 @@ fail
 failed
 fails
 fake
+fast
 fat
 few
 fewer
@@ -456,6 +462,7 @@ least
 leaves
 left
 leftovers
+less
 letters
 libraries
 library
@@ -551,6 +558,7 @@ never
 new
 newest
 next
+nightly
 no
 noautofsck
 nobody
@@ -619,6 +627,7 @@ permission
 permissions
 permitted
 personal
+photo
 photos
 photoslibrary
 pib
@@ -681,6 +690,7 @@ recorded
 recover
 recovered
 recovery
+rectangle
 refused
 refuses
 rehearsal
@@ -704,6 +714,7 @@ resize
 resource
 resourcefork
 responding
+rest
 restore
 restored
 result
@@ -784,7 +795,9 @@ sparsebundle
 split
 spotlight
 sqlite
+square
 srcfolder
+stack
 staging
 standard
 standing
@@ -900,6 +913,7 @@ user
 users
 using
 usr
+usually
 utf
 utility
 uuid
@@ -931,6 +945,7 @@ week
 weekly
 weeks
 well
+went
 were
 weren't
 what
@@ -968,6 +983,7 @@ you
 you're
 your
 yours
+yourself
 yyyy
 z'
 za

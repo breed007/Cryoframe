@@ -368,6 +368,14 @@ public struct JobDraftState: Sendable, Equatable {
         return true
     }
 
+    /// The same, from what DrivePairing.look showed: never a drive it refused (one
+    /// holding another job's backups), whatever the view offers.
+    @discardableResult
+    public mutating func pair(_ id: String, as look: DrivePairing) -> Bool {
+        guard look.refusal == nil else { return false }
+        return pair(id, with: look.drive)
+    }
+
     /// `id` stops taking turns with the drive `uuid` at its folder.
     public mutating func unpair(_ id: String, uuid: String) {
         guard let i = targets.firstIndex(where: { $0.id == id }) else { return }

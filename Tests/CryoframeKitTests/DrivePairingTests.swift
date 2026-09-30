@@ -184,4 +184,86 @@ private func mirrorTop(in dir: URL) throws {
         #expect(d.makeJob(now: start).targets.map(\.id) == ["b", "a"])
         #expect(d.primaryTarget?.id == "b")
     }
+
+    // MARK: before renaming (see DriveRename)
+
+    // The look before a rename is the pairing look, for the drive by its UUID: an
+    // already paired drive too, and whose backups are anywhere near the drive's top.
+    @Test func theLookBeforeRenamingSeesWhatThePairingLookSeesAndTheWholeDrive() throws {
+        let t7 = scratch("renamelook"), dest = t7.appendingPathComponent("Backups")
+        let legacy = dest.appendingPathComponent("Papers")
+        for d in 0..<5 { try version(in: legacy, start.addingTimeInterval(Double(d) * day)) }
+        var t = target(dest)
+        let j = job(t, format: .sealedZip, retention: .keepLast(2))
+        let table = FixedVolumeTable([drive(t7, uuid: "DRIVE-B")])
+        let later = start.addingTimeInterval(20 * day)
+        let pairing = try #require(DrivePairing.look(t, job: j, jobs: [j], volumes: table, now: later))
+        let before = try #require(DrivePairing.lookBeforeRenaming("drive-b", target: t, job: j, jobs: [j], volumes: table, now: later))
+        #expect(before.saysTheSame(as: pairing))
+        #expect(before.changesBackups && before.libraries.first?.deletes == 4)
+        // already taking turns with it under one name: the same look
+        t.otherVolumes = [VolumeIdentity(uuid: "DRIVE-B", name: "T7", relativePath: "Backups")]
+        #expect(DrivePairing.look(t, job: j, jobs: [j], volumes: table) == nil)
+        let paired = try #require(DrivePairing.lookBeforeRenaming("DRIVE-B", target: t, job: j, jobs: [j], volumes: table, now: later))
+        #expect(paired.saysTheSame(as: before))
+        // the drive's own: never
+        #expect(DrivePairing.lookBeforeRenaming("DRIVE-A", target: t, job: j, jobs: [j], volumes: table) == nil)
+
+        // another Mac's backups in another folder at the drive's top: pairing at this
+        // folder is still offered, renaming the drive isn't
+        let theirs = t7.appendingPathComponent("Old Mac/Mail")
+        try FileManager.default.createDirectory(at: theirs, withIntermediateDirectories: true)
+        try LibraryIdentity(jobID: "elsewhere", libraryID: "mail", name: "Mail", jobName: "Old Mac").write(in: theirs)
+        t.otherVolumes = nil
+        #expect(DrivePairing.look(t, job: j, jobs: [j], volumes: table)?.refusal == nil)
+        let refused = try #require(DrivePairing.lookBeforeRenaming("DRIVE-B", target: t, job: j, jobs: [j], volumes: table))
+        #expect(refused.refusal?.contains("Old Mac") == true && refused.libraries.isEmpty)
+    }
+
+    // What was shown has to be what happens: a version made since, or a changed
+    // count, isn't the same look.
+    @Test func aLookSaysTheSameOnlyWhileNothingChanged() throws {
+        let t7 = scratch("same"), dest = t7.appendingPathComponent("Backups")
+        let legacy = dest.appendingPathComponent("Papers")
+        for d in 0..<3 { try version(in: legacy, start.addingTimeInterval(Double(d) * day)) }
+        let t = target(dest), j = job(t, format: .sealedZip, retention: .keepLast(2))
+        let table = FixedVolumeTable([drive(t7, uuid: "DRIVE-B")])
+        let later = start.addingTimeInterval(20 * day)
+        let shown = try #require(DrivePairing.lookBeforeRenaming("DRIVE-B", target: t, job: j, jobs: [j], volumes: table, now: later))
+        try version(in: legacy, start.addingTimeInterval(9 * day))
+        let now = try #require(DrivePairing.lookBeforeRenaming("DRIVE-B", target: t, job: j, jobs: [j], volumes: table, now: later))
+        #expect(!now.saysTheSame(as: shown))
+        #expect(now.libraries.first?.deletes == 3)
+    }
+
+    // An unfinished dated folder (no manifest) is deleted by the next run as a
+    // leftover: the look says so, and counts it as a change to confirm.
+    @Test func anUnfinishedDatedFolderIsShownAsDeleted() throws {
+        let t7 = scratch("husk"), dest = t7.appendingPathComponent("Backups")
+        let legacy = dest.appendingPathComponent("Papers")
+        try version(in: legacy, start)
+        let husk = legacy.appendingPathComponent(VersionStamp.string(start.addingTimeInterval(day)))
+        try FileManager.default.createDirectory(at: husk, withIntermediateDirectories: true)
+        try Data("part".utf8).write(to: husk.appendingPathComponent("Papers.zip.part.000"))
+        let t = target(dest), j = job(t, format: .sealedZip, retention: .keepLast(5))
+        let look = try #require(DrivePairing.look(t, job: j, jobs: [j], volumes: FixedVolumeTable([drive(t7, uuid: "DRIVE-B")]), now: start))
+        let lib = try #require(look.libraries.first)
+        #expect(lib.deletes == 0 && lib.unfinished == 1 && look.changesBackups)
+        #expect(lib.effects.contains { $0.contains("never finished") })
+        let plan = JobExecutor.prunePlan(folders: [(papers, legacy)], policy: j.retention, upcoming: start)
+        #expect(plan.husks.count == lib.unfinished)
+    }
+
+    // The editor pairs only what the look didn't refuse, whatever the view offers.
+    @Test func aRefusedDriveIsNeverPaired() {
+        let t = target(URL(fileURLWithPath: "/Volumes/T7/Backups"))
+        var d = draft([t])
+        let b = VolumeIdentity(uuid: "DRIVE-B", name: "T7", relativePath: "Backups")
+        let refused = d.pair("t7", as: DrivePairing(drive: b, libraries: [], refusal: "someone else's"))
+        #expect(!refused)
+        #expect(d.targets.first?.otherVolumes == nil)
+        let paired = d.pair("t7", as: DrivePairing(drive: b, libraries: [], refusal: nil))
+        #expect(paired)
+        #expect(d.targets.first?.otherVolumes == [b])
+    }
 }

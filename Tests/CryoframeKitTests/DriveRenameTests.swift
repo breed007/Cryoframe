@@ -221,6 +221,78 @@ private func unique() -> String { "CF" + UUID().uuidString.filter(\.isHexDigit).
         #expect(store.load().jobs.first?.targets.first?.volume?.uuid == "DRIVE-A")
     }
 
+    // The drive becomes the job's, and its next backup follows the job's Keep rule
+    // there: a drive renamed from the row menu had 4 of its 5 versions deleted by the
+    // next run. Only the count the person was shown, still true when the drive is
+    // renamed, lets it go ahead.
+    @Test func aRenameWhoseNextBackupDeletesVersionsNeedsThatCountConfirmed() throws {
+        let base = scratch("confirm")
+        let name = unique()
+        let drive = try TestDrive.make("APFS", name: name, in: base)
+        defer { drive.eject() }
+        let legacy = drive.mount.appendingPathComponent("Backups/Papers")
+        func version(_ d: Int) throws {
+            let at = legacy.appendingPathComponent(VersionStamp.string(start.addingTimeInterval(Double(d) * 86_400)))
+            try FileManager.default.createDirectory(at: at, withIntermediateDirectories: true)
+            let f = at.appendingPathComponent("Papers.zip")
+            try Data("zip \(d)".utf8).write(to: f)
+            _ = try ArchiveManifest.write(try ArchiveManifest.build(for: ArchiveResult(artifacts: [f], format: .sealedZip)), toDir: at)
+        }
+        for d in 1...4 { try version(d) }                  // and the unfinished one TestDrive made
+        var t = Target.externalDrive(id: "/Volumes/\(name)/Backups", name: "Backups on \(name)",
+                                     dir: URL(fileURLWithPath: "/Volumes/\(name)/Backups"))
+        t.volume = VolumeIdentity(uuid: "DRIVE-A-\(name)", name: name, relativePath: "Backups", learnedAt: start)
+        let job = BackupJob(id: "job-\(name)", name: "Papers",
+                            libraries: [.genericFolder(id: "papers", displayName: "Papers", path: .absolute("/Users/me/Papers"))],
+                            target: t, format: .sealedZip, frequency: .manual, retention: .keepLast(2), createdAt: start)
+        let store = JobStore(url: base.appendingPathComponent("jobs.json"))
+        store.upsert(job)
+        let saved = try Data(contentsOf: base.appendingPathComponent("jobs.json"))
+        let locks = RunLocks(directory: base.appendingPathComponent("locks"))
+        let pending = PendingTransferStore(url: base.appendingPathComponent("p.json"))
+        func rename(_ confirmed: DrivePairing?) throws -> DriveRename.Outcome {
+            try DriveRename.rename(drive.uuid, to: name + " B", targetID: t.id, jobID: job.id, store: store, locks: locks,
+                                   pending: pending, confirmed: confirmed, isOpen: { _ in false })
+        }
+
+        // nothing confirmed
+        #expect(throws: DriveRename.Refusal.effectNotConfirmed) { try rename(nil) }
+        let shown = try #require(DrivePairing.lookBeforeRenaming(drive.uuid, target: t, job: job, jobs: [job]))
+        #expect(shown.refusal == nil && shown.libraries.first?.deletes == 3)
+        // confirmed, but a version was made there since
+        try version(5)
+        #expect(throws: DriveRename.Refusal.effectNotConfirmed) { try rename(shown) }
+        #expect(DriveRename.drive(drive.uuid)?.name == name)
+        #expect(try Data(contentsOf: base.appendingPathComponent("jobs.json")) == saved)
+        // what it says now, confirmed
+        let now = try #require(DrivePairing.lookBeforeRenaming(drive.uuid, target: t, job: job, jobs: [job]))
+        #expect(now.libraries.first?.deletes == 4)
+        let out = try rename(now)
+        #expect(out.drive.name == name + " B")
+        #expect(out.job.targets.count == 2)
+    }
+
+    // Anything of another job's near the drive's top, not only in the job's folder.
+    @Test func aDriveWithAnotherMacsBackupsInAnotherFolderIsNotRenamed() throws {
+        let base = scratch("elsewhere")
+        let name = unique()
+        let drive = try TestDrive.make("APFS", name: name, in: base)
+        defer { drive.eject() }
+        let theirs = drive.mount.appendingPathComponent("Old Mac/Mail")
+        try FileManager.default.createDirectory(at: theirs, withIntermediateDirectories: true)
+        try LibraryIdentity(jobID: "elsewhere", libraryID: "mail", name: "Mail", jobName: "Old Mac").write(in: theirs)
+        let (store, job) = setup(drive, name: name, base: base)
+        do {
+            _ = try DriveRename.rename(drive.uuid, to: name + " B", targetID: job.targets[0].id, jobID: job.id, store: store,
+                                       locks: RunLocks(directory: base.appendingPathComponent("locks")),
+                                       pending: PendingTransferStore(url: base.appendingPathComponent("p.json")), isOpen: { _ in false })
+            Issue.record("renamed a drive holding another Mac's backups")
+        } catch DriveRename.Refusal.notThisJobsDrive(let why) {
+            #expect(why.contains("Old Mac"))
+        }
+        #expect(DriveRename.drive(drive.uuid)?.name == name)
+    }
+
     // MARK: without a drive
 
     private func drive(_ fs: String = "apfs", onBoard: Bool = false, writable: Bool = true) -> DriveRename.Drive {

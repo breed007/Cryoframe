@@ -19,6 +19,14 @@
 //  Finder instead was rejected: with both drives called "T7", the wrong one is
 //  easily picked.
 //
+//  Renaming changes the drive's name only, but the drive then becomes the job's:
+//  the next backup takes over the job's 1.5 folders on it, as pairing would (see
+//  DrivePairing), and its Keep rule may delete dated versions there or replace an
+//  up-to-date copy. So a rename goes through the same look: a drive holding
+//  anything of another job's (of this Mac or another) is refused, and one whose
+//  backups the next run changes is renamed only when the caller passes the look the
+//  person confirmed, and it still says the same.
+//
 //  Nothing is renamed while anything of Cryoframe's uses the drive (a run, a check,
 //  an interrupted transfer to finish on it, a disk image attached from it), or when
 //  it's a Time Machine destination. The job's folder on the drive is looked at
@@ -58,6 +66,11 @@ public enum DriveRename {
         /// renamed and confirmed, but the job was changed meanwhile and wasn't updated
         case renamedJobNotUpdated(String)
         case unchecked(String)
+        /// it holds backups that aren't this job's (see DrivePairing): why, in words
+        case notThisJobsDrive(String)
+        /// what the next backup does to the drive's backups wasn't confirmed, or has
+        /// changed since it was shown
+        case effectNotConfirmed
 
         public var errorDescription: String? {
             switch self {
@@ -74,6 +87,8 @@ public enum DriveRename {
             case .notConfirmed(let why): "The rename couldn't be confirmed, so it was undone and the job was left as it was: \(why)"
             case .renamedJobNotUpdated(let n): "The drive is now called “\(n)”, but the job was changed meanwhile, so it wasn't updated. Add the drive to it as a destination."
             case .unchecked(let why): "It wasn't renamed: \(why)"
+            case .notThisJobsDrive(let why): "It wasn't renamed. \(why)"
+            case .effectNotConfirmed: "It wasn't renamed: what the next backup does to the backups on it has changed since it was shown. Look again, and confirm what it now says."
             }
         }
     }
@@ -274,10 +289,18 @@ public enum DriveRename {
     /// takes turns with it. Holds the run lock of every job with anything on the
     /// drive throughout, and checks everything again under them (see `check`).
     ///
+    /// `confirmed`: the look (DrivePairing.lookBeforeRenaming) the person saw and
+    /// agreed to. It's looked at again, holding the locks: a drive with another job's
+    /// backups is refused, and one whose backups the next run changes (see
+    /// DrivePairing.changesBackups) needs `confirmed` to say the same. `checks`: the
+    /// archive checks recorded, as the look was given them.
+    ///
     /// Throws a Refusal: nothing was renamed (or a rename that couldn't be confirmed
     /// was put back), and the job is as it was.
     public static func rename(_ uuid: String, to newName: String, targetID: String, jobID: String, store: JobStore,
-                              locks: RunLocks, pending: PendingTransferStore, isQueued: (String) -> Bool = { _ in false },
+                              locks: RunLocks, pending: PendingTransferStore,
+                              confirmed: DrivePairing? = nil, checks: [HealthRecord] = [],
+                              isQueued: (String) -> Bool = { _ in false },
                               volumes: VolumeTable = SystemVolumeTable(), runner: CommandRunner = ProcessCommandRunner(),
                               isOpen: (URL) -> Bool = { LibraryFolders.anyImageAttached(under: $0) },
                               now: Date = Date()) throws -> Outcome {
@@ -303,6 +326,13 @@ public enum DriveRename {
         // everything else, again, holding them
         try check(before, to: newName, jobs: jobs, lockState: { _ in .free }, pending: pending.all(), isQueued: isQueued,
                   volumes: volumes, runner: runner, isOpen: isOpen)
+        // whose backups are on it, and what the next backup does to them
+        guard let look = DrivePairing.lookBeforeRenaming(uuid, target: target, job: job, jobs: jobs, volumes: volumes,
+                                                         checks: checks, now: now) else {
+            throw Refusal.unchecked("what's on \(before.name) can't be looked at")
+        }
+        if let why = look.refusal { throw Refusal.notThisJobsDrive(why) }
+        if look.changesBackups, confirmed.map({ look.saysTheSame(as: $0) }) != true { throw Refusal.effectNotConfirmed }
 
         let folder = relative.isEmpty ? before.mountPoint : before.mountPoint.appendingPathComponent(relative, isDirectory: true)
         let print = fingerprint(folder)
