@@ -332,6 +332,10 @@ public struct RestoreEngine: Sendable {
     /// it. The archive's own bytes are written back, as the mirror now does. Best
     /// effort: a file that refuses (locked in Finder) keeps the re-stamped value, and
     /// the restore still succeeds. Only the attribute changes; the file's dates don't.
+    ///
+    /// Exactly as the archive holds it, which for a live mirror is exactly as the
+    /// library had it. A sealed archive already holds a re-stamped value: hdiutil
+    /// -srcfolder and ditto copy with copyfile when it is built.
     static func keepQuarantine(from source: URL, to copy: URL) {
         var rels = [""]
         var isDir: ObjCBool = false

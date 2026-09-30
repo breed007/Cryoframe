@@ -127,12 +127,15 @@ public enum RecoveryNote {
                 "")
         }
         if archives.contains(where: { $0.artifactNames.count > 1 }) {
+            let split = archives.filter { $0.artifactNames.count > 1 }
+            let ext = split.allSatisfy { $0.format == .sealedZip } ? "zip" : split.allSatisfy { $0.format == .sealedDMG } ? "dmg" : "dmg (or .zip)"
             add("SPLIT ARCHIVES",
                 "",
-                "A large archive for a cloud folder is split into parts named NAME.dmg.part.000,",
-                "NAME.dmg.part.001 and so on (or .part.aa, .part.ab). Join them into one file first,",
-                "in Terminal, in the version's folder:",
-                "  cat \"NAME.dmg.part.\"* > ~/Desktop/\"NAME.dmg\"",
+                "A large archive for a cloud folder is split into parts named NAME.\(ext).part.000,",
+                "NAME.\(ext).part.001 and so on (or .part.aa, .part.ab). Join them into one file",
+                "first, in Terminal, in the version's folder, in order:",
+                "  ls \"NAME.\(ext == "zip" ? "zip" : "dmg").part.\"* | sort -V | while IFS= read -r p; do cat \"$p\"; done > ~/Desktop/\"NAME.\(ext == "zip" ? "zip" : "dmg")\"",
+                "(sort -V puts part 1000 after part 999; with fewer parts, cat \"NAME.\(ext == "zip" ? "zip" : "dmg").part.\"* does the same.)",
                 "then open the joined file as above.",
                 "")
         }

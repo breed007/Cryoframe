@@ -168,12 +168,15 @@ public struct ArchiveReader: Sendable {
 
     /// attach `image` read-only at `mnt`, or say plainly that it is already open.
     ///
-    /// A second attach of an image that is already attached fails "Resource busy"
-    /// (measured on macOS 26, every combination of format, read-only or not, and
-    /// passphrase), which the busy retries then repeated for 13 seconds before the
-    /// failure's cleanup detached every device of the image: another reader's mount,
-    /// or a mirror run's read-write attach in the middle of its rsync. Older macOS
-    /// has been seen answering 0 without mounting anything, so that is caught too.
+    /// A second attach of an image that is already attached fails "Resource busy" in
+    /// most cases (measured on macOS 26), which the busy retries then repeated for 13
+    /// seconds before the failure's cleanup detached every device of the image:
+    /// another reader's mount, or a mirror run's read-write attach in the middle of
+    /// its rsync. Not in all: a read-only attach of an image already held read-only
+    /// succeeds, with any passphrase, and hands back the holder's disk (macOS 26.7).
+    /// Older macOS has been seen answering 0 without mounting anything. So the image
+    /// is looked for in hdiutil info first, and an attach that mounted nothing here
+    /// is caught too.
     private func attach(_ image: URL, at mnt: URL, encrypted: Bool, stdin: Data?) throws {
         let look = runner.forTeardown
         MirrorMounts.releaseAbandoned(image, runner: look)       // a crashed process's attach
@@ -212,13 +215,23 @@ public struct ArchiveReader: Sendable {
         return UInt64(r.stdout[m].split(separator: " ").first ?? "")
     }
 
+    /// Parts in the order they were split: by the number after ".part." ("…part.1000"
+    /// comes after "…part.999", which sorting the names put before "…part.101"), or
+    /// for split(1)'s letters, shorter suffixes first, then alphabetically.
+    static func partOrder(_ a: String, _ b: String) -> Bool {
+        func suffix(_ n: String) -> Substring { n.range(of: ".part.", options: .backwards).map { n[$0.upperBound...] } ?? Substring(n) }
+        let x = suffix(a), y = suffix(b)
+        if let i = Int(x), let j = Int(y) { return i < j }
+        return x.count != y.count ? x.count < y.count : x < y
+    }
+
     private func singleFile(_ artifacts: [URL], work: URL, name: String, fm: FileManager) throws -> URL {
         if artifacts.count == 1 { return artifacts[0] }
         try checkRoom(artifacts.reduce(0) { $0 + Checksum.byteSize(of: $1) }, in: work, doing: "joined")
         let out = work.appendingPathComponent(name)
         fm.createFile(atPath: out.path, contents: nil)
         let w = try FileHandle(forWritingTo: out); defer { try? w.close() }
-        for part in artifacts.sorted(by: { $0.path < $1.path }) {
+        for part in artifacts.sorted(by: { Self.partOrder($0.lastPathComponent, $1.lastPathComponent) }) {
             let r = try FileHandle(forReadingFrom: part); defer { try? r.close() }
             while true {
                 let chunk = try r.read(upToCount: 1 << 20) ?? Data()

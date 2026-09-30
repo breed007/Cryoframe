@@ -33,14 +33,7 @@ def main():
     for f in sources():
         with open(f, encoding="utf-8") as fh:
             vocab |= words(fh.read())
-    lines, line = [], ""
-    for w in sorted(vocab):
-        if len(line) + len(w) + 1 > 96:
-            lines.append(line)
-            line = ""
-        line += (" " if line else "") + w
-    lines.append(line)
-    body = "\n".join(lines)
+    body = "\n".join(sorted(vocab))       # one word a line, so a change shows as itself
     with open(OUT, "w", encoding="utf-8") as fh:
         fh.write(f'''//
 //  DiagnosticsVocabulary.swift

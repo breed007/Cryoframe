@@ -66,7 +66,7 @@ private func archive(_ name: String, _ format: ArchiveFormat, version: Date?, pa
         _ = try archive("Mail", .sealedZip, version: Date(timeIntervalSince1970: 1_790_000_000), parts: 3, in: dest)
         let text = RecoveryNote.text(for: RestoreDiscovery.scan(dest))
         #expect(text.contains("TO OPEN A SEALED ZIP") && text.contains("SPLIT ARCHIVES") && text.contains("split into 3 parts"), "\(text)")
-        #expect(text.contains("cat \"NAME.dmg.part.\"*"))
+        #expect(text.contains("ls \"NAME.zip.part.\"* | sort -V | while IFS= read -r p; do cat \"$p\"; done"), "\(text)")
     }
 
     // Discovery, retention and the checks look for folders with a manifest: the
@@ -151,4 +151,19 @@ private func archive(_ name: String, _ format: ArchiveFormat, version: Date?, pa
             #expect(!isDir.boolValue && text.contains("Papers - sealed zip"), "\(text)")
         }
     }
+}
+
+// Split parts are joined in the order they were made, past a thousand of them too,
+// and the note's join step names the format the parts are.
+@Test func partsJoinInTheOrderTheyWereSplit() {
+    let numbered = (0..<1002).map { "L.dmg.part." + String(format: "%03d", $0) }
+    #expect(numbered.shuffled().sorted(by: ArchiveReader.partOrder) == numbered)
+    let lettered = ["L.zip.part.aa", "L.zip.part.ab", "L.zip.part.zz", "L.zip.part.aaa"]
+    #expect(lettered.reversed().sorted(by: ArchiveReader.partOrder) == lettered)
+    let zips = [RestorableArchive(dir: URL(fileURLWithPath: "/x/Mail/2026-01-01-000000"), libraryName: "Mail", format: .sealedZip,
+                                  bytes: 3, artifactNames: ["Mail.zip.part.aa", "Mail.zip.part.ab"],
+                                  version: Date(timeIntervalSince1970: 1_767_225_600))]
+    let text = RecoveryNote.text(for: zips)
+    #expect(text.contains(#"ls "NAME.zip.part."* | sort -V | while IFS= read -r p; do cat "$p"; done > ~/Desktop/"NAME.zip""#), "\(text)")
+    #expect(!text.contains("NAME.dmg.part"))
 }
