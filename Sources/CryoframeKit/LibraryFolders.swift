@@ -72,6 +72,10 @@ public enum LibraryFolders {
             .map { ($0.url, RestoreDiscovery.scan($0.url, maxDepth: 1).filter(ofItsKind)) }
         for e in entries where e.identity?.key != key && e.identity?.jobID != job.id
             && LibraryNames.same(e.url.lastPathComponent, library.displayName) {
+            // another job's folder only if it's a mirror job's: the one kind of folder
+            // 1.5.6 writes another job's versions into. A sealed job's folder, deleted
+            // or no longer written to, holds that job's backups, under its key.
+            if e.identity != nil, mirror || !holdsMirror(e.url) { continue }
             let found = RestoreDiscovery.scan(e.url, maxDepth: 1)
             let mine = found.filter { ofItsKind($0) && isOf(library, bundle: $0.bundleName) }
             if !mine.isEmpty || (e.identity == nil && found.isEmpty) { out.append((e.url, mine)) }
@@ -189,7 +193,11 @@ public enum LibraryFolders {
             $0.url.path != folder.path && $0.identity?.key != key && $0.identity?.jobID != job.id
                 && LibraryNames.same($0.url.lastPathComponent, library.displayName)
         }
-        for other in others where job.format.isSealed {
+        // Out of another job's folder only when that job is a mirror job writing here:
+        // a sealed job's folder, the job deleted (its backups stay) or writing
+        // elsewhere, holds its own versions, and this job's retention would delete them.
+        let mirrorJobs = Set(jobs.filter { !$0.format.isSealed }.map(\.id))
+        for other in others where job.format.isSealed && (other.identity.map { mirrorJobs.contains($0.jobID) } ?? true) {
             let r = moveVersions(from: other.url, to: folder, key: key, in: destination, jobs: jobs + [job], isOpen: isOpen)
             // emptied (a folder only 1.5.6 wrote, say): gone, so nothing looks for it
             if r.moved > 0, other.identity == nil { rmdir(other.url.path) }
