@@ -266,7 +266,7 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
     d.selectedTargetIDs = ["nas", "t7", "t7-again"]
     #expect(d.defaultName == "3 libraries → NAS +1")
     d.selectedTargetIDs = []
-    #expect(d.defaultName == "3 libraries → Target")
+    #expect(d.defaultName == "3 libraries → Destination")
 }
 
 // MARK: - adding libraries

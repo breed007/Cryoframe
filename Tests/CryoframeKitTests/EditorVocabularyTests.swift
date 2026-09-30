@@ -21,14 +21,24 @@ private func violations(_ text: String) -> [String] {
     return words.filter { w in banned.contains { b in [b, b + "s", b + "d", b + "ed", b + "ing"].contains(w) } }
 }
 
-/// the text a person reads in a Swift file: literals that are sentences (they hold a
-/// space), and single words handed straight to something that shows them
+/// The literals in these files that no one reads, each for a reason: the draft's
+/// format tag ("mirror", compared and assigned in code, never shown).
+private let internalTags: Set<String> = ["mirror"]
+
+/// every string literal in a Swift file a person may read. Only these aren't: a
+/// dictionary or plist key (`x["Key"]`), an SF Symbol's name (`systemName:`,
+/// `systemImage:`), and the tags above unless handed straight to something that
+/// shows them. A single word counts too: a name prompt's fallback is one word.
 private func shownText(_ file: String) throws -> [String] {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    var text = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
+    return try shownText(source: String(contentsOf: root.appendingPathComponent(file), encoding: .utf8))
+}
+
+private func shownText(source: String) throws -> [String] {
+    var text = source
     text = text.replacingOccurrences(of: #"//[^\n]*"#, with: "", options: .regularExpression)
     var out: [String] = []
-    let literal = try NSRegularExpression(pattern: #"(\w*\(?\.?)\s*"((?:[^"\\\n]|\\.)*)""#)
+    let literal = try NSRegularExpression(pattern: #"([\w:\[]*\(?\.?)\s*"((?:[^"\\\n]|\\.)*)""#)
     let ns = text as NSString
     for m in literal.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
         let before = ns.substring(with: m.range(at: 1))
@@ -36,7 +46,9 @@ private func shownText(_ file: String) throws -> [String] {
         // interpolations are names and numbers, not words of ours
         s = s.replacingOccurrences(of: #"\\\((?:[^()]|\([^()]*\))*\)"#, with: " ", options: .regularExpression)
         let showing = ["Text(", "Button(", "Label(", "pill(", "badge(", "help(", ".help("].contains(before)
-        if s.contains(" ") || showing { out.append(s) }
+        let key = before.hasSuffix("[")
+        let symbol = before.hasSuffix("systemName:") || before.hasSuffix("systemImage:")
+        if showing || !(key || symbol || internalTags.contains(s)) { out.append(s) }
     }
     return out
 }
@@ -51,6 +63,7 @@ private func shownText(_ file: String) throws -> [String] {
         "Sources/CryoframeKit/DriveRename.swift",
         "Sources/CryoframeKit/JobRemoval.swift",
         "Sources/CryoframeKit/JobDraftState.swift",
+        "Sources/CryoframeKit/JobPreset.swift",
         "Sources/CryoframeKit/Source.swift",
         "Sources/CryoframeKit/LibraryNames.swift",
     ])
@@ -60,6 +73,12 @@ private func shownText(_ file: String) throws -> [String] {
         for s in shown {
             #expect(violations(s).isEmpty, "\(file): “\(s)” says \(violations(s))")
         }
+    }
+
+    // every literal counts, not only sentences: "Target" was a one-word prompt
+    @Test func aOneWordLiteralIsRead() throws {
+        let source = #"let a = x ?? "Target"; let b = d["Volumes"]; Image(systemName: "externaldrive"); if k == "mirror" {}; Text("mirror")"#
+        #expect(try shownText(source: source) == ["Target", "mirror"])
     }
 
     @Test func theCheckCatchesTheWordsAndTheirForms() {

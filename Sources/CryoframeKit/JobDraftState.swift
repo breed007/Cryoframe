@@ -209,7 +209,7 @@ public struct JobDraftState: Sendable, Equatable {
     public var defaultName: String {
         let names = selectedLibraries.map(\.displayName)
         let lib = names.isEmpty ? "Libraries" : (names.count <= 2 ? names.joined(separator: ", ") : "\(names.count) libraries")
-        let dest = primaryTarget?.displayName ?? "Target"
+        let dest = primaryTarget?.displayName ?? "Destination"
         let suffix = dedupedTargets.count > 1 ? " +\(dedupedTargets.count - 1)" : ""
         return "\(lib) → \(dest)\(suffix)"
     }
