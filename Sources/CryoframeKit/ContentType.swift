@@ -63,6 +63,9 @@ public struct ContentType: Codable, Sendable, Identifiable, Hashable {
     /// representative file inside the first root, read to confirm integrity
     /// (and reused by M4 verification). nil for static content.
     public var integrityProbe: String?
+    /// the volume a folder on a drive other than the startup disk is on, so it's
+    /// found after the drive is renamed (see `located`); nil otherwise
+    public var volume: VolumeIdentity? = nil
 
     public init(id: String, displayName: String, paths: [LibraryPath],
                 owningProcess: OwningProcess?, kind: ContentKind, integrityProbe: String? = nil) {

@@ -69,7 +69,9 @@ enum RehearsalSchedule {
             let key = resolved.encrypted ? KeychainArchiveKey.load(jobID: job.id) : nil
             let rehearsed = locks.whileChecking(jobID: job.id, wait: wait) { () -> [ArchiveCheck] in
                 var checks: [ArchiveCheck] = []
-                for target in resolved.targets {
+                // each destination where it is now; one not connected has nothing to rehearse
+                let placed = DestinationResolver().resolve(resolved)
+                for target in placed.job.targets where target.volume == nil || placed.presence[target.id]?.isPresent == true {
                     let report = RecoveryRehearsal().rehearse(
                         destination: target.destinationDir,
                         expecting: expecting,

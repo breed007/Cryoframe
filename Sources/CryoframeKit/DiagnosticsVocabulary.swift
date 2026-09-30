@@ -46,6 +46,8 @@ apart
 apfs
 app
 apple
+applications
+apps
 archive
 archived
 archives
@@ -154,6 +156,7 @@ copied
 copies
 copy
 copyfile
+cores
 corrupt
 corrupted
 could
@@ -163,6 +166,7 @@ counts
 covers
 cp
 create
+creates
 critical
 cryoframe
 cryokeys
@@ -174,6 +178,7 @@ damaged
 data
 database
 date
+dated
 day
 days
 db
@@ -188,6 +193,7 @@ desktop
 dest
 destination
 destinationdir
+destinationrules
 destinations
 detach
 detached
@@ -220,6 +226,7 @@ drill
 drilled
 drive
 drive's
+drives
 dropbox
 during
 each
@@ -247,6 +254,7 @@ everything
 examples
 exclamationmark
 exclude
+exist
 exists
 exit
 export
@@ -260,6 +268,7 @@ extract
 fa
 fail
 failed
+fails
 fake
 fat
 fewer
@@ -272,6 +281,7 @@ final
 finalcut
 find
 finder
+finder's
 finds
 finish
 finished
@@ -280,6 +290,7 @@ first
 fit
 fix
 folder
+folder's
 folders
 for
 force
@@ -302,6 +313,7 @@ garageband
 generic
 get
 gfs
+go
 goes
 good
 google
@@ -325,6 +337,7 @@ history
 hold
 holding
 holds
+home
 hour
 hourglass
 hourly
@@ -367,9 +380,11 @@ isencrypted
 isn't
 issealed
 it
+it's
 item
 items
 its
+itself
 job
 job's
 jobs
@@ -421,6 +436,7 @@ low
 lptgode
 ls
 mac
+mac's
 macl
 macos
 made
@@ -428,6 +444,7 @@ mail
 main
 make
 makes
+manage
 manifest
 manual
 map
@@ -440,6 +457,7 @@ messages
 metadata
 microsoft
 min
+mine
 minutes
 mirror
 mirror's
@@ -507,6 +525,7 @@ open
 opened
 opens
 operation
+opt
 or
 order
 other
@@ -515,6 +534,7 @@ ou
 out
 outlook
 output
+outside
 ov
 overdue
 own
@@ -582,6 +602,7 @@ rdonly
 re
 reach
 reachable
+reached
 read
 readable
 readonly
@@ -603,6 +624,7 @@ rehearsal
 rehearse
 rehearsed
 rehearsing
+reinstall
 releases
 rely
 remove
@@ -612,6 +634,7 @@ rename
 reopened
 repeats
 replaced
+reserved
 resize
 resource
 resourcefork
@@ -634,13 +657,16 @@ run
 running
 runs
 safely
+safer
 same
+samepath
 saved
 says
 sbin
 schedule
 schedule's
 scheduled
+scheme
 scratch
 scratchbase
 sealed
@@ -662,6 +688,7 @@ sharing
 shasum
 shield
 short
+should
 shown
 signed
 since
@@ -837,6 +864,7 @@ worth
 would
 wouldn't
 writable
+write
 writes
 writing
 written

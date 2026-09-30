@@ -456,7 +456,7 @@ struct NewJobWizard: View {
         guard !seeded else { return }; seeded = true
         applyFreq(.nightly)
         if let f = initialFolder {
-            let ct = ContentType.genericFolder(id: f.path, displayName: f.lastPathComponent, path: ContentView.libraryPath(for: f, home: NSHomeDirectory()))
+            let ct = ContentType.customFolder(f, path: ContentView.libraryPath(for: f, home: NSHomeDirectory()))
             draft.addLibrary(ct, at: f)
             draft.selectedLibraryIDs = [ct.id]
         } else if let id = initialLibraryID, draft.libraries.contains(where: { $0.id == id }) {
@@ -520,8 +520,7 @@ struct NewJobWizard: View {
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
         panel.message = "Choose a folder to back up"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let ct = ContentType.genericFolder(id: url.path, displayName: url.lastPathComponent,
-                                           path: ContentView.libraryPath(for: url, home: NSHomeDirectory()))
+        let ct = ContentType.customFolder(url, path: ContentView.libraryPath(for: url, home: NSHomeDirectory()))
         draft.addLibrary(ct, at: url)
         model.measureLibraries(draft.libraries)
     }
@@ -540,17 +539,16 @@ struct NewJobWizard: View {
 
     private enum DestKind { case local, external, cloud }
     private func addTarget(_ kind: DestKind) {
-        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.allowsMultipleSelection = false
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        switch kind {
-        case .local:    draft.addTarget(.localVolume(id: url.path, name: url.lastPathComponent, dir: url))
-        case .external: draft.addTarget(.externalDrive(id: url.path, name: url.lastPathComponent + " (resumable)", dir: url))
-        case .cloud:    pendingCloudProvider = CloudProvider.identify(url); pendingCloudURL = url
-        }
+        // the kind of place, its name and its volume come from the folder itself
+        let resolver = DestinationResolver()
+        if kind == .cloud, resolver.kind(of: url) == .cloud { pendingCloudProvider = CloudProvider.identify(url); pendingCloudURL = url }
+        else { draft.addTarget(resolver.target(for: url)) }
     }
     private func confirmCloud(_ bytes: UInt64) {
         guard let url = pendingCloudURL else { return }
-        draft.addTarget(.cloudSyncFolder(id: url.path, name: "\(url.lastPathComponent) (\(pendingCloudProvider.displayName))", dir: url, provider: pendingCloudProvider, maxFileBytes: bytes))
+        draft.addTarget(DestinationResolver().target(for: url, cloudCap: bytes))
         pendingCloudURL = nil
     }
 }

@@ -261,8 +261,7 @@ struct NewJobSheet: View {
 
     private func addFolderContentType() {
         guard let url = pickFolder() else { return }
-        draft.addLibrary(ContentType.genericFolder(id: url.path, displayName: url.lastPathComponent,
-                                                   path: ContentView.libraryPath(for: url, home: NSHomeDirectory())), at: url)
+        draft.addLibrary(ContentType.customFolder(url, path: ContentView.libraryPath(for: url, home: NSHomeDirectory())), at: url)
     }
     private func addTemplatedLibrary(_ template: LibraryTemplate) {
         guard let url = pickFolder() else { return }
@@ -273,20 +272,18 @@ struct NewJobSheet: View {
     private enum DestKind { case local, external, cloud }
     private func addTarget(_ kind: DestKind) { guard let url = pickFolder() else { return }; addTargetAt(url, kind: kind) }
     private func addTargetAt(_ url: URL, kind: DestKind) {
-        switch kind {
-        case .local:    draft.addTarget(.localVolume(id: url.path, name: url.lastPathComponent, dir: url))
-        case .external: draft.addTarget(.externalDrive(id: url.path, name: url.lastPathComponent + " (resumable)", dir: url))
-        case .cloud:    pendingCloudProvider = CloudProvider.identify(url); pendingCloudURL = url
-        }
+        // the kind of place, its name and its volume come from the folder itself
+        let resolver = DestinationResolver()
+        if kind == .cloud, resolver.kind(of: url) == .cloud { pendingCloudProvider = CloudProvider.identify(url); pendingCloudURL = url }
+        else { draft.addTarget(resolver.target(for: url)) }
     }
     private func confirmCloud(_ bytes: UInt64) {
         guard let url = pendingCloudURL else { return }
-        draft.addTarget(.cloudSyncFolder(id: url.path, name: "\(url.lastPathComponent) (\(pendingCloudProvider.displayName))",
-                                         dir: url, provider: pendingCloudProvider, maxFileBytes: bytes))
+        draft.addTarget(DestinationResolver().target(for: url, cloudCap: bytes))
         pendingCloudURL = nil
     }
     private func pickFolder() -> URL? {
-        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.allowsMultipleSelection = false
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
         return panel.runModal() == .OK ? panel.url : nil
     }
 }

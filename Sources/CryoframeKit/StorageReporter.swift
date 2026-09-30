@@ -38,9 +38,10 @@ public struct JobStorage: Sendable, Identifiable {
 }
 
 public enum StorageReporter {
-    public static func report(_ jobs: [BackupJob]) -> [JobStorage] {
-        // one row per (job, destination) so each copy's footprint is visible.
-        jobs.flatMap { job in
+    public static func report(_ jobs: [BackupJob], volumes: VolumeTable = SystemVolumeTable()) -> [JobStorage] {
+        // one row per (job, destination) so each copy's footprint is visible, each
+        // destination where it is now (a renamed drive)
+        jobs.map { DestinationResolver(volumes: volumes).resolve($0).job }.flatMap { job in
             job.targets.map { t in
                 var archives: [ArchiveSize] = []
                 for library in job.libraries {

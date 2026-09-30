@@ -16,18 +16,25 @@ public struct RestoreDriller: Sendable {
     let runner: CommandRunner
     /// free bytes on the drive holding a folder (nil: unknown); injectable for tests
     let freeSpace: @Sendable (URL) -> UInt64?
+    /// the mounted volumes, to find each destination where it is now
+    let volumes: VolumeTable
     public init(runner: CommandRunner = ProcessCommandRunner(),
-                freeSpace: @escaping @Sendable (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) }) {
-        self.runner = runner; self.freeSpace = freeSpace
+                freeSpace: @escaping @Sendable (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) },
+                volumes: VolumeTable = SystemVolumeTable()) {
+        self.runner = runner; self.freeSpace = freeSpace; self.volumes = volumes
     }
 
     /// drill the job's archives: `latestOnly` checks just the newest version per library
     /// per destination; `passphrase` opens an encrypted job's archives.
-    public func drill(job: BackupJob, latestOnly: Bool = false, passphrase: String? = nil,
+    public func drill(job saved: BackupJob, latestOnly: Bool = false, passphrase: String? = nil,
                       materializeCloud: Bool = false) -> HealthReport {
         var checks: [ArchiveCheck] = []
-        let multiDest = job.targets.count > 1
+        let multiDest = saved.targets.count > 1
+        // each destination where it is now; one that isn't connected (or is another
+        // drive of its name) has nothing here to drill
+        let (job, presence) = DestinationResolver(volumes: self.volumes).resolve(saved)
         for t in job.targets {
+            if let p = presence[t.id], !p.isPresent, t.volume != nil { continue }
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             for library in job.libraries {
                 var archives = LibraryFolders.archives(job: job, library: library, in: t.destinationDir)   // newest first

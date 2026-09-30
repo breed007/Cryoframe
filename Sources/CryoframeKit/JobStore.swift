@@ -46,4 +46,12 @@ public final class JobStore: @unchecked Sendable {
     public func recordRun(id: String, at date: Date) {
         var s = load(); s.lastRun[id] = date; save(s)
     }
+    /// record the volume a destination set up before 1.6 is on, if none is recorded yet
+    public func recordVolume(jobID: String, targetID: String, _ volume: VolumeIdentity) {
+        var s = load()
+        guard let j = s.jobs.firstIndex(where: { $0.id == jobID }),
+              let t = s.jobs[j].targets.firstIndex(where: { $0.id == targetID }), s.jobs[j].targets[t].volume == nil else { return }
+        s.jobs[j].targets[t].volume = volume
+        save(s)
+    }
 }

@@ -336,7 +336,7 @@ struct RecoveryWizard: View {
             if !quick.isEmpty, r.sourceFolder == nil {
                 HStack(spacing: 6) {
                     Text("or").font(.caption).foregroundStyle(.tertiary)
-                    ForEach(quick) { t in Button(t.displayName) { r.scan(t.destinationDir) }.buttonStyle(.link).font(.caption) }
+                    ForEach(quick) { t in Button(t.displayName) { r.scan(DestinationResolver().locate(t).url ?? t.destinationDir) }.buttonStyle(.link).font(.caption) }
                 }
             }
 

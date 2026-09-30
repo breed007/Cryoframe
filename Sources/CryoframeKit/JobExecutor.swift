@@ -35,6 +35,8 @@ public struct JobExecutor: Sendable {
     let pendingStore: PendingTransferStore?
     let jobStore: JobStore?
     let dataVolume: VolumeRef
+    /// the mounted volumes, to find each destination and folder where it is now
+    let volumes: VolumeTable
     /// the archive checks recorded so far, newest first: retention keeps the version
     /// last known to restore (see KnownGood)
     let healthRecords: @Sendable () -> [HealthRecord]
@@ -50,8 +52,10 @@ public struct JobExecutor: Sendable {
                 jobStore: JobStore? = nil,
                 dataVolume: VolumeRef = VolumeRef(mountPoint: "/System/Volumes/Data", bsdDevice: ""),
                 passphraseProvider: @escaping @Sendable (String) -> String? = { _ in nil },
-                healthRecords: @escaping @Sendable () -> [HealthRecord] = { [] }) {
+                healthRecords: @escaping @Sendable () -> [HealthRecord] = { [] },
+                volumes: VolumeTable = SystemVolumeTable()) {
         self.helper = helper; self.detector = detector; self.probe = probe; self.locator = locator
+        self.volumes = volumes
         self.scratchBase = scratchBase; self.chunkSize = chunkSize
         self.pendingStore = pendingStore; self.jobStore = jobStore; self.dataVolume = dataVolume
         self.passphraseProvider = passphraseProvider; self.healthRecords = healthRecords
@@ -125,25 +129,55 @@ public struct JobExecutor: Sendable {
         var notes: [String] = []
     }
 
-    public func run(_ job: BackupJob, ownerUID: uid_t, now: Date,
+    public func run(_ saved: BackupJob, ownerUID: uid_t, now: Date,
                     control: RunControl = RunControl(),
                     onStage: @escaping @Sendable (BackupStage) -> Void = { _ in },
                     onLibrary: @escaping @Sendable (String) -> Void = { _ in },
                     onProgress: @escaping @Sendable (RunProgress) -> Void = { _ in }) async throws -> JobOutcome {
+        // Each destination where it is now, found by its volume: a renamed or
+        // remounted drive is still itself, and another drive of the same name is
+        // never written to (see DestinationResolver). A folder on a renamed drive is
+        // found the same way (see ContentType.located).
+        let resolved = DestinationResolver(volumes: self.volumes).resolve(saved)
+        let presence = resolved.presence
+        let job: BackupJob = {
+            var j = resolved.job
+            j.libraries = j.libraries.map { $0.located(volumes: self.volumes, home: locator.home) }
+            return j
+        }()
         let decision = decide(job.runPolicy, libraries: job.libraries, detector: detector)
         if case .deferred(let reason) = decision { return .deferred(reason) }
 
+        func availability(_ t: Target) -> TargetAvailability {
+            if t.volume != nil, let p = presence[t.id], !p.isPresent {
+                switch p {
+                case .away(let why), .otherDrive(let why): return TargetAvailability(reachable: false, writable: false, reason: why)
+                case .present: break
+                }
+            }
+            return probe.availability(of: t)
+        }
+
         // the primary destination must be reachable — a run that can't write its first
         // copy is a real failure. Secondaries that are down degrade to partial success.
-        let primaryAvail = probe.availability(of: job.target)
+        let primaryAvail = availability(job.target)
         guard primaryAvail.ok else {
             throw TargetError.unavailable(primaryAvail.reason ?? "\(job.target.displayName) is unavailable")
         }
         let dests: [(target: Target, available: Bool, reason: String?)] = job.targets.enumerated().map { i, t in
             if i == 0 { return (t, true, nil) }
-            let a = probe.availability(of: t)
+            let a = availability(t)
             return (t, a.ok, a.reason)
         }
+        // A destination set up before 1.6 has no volume on record. The first run that
+        // writes to it records it, if the folder is known to be this job's (it already
+        // holds one of its libraries' folders) or the job has never run: a drive of the
+        // same name plugged in instead would otherwise be recorded as the destination.
+        let neverRan = jobStore.map { $0.load().lastRun[job.id] == nil } ?? false
+        let knownPlaces = Set(dests.filter { d in
+            d.available && d.target.volume == nil
+                && (neverRan || job.libraries.contains { !LibraryFolders.folders(job: job, library: $0, in: d.target.destinationDir).isEmpty })
+        }.map(\.target.id))
 
         let runner = ProcessCommandRunner(control: control)
         let sealed = Self.sealedKind(job.format)
@@ -155,7 +189,7 @@ public struct JobExecutor: Sendable {
         // taken over from 1.5 or made new (see LibraryFolders), before anything is
         // frozen. A folder that can't be got ready fails that one copy.
         let (folderOf, folderFailures, folderNotes) = Self.prepareFolders(job, at: dests.filter(\.available).map(\.target),
-                                                                          jobs: jobStore?.load().jobs ?? [])
+                                                                          jobs: (jobStore?.load().jobs ?? []).map { DestinationResolver(volumes: self.volumes).resolve($0).job })
 
         onStage(.preparing)
 
@@ -412,6 +446,12 @@ public struct JobExecutor: Sendable {
         // destination this run reached; a note that can't be written is logged, never
         // a failure (see RecoveryNote)
         for d in dests where d.available { RecoveryNote.write(in: d.target.destinationDir) }
+        let reached = Set(results.compactMap { r -> String? in if case .completed(_, let dest, _, _, _) = r { return dest }; return nil })
+        for d in dests where knownPlaces.contains(d.target.id) && reached.contains(d.target.displayName) {
+            if let identity = DestinationResolver(volumes: self.volumes).identity(for: d.target.destinationDir) {
+                jobStore?.recordVolume(jobID: job.id, targetID: d.target.id, identity)
+            }
+        }
         onStage(.completed)
         jobStore?.recordRun(id: job.id, at: now)
         // a run that backed up fine but could not prune still succeeded — say so in the

@@ -53,15 +53,23 @@ public struct VerifiedArchive: Codable, Sendable, Equatable {
 
 public struct HealthChecker: Sendable {
     let verifier: ChecksumVerifier
-    public init(verifier: ChecksumVerifier = ChecksumVerifier()) { self.verifier = verifier }
+    /// the mounted volumes, to find each destination where it is now
+    let volumes: VolumeTable
+    public init(verifier: ChecksumVerifier = ChecksumVerifier(), volumes: VolumeTable = SystemVolumeTable()) {
+        self.verifier = verifier; self.volumes = volumes
+    }
 
     /// re-verify the job's archives against their checksum manifests. `latestOnly`
     /// checks just the newest version per library — far less I/O than re-hashing
     /// every version of a large library on a schedule.
-    public func check(job: BackupJob, latestOnly: Bool = false, materializeCloud: Bool = false) -> HealthReport {
+    public func check(job saved: BackupJob, latestOnly: Bool = false, materializeCloud: Bool = false) -> HealthReport {
         var checks: [ArchiveCheck] = []
-        let multiDest = job.targets.count > 1
+        let multiDest = saved.targets.count > 1
+        // each destination where it is now; one that isn't connected (or is another
+        // drive of its name) has nothing here to check
+        let (job, presence) = DestinationResolver(volumes: self.volumes).resolve(saved)
         for t in job.targets {
+            if let p = presence[t.id], !p.isPresent, t.volume != nil { continue }
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             for library in job.libraries {
                 var archives = LibraryFolders.archives(job: job, library: library, in: t.destinationDir)   // newest first

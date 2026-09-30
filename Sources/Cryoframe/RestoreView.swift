@@ -312,7 +312,7 @@ struct RestoreView: View {
                 HStack(spacing: 6) {
                     Text("or").font(.caption).foregroundStyle(.tertiary)
                     ForEach(sources) { t in
-                        Button(t.displayName) { scanned(t.destinationDir) }.buttonStyle(.link).font(.caption)
+                        Button(t.displayName) { scanned(DestinationResolver().locate(t).url ?? t.destinationDir) }.buttonStyle(.link).font(.caption)
                     }
                 }
                 .padding(.top, 2)
