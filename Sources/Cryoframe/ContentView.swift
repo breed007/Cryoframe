@@ -56,6 +56,7 @@ struct ContentView: View {
                 // nothing gets clipped.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        AdoptionReviewCard(model: model)
                         StoragePressureCard(model: model)
                         CoverageCard(model: model)
                         RecoveryFileCard(model: model)

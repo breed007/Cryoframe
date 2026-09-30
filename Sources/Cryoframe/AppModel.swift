@@ -34,6 +34,8 @@ final class AppModel: ObservableObject {
     @Published var lastGood: [String: Date] = [:]           // when each job last finished a good run
     @Published var unrecordedRuns: [String: Date] = [:]     // runs the job store saw that the history no longer holds
     @Published var lastCopies: [String: [String: Date]] = [:]   // job → destination → last complete copy (rotating drives)
+    /// earlier backups runs left alone until the Keep rule is let apply to them (see AdoptionReview)
+    @Published var adoptionReviews: [AdoptionReview] = []
     @Published var clock = Date()                           // moves every few minutes, so "overdue" arrives on its own
     @Published var scheduleOn = true                        // the scheduled agent is switched on
     @Published var lastHealth: [String: HealthRecord] = [:] // latest archive health check per job
@@ -117,6 +119,7 @@ final class AppModel: ObservableObject {
         let state = store.load()
         let all = history.all(), ran = state.lastRun
         lastCopies = state.lastCopy
+        adoptionReviews = state.adoptionReviews.values.flatMap { $0 }.sorted { $0.id < $1.id }
         var unrecorded: [String: Date] = [:]
         for job in jobs {
             unrecorded[job.id] = ProtectionVerdict.unrecordedRun(lastRun: ran[job.id], records: all.filter { $0.jobID == job.id })
@@ -426,8 +429,8 @@ final class AppModel: ObservableObject {
 
     /// Save a job the editor built, merged with the job as it is on disk (a run may
     /// have recorded its drives since the editor opened). False if nothing was saved.
-    func save(_ draft: JobDraftState) -> Bool {
-        let result = draft.commit(to: store) { passphrase, id in KeychainArchiveKey.save(passphrase, jobID: id) }
+    func save(_ draft: JobDraftState, consents: [AdoptionConsent] = []) -> Bool {
+        let result = draft.commit(to: store, consents: consents) { passphrase, id in KeychainArchiveKey.save(passphrase, jobID: id) }
         jobs = store.load().jobs; revalidate(); armWake(); refreshProtectedSize(force: true)
         switch result {
         case .saved: return true
@@ -437,13 +440,21 @@ final class AppModel: ObservableObject {
             return true
         }
     }
+    /// Let the Keep rule apply to the earlier backups `review` names, from the job's
+    /// next backup on.
+    func confirm(_ review: AdoptionReview) {
+        if !store.confirm(review) { log("⚠︎ The job was deleted, so nothing was changed") }
+        jobs = store.load().jobs
+        reloadHistory()
+    }
+
     // MARK: the job editor's looks at the destinations (off the main thread)
 
     /// what saving `draft` does at the next backup (see JobEditImpact)
     nonisolated func impact(of draft: JobDraftState) async -> JobEditImpact {
-        let checks = await MainActor.run { healthRecords }
+        let (jobs, checks) = await MainActor.run { (self.jobs, healthRecords) }
         return await Task.detached {
-            JobEditImpact.of(draft: draft.makeJob(), base: draft.base, checks: checks, pending: PendingTransferStore.standard().all())
+            JobEditImpact.of(draft: draft.makeJob(), base: draft.base, jobs: jobs, checks: checks, pending: PendingTransferStore.standard().all())
         }.value
     }
 

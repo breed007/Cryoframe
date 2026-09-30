@@ -130,5 +130,5 @@ final class JobDraft: ObservableObject {
     /// persist the job (Keychain + store, see JobDraftState.commit). Returns false if
     /// nothing was saved.
     @discardableResult
-    func commit() -> Bool { model.save(state) }
+    func commit(consents: [AdoptionConsent] = []) -> Bool { model.save(state, consents: consents) }
 }

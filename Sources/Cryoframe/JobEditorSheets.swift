@@ -242,13 +242,15 @@ struct RenameDriveSheet: View {
 
 struct SaveSummarySheet: View {
     let impact: JobEditImpact
+    var isNew = false
     @Binding var isPresented: Bool
     let onSave: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Save these changes?").font(.title3.bold())
-            Text("Saving changes the job only. The next backup does this:").font(.callout).foregroundStyle(.secondary)
+            Text(isNew ? "Create this job?" : "Save these changes?").font(.title3.bold())
+            Text(isNew ? "Creating the job changes nothing yet. Its first backup does this:"
+                       : "Saving changes the job only. The next backup does this:").font(.callout).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(impact.lines, id: \.self) { line in
@@ -264,11 +266,17 @@ struct SaveSummarySheet: View {
             HStack {
                 Spacer()
                 Button("Keep editing") { isPresented = false }.keyboardShortcut(.cancelAction)
-                Button(impact.deletes > 0 ? "Save, and delete \(impact.deletes) version\(impact.deletes == 1 ? "" : "s") at the next backup" : "Save") { onSave() }
+                Button(saveTitle) { onSave() }
                     .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
             }
         }
         .padding(22).frame(width: 540)
+    }
+
+    private var saveTitle: String {
+        let verb = isNew ? "Create" : "Save"
+        let n = impact.deletes
+        return n > 0 ? "\(verb), and delete \(n) version\(n == 1 ? "" : "s") at the next backup" : verb
     }
 
     private func symbol(_ k: JobEditImpact.Line.Kind) -> String {

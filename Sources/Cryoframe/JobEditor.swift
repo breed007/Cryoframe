@@ -110,9 +110,10 @@ struct JobEditor: View {
             }
         }
         .sheet(item: $summary) { impact in
-            SaveSummarySheet(impact: impact, isPresented: Binding(get: { summary != nil }, set: { if !$0 { summary = nil } })) {
+            SaveSummarySheet(impact: impact, isNew: editing == nil,
+                             isPresented: Binding(get: { summary != nil }, set: { if !$0 { summary = nil } })) {
                 summary = nil
-                if draft.commit() { isPresented = false }
+                if draft.commit(consents: impact.consents) { isPresented = false }
             }
         }
         .sheet(item: $deleting) { job in
@@ -502,7 +503,7 @@ struct JobEditor: View {
                 Text(passphraseHint).font(.caption).foregroundStyle(.cryoWarn)
             }
             Button("Cancel") { isPresented = false }.keyboardShortcut(.cancelAction)
-            Button(editing == nil ? "Create" : (computingSummary ? "Looking…" : "Save…")) { save() }
+            Button(computingSummary ? "Looking…" : (editing == nil ? "Create…" : "Save…")) { save() }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(!draft.isValid || computingSummary)
@@ -517,10 +518,8 @@ struct JobEditor: View {
     }
 
     private func save() {
-        guard editing != nil else {
-            if draft.commit() { isPresented = false }
-            return
-        }
+        // a new job too: its first backup can take over a folder an earlier version
+        // of Cryoframe made, and that folder's versions then follow its Keep rule
         computingSummary = true
         let state = draft.state
         Task {
