@@ -249,7 +249,7 @@ public struct RestoreEngine: Sendable {
         }
 
         onStage(.opening)
-        let opened = try ArchiveReader(runner: runner).open(archive.archiveResult(), passphrase: passphrase)
+        let opened = try ArchiveReader(runner: runner, freeSpace: freeSpace).open(archive.archiveResult(), passphrase: passphrase)
         defer { opened.close() }
 
         onStage(.copying)

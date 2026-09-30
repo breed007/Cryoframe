@@ -73,10 +73,14 @@ public struct ArchiveReader: Sendable {
     let workBase: URL
     let transientSettle: TimeInterval
     let cloud: CloudDownload
+    /// free bytes on the drive holding a folder (nil: unknown); injectable for tests
+    let freeSpace: @Sendable (URL) -> UInt64?
     public init(runner: CommandRunner = ProcessCommandRunner(),
                 workBase: URL = FileManager.default.temporaryDirectory,
-                transientSettle: TimeInterval = 5, cloud: CloudDownload = .system) {
+                transientSettle: TimeInterval = 5, cloud: CloudDownload = .system,
+                freeSpace: @escaping @Sendable (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) }) {
         self.runner = runner; self.workBase = workBase; self.transientSettle = transientSettle; self.cloud = cloud
+        self.freeSpace = freeSpace
     }
 
     /// open `result` into a fresh temp work dir. A non-nil `passphrase` mounts an
@@ -146,6 +150,10 @@ public struct ArchiveReader: Sendable {
 
             case .sealedZip:
                 let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
+                // a zip is unpacked whole into the work folder (on the startup disk)
+                // before anything is copied out of it
+                try checkRoom(Self.unpackedSize(of: zip, runner: runner.forTeardown) ?? Checksum.byteSize(of: zip),
+                              in: work, doing: "unpacked")
                 let ex = work.appendingPathComponent("extract"); try fm.createDirectory(at: ex, withIntermediateDirectories: true)
                 try exec(Command("/usr/bin/ditto", ["-x", "-k", zip.path, ex.path]))
                 return OpenedArchive(root: ex, work: work) {}
@@ -184,8 +192,29 @@ public struct ArchiveReader: Sendable {
     }
 
     /// a single file to operate on — the artifact itself, or split parts reassembled.
+    /// Refuse, before writing there, what the work folder's drive hasn't room for. A
+    /// zip is unpacked and split parts are joined in the work folder, on the startup
+    /// disk, whatever drive the archive or the restore is on; a large one filled the
+    /// startup disk, unchecked, before any check of the restore's own looked.
+    private func checkRoom(_ bytes: UInt64, in work: URL, doing what: String) throws {
+        let volume = RestoreRoom.volumeName(for: work)
+        if let refusal = RestoreRoom.refusal(bytes: bytes, free: freeSpace(work),
+                                             volume: "\(volume), where the archive is \(what) first", inPlace: false) {
+            throw refusal
+        }
+    }
+
+    /// what a zip holds once unpacked, from its own directory (zipinfo); nil if that
+    /// can't be read
+    static func unpackedSize(of zip: URL, runner: CommandRunner) -> UInt64? {
+        guard let r = try? runner.run("/usr/bin/zipinfo", ["-t", zip.path], stdin: nil), r.ok,
+              let m = r.stdout.range(of: #"([0-9]+) bytes uncompressed"#, options: .regularExpression) else { return nil }
+        return UInt64(r.stdout[m].split(separator: " ").first ?? "")
+    }
+
     private func singleFile(_ artifacts: [URL], work: URL, name: String, fm: FileManager) throws -> URL {
         if artifacts.count == 1 { return artifacts[0] }
+        try checkRoom(artifacts.reduce(0) { $0 + Checksum.byteSize(of: $1) }, in: work, doing: "joined")
         let out = work.appendingPathComponent(name)
         fm.createFile(atPath: out.path, contents: nil)
         let w = try FileHandle(forWritingTo: out); defer { try? w.close() }
