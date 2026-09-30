@@ -47,7 +47,7 @@ struct PairingSheet: View {
     /// Rename this drive saves by itself, so only with nothing unsaved and nothing running
     let canRename: Bool
     @Binding var isPresented: Bool
-    let onTakeTurns: (VolumeIdentity) -> Void
+    let onTakeTurns: (DrivePairing) -> Void
     let onRename: (VolumeIdentity) -> Void
 
     @State private var look: DrivePairing?
@@ -65,13 +65,7 @@ struct PairingSheet: View {
                     Label(refusal, systemImage: "xmark.octagon.fill").foregroundStyle(.cryoCrit).font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            ForEach(look.libraries, id: \.name) { lib in libraryBlock(lib) }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 260)
+                    DriveLookLibraries(look: look)
                 }
             } else {
                 Text("That drive isn't connected any more.").font(.callout)
@@ -81,12 +75,12 @@ struct PairingSheet: View {
                 Button("Cancel") { isPresented = false }.keyboardShortcut(.cancelAction)
                 Spacer()
                 if let look, look.refusal == nil {
-                    Button("Take turns under one name") { onTakeTurns(look.drive); isPresented = false }
+                    Button("Take turns under one name") { onTakeTurns(look); isPresented = false }
                         .help("Recorded when you save the job. Both drives keep the name, so a notice about one can only say which by the start of its ID.")
                     Button("Rename this drive…") { onRename(look.drive) }
                         .buttonStyle(.borderedProminent)
                         .disabled(!canRename)
-                        .help(canRename ? "Recommended: each drive gets a name of its own, and they take turns." : "Save or cancel your changes first, and wait for anything running to finish.")
+                        .help(canRename ? "Recommended: each drive gets a name of its own, and they take turns. You see what the next backup does to it again before it's renamed." : "Save or cancel your changes first, and wait for anything running to finish.")
                 }
             }
         }
@@ -95,6 +89,22 @@ struct PairingSheet: View {
             look = await model.pairing(target, of: job)
             loaded = true
         }
+    }
+}
+
+/// what the next backup does to each library's backups on a drive (see DrivePairing):
+/// the up-to-date copy's date and size, the dated versions, and the effect
+struct DriveLookLibraries: View {
+    let look: DrivePairing
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(look.libraries, id: \.name) { lib in libraryBlock(lib) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 260)
     }
 
     private func libraryBlock(_ lib: DrivePairing.Library) -> some View {
@@ -110,8 +120,9 @@ struct PairingSheet: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(lib.effects, id: \.self) { e in
-                Label(e, systemImage: lib.deletes > 0 && e.contains("deleted") ? "trash" : "arrow.right.circle")
-                    .font(.caption).foregroundStyle(lib.deletes > 0 && e.contains("deleted") ? Color.cryoWarn : Color.primary)
+                let costs = e.contains("deleted") || e.contains("replaces")
+                Label(e, systemImage: costs ? "trash" : "arrow.right.circle")
+                    .font(.caption).foregroundStyle(costs ? Color.cryoWarn : Color.primary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -131,6 +142,8 @@ struct RenameDriveSheet: View {
 
     @State private var name = ""
     @State private var fileSystem = ""
+    @State private var look: DrivePairing?
+    @State private var loaded = false
     @State private var working = false
     @State private var failure: String?
 
@@ -142,17 +155,44 @@ struct RenameDriveSheet: View {
         return nil
     }
 
+    /// the Rename button says what it agrees to
+    private var renameTitle: String {
+        guard let look, look.changesBackups else { return "Rename" }
+        let versions = look.libraries.reduce(0) { $0 + $1.deletes }
+        let unfinished = look.libraries.reduce(0) { $0 + $1.unfinished }
+        let copies = look.libraries.filter(\.replacesCopy).count
+        var parts: [String] = []
+        if versions > 0 { parts.append("delete \(versions) version\(versions == 1 ? "" : "s")") }
+        if unfinished > 0 { parts.append("delete \(unfinished) unfinished folder\(unfinished == 1 ? "" : "s")") }
+        if copies > 0 { parts.append("replace \(copies == 1 ? "a copy" : "\(copies) copies")") }
+        return "Rename, and " + parts.joined(separator: " and ") + " at the next backup"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Rename this drive").font(.title3.bold())
-            Text("The drive connected now, “\(request.drive.name)”, gets a name of its own. \(request.target.displayName) keeps the other drive, and a new destination on this one takes turns with it. Nothing on either drive is moved or changed.")
+            Text("The drive connected now, “\(request.drive.name)”, gets a name of its own. \(request.target.displayName) keeps the other drive, and a new destination on this one takes turns with it. Renaming changes the drive's name only. The next backup to it takes over this job's folders there, and does what's listed below.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            TextField("New name", text: $name).textFieldStyle(.roundedBorder).frame(width: 260)
-            if !name.isEmpty, let problem {
-                Label(problem, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.cryoWarn)
+            if !loaded {
+                HStack { ProgressView().controlSize(.small); Text("Looking at the drive…").font(.callout) }
+            } else if let look {
+                if let refusal = look.refusal {
+                    Label(refusal, systemImage: "xmark.octagon.fill").foregroundStyle(.cryoCrit).font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    DriveLookLibraries(look: look)
+                }
+            } else {
+                Text("That drive isn't connected any more.").font(.callout)
             }
-            Label("Apps or scripts that find this drive by its path may lose it: the path changes with the name.",
-                  systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if look?.refusal == nil, look != nil {
+                TextField("New name", text: $name).textFieldStyle(.roundedBorder).frame(width: 260)
+                if !name.isEmpty, let problem {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.cryoWarn)
+                }
+                Label("Apps or scripts that find this drive by its path may lose it: the path changes with the name.",
+                      systemImage: "info.circle").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if let failure {
                 Label(failure, systemImage: "xmark.octagon.fill").font(.caption).foregroundStyle(.cryoCrit)
                     .fixedSize(horizontal: false, vertical: true)
@@ -161,26 +201,38 @@ struct RenameDriveSheet: View {
                 if working { ProgressView().controlSize(.small); Text("Renaming…").font(.caption) }
                 Spacer()
                 Button("Cancel") { isPresented = false }.keyboardShortcut(.cancelAction).disabled(working)
-                Button("Rename") { rename() }
-                    .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
-                    .disabled(working || problem != nil)
+                if let look, look.refusal == nil {
+                    Button(renameTitle) { rename(confirming: look) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(working || problem != nil)
+                }
             }
         }
-        .padding(22).frame(width: 480)
+        .padding(22).frame(width: 540)
         .onAppear {
             name = DriveRename.suggestedName(for: request.drive.name, taken: model.takenDriveNames(except: request.drive.uuid))
             fileSystem = DriveRename.drive(request.drive.uuid)?.fileSystem ?? ""
         }
+        .task { await lookAgain() }
     }
 
-    private func rename() {
+    private func lookAgain() async {
+        loaded = false
+        look = await model.renameLook(request.drive.uuid, target: request.target, of: job)
+        loaded = true
+    }
+
+    private func rename(confirming look: DrivePairing) {
         working = true; failure = nil
         Task {
-            let result = await model.renameDrive(request.drive.uuid, to: name, targetID: request.target.id, job: job)
+            let result = await model.renameDrive(request.drive.uuid, to: name, targetID: request.target.id, job: job, confirmed: look)
             working = false
             switch result {
             case .success(let outcome): onRenamed(outcome.job); isPresented = false
-            case .failure(let why): failure = why.localizedDescription
+            case .failure(let why):
+                failure = why.localizedDescription
+                // what it does may have changed: show what it says now
+                if why == .effectNotConfirmed { await lookAgain() }
             }
         }
     }

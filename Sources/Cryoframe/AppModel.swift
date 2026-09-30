@@ -458,6 +458,19 @@ final class AppModel: ObservableObject {
         await Task.detached { JobFootprint.measure(job) }.value
     }
 
+    /// What renaming the drive `uuid` into a destination of `job`'s own leaves its next
+    /// backup to do there (see DrivePairing.lookBeforeRenaming); nil when it isn't
+    /// connected. What the person confirms is handed back to renameDrive.
+    nonisolated func renameLook(_ uuid: String, target: Target, of job: BackupJob) async -> DrivePairing? {
+        let (jobs, checks) = await MainActor.run { (self.jobs, healthRecords) }
+        // as saved: what the rename looks at again
+        let saved = jobs.first { $0.id == job.id } ?? job
+        let t = saved.targets.first { $0.id == target.id } ?? target
+        return await Task.detached {
+            DrivePairing.lookBeforeRenaming(uuid, target: t, job: saved, jobs: jobs, checks: checks)
+        }.value
+    }
+
     /// the names a drive may not be renamed to (see DriveRename)
     func takenDriveNames(except uuid: String) -> [String] {
         DriveRename.takenNames(except: uuid, jobs: jobs, volumes: SystemVolumeTable())
@@ -465,12 +478,13 @@ final class AppModel: ObservableObject {
 
     /// Rename the drive `uuid` and change `job` to match (see DriveRename). The job's
     /// new saved state on success.
-    func renameDrive(_ uuid: String, to name: String, targetID: String, job: BackupJob) async -> Result<DriveRename.Outcome, DriveRename.Refusal> {
-        let store = self.store, locks = runLocks
+    func renameDrive(_ uuid: String, to name: String, targetID: String, job: BackupJob,
+                     confirmed: DrivePairing) async -> Result<DriveRename.Outcome, DriveRename.Refusal> {
+        let store = self.store, locks = runLocks, checks = healthRecords
         let result: Result<DriveRename.Outcome, DriveRename.Refusal> = await Task.detached {
             do {
                 return .success(try DriveRename.rename(uuid, to: name, targetID: targetID, jobID: job.id, store: store, locks: locks,
-                                                       pending: .standard(),
+                                                       pending: .standard(), confirmed: confirmed, checks: checks,
                                                        isQueued: { id in DispatchQueue.main.sync { MainActor.assumeIsolated { self.queue.contains(id) } } }))
             } catch let r as DriveRename.Refusal {
                 return .failure(r)

@@ -111,7 +111,7 @@ final class JobDraft: ObservableObject {
     func takeTurns(_ id: String, with other: String) { state.takeTurns(id, with: other) }
     func stopTakingTurns(_ id: String) { state.stopTakingTurns(id) }
     func takesTurns(_ id: String) -> [Target] { state.takesTurns(id) }
-    func pair(_ id: String, with drive: VolumeIdentity) -> Bool { state.pair(id, with: drive) }
+    func pair(_ id: String, as look: DrivePairing) -> Bool { state.pair(id, as: look) }
     func unpair(_ id: String, uuid: String) { state.unpair(id, uuid: uuid) }
 
     /// take a library out of the job; one added in this editor leaves the list too

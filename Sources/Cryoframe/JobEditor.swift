@@ -93,7 +93,7 @@ struct JobEditor: View {
             if let job = editing {
                 PairingSheet(model: model, job: job, target: t, canRename: !draft.hasUnsavedEdits && !busy,
                              isPresented: Binding(get: { pairingTarget != nil }, set: { if !$0 { pairingTarget = nil } }),
-                             onTakeTurns: { drive in _ = draft.pair(t.id, with: drive) },
+                             onTakeTurns: { look in _ = draft.pair(t.id, as: look) },
                              onRename: { drive in
                                  pairingTarget = nil
                                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { renamingDrive = DriveToRename(target: t, drive: drive) }
@@ -313,6 +313,9 @@ struct JobEditor: View {
                     Divider()
                     Button("Is this one of your drives?…") { pairingTarget = t }
                 }
+                // the other drive of its name, not yet one of the job's, is renamed only
+                // from "Is this one of your drives?", which shows first whose it is and
+                // what the next backup does to it
                 if let connected = pairedDriveConnected(t) {
                     Divider()
                     Button("Rename this drive…") { renamingDrive = DriveToRename(target: t, drive: connected) }
@@ -366,18 +369,12 @@ struct JobEditor: View {
         }
     }
 
-    /// a connected drive `t` takes turns with under its name, or the other drive of its
-    /// name at its folder: the one Rename this drive would rename
+    /// a connected drive `t` already takes turns with under its name (saved): the one
+    /// Rename this drive would rename
     private func pairedDriveConnected(_ t: Target) -> VolumeIdentity? {
-        guard editing?.targets.contains(where: { $0.id == t.id }) == true, let own = t.volume, !own.isShare else { return nil }
+        guard let saved = editing?.targets.first(where: { $0.id == t.id }), let own = saved.volume, !own.isShare else { return nil }
         let table = SystemVolumeTable()
-        for v in t.otherVolumes ?? [] where table.mounted().contains(where: { $0.uuid == v.uuid }) { return v }
-        if case .otherDrive? = presence[t.id], let here = table.volume(containing: t.destinationDir), here.uuid != nil,
-           here.uuid != own.uuid, var id = DestinationResolver(volumes: table).identity(for: t.destinationDir) {
-            id.learnedAt = nil
-            return id
-        }
-        return nil
+        return (saved.otherVolumes ?? []).first { v in table.mounted().contains { $0.uuid == v.uuid } }
     }
 
     /// about how much there is to back up, against the room on the main destination
