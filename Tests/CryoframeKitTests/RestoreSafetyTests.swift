@@ -152,4 +152,39 @@ private func attachedImages() -> String {
         #expect(try String(contentsOf: second.appendingPathComponent("src/main.swift"), encoding: .utf8) == "main")
         #expect(try String(contentsOf: first.appendingPathComponent("src/main.swift"), encoding: .utf8) == "mine", "the one there was touched")
     }
+
+    // MARK: quarantine
+
+    // A download restored from a mirror keeps its quarantine byte for byte (which app
+    // fetched it, and when), instead of the copy's re-stamp with the time of the
+    // restore. Read-only downloads too. The file's dates are the library's.
+    @Test func aDownloadComesBackWithItsQuarantineAsTheLibraryHadIt() throws {
+        let base = folder("quarantine")
+        defer {
+            _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "u+rwx", base.path])
+            try? FileManager.default.removeItem(at: base)
+        }
+        let lib = base.appendingPathComponent("Downloads")
+        try FileManager.default.createDirectory(at: lib.appendingPathComponent("Saved"), withIntermediateDirectories: true)
+        let value = Array("0083;66f9a1b2;Safari;8E3C2F7A-1B2C-4D5E-9F00-112233445566".utf8)
+        for name in ["report.pdf", "Saved/readonly.zip"] {
+            let f = lib.appendingPathComponent(name).path
+            try Data("body of \(name)".utf8).write(to: URL(fileURLWithPath: f))
+            #expect(setxattr(f, "com.apple.quarantine", value, value.count, 0, XATTR_NOFOLLOW) == 0)
+        }
+        #expect(chmod(lib.appendingPathComponent("Saved/readonly.zip").path, 0o444) == 0)
+        let out = base.appendingPathComponent("mirror")
+        _ = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Downloads", root: lib), to: out)
+        let a = try #require(RestoreDiscovery.archive(at: out))
+        let got = try RestoreEngine().restore(a, to: base.appendingPathComponent("dest"))
+        for name in ["report.pdf", "Saved/readonly.zip"] {
+            let restored = got.appendingPathComponent(name).path
+            #expect(MirrorCopy.attributeValue(restored, "com.apple.quarantine") == value,
+                    "\(name): \(String(decoding: MirrorCopy.attributeValue(restored, "com.apple.quarantine") ?? [], as: UTF8.self))")
+            var a = stat(), b = stat()
+            #expect(lstat(lib.appendingPathComponent(name).path, &a) == 0 && lstat(restored, &b) == 0)
+            #expect(a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec, "\(name): the date moved")
+            #expect(b.st_mode & 0o777 == a.st_mode & 0o777, "\(name): the mode moved")
+        }
+    }
 }

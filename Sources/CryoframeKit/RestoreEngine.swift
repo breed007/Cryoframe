@@ -276,13 +276,18 @@ public struct RestoreEngine: Sendable {
             if (try? packaged.resourceValues(forKeys: [.isPackageKey]))?.isPackage == true {
                 try checkRoom(RestoreRoom.bytes(of: [packaged]))
                 try fm.copyItem(at: packaged, to: target)
+                Self.keepQuarantine(from: packaged, to: target)
                 break
             }
             let children = try fm.contentsOfDirectory(at: opened.root, includingPropertiesForKeys: nil)
             guard !children.isEmpty else { throw RestoreError.libraryNotFound }
             try checkRoom(RestoreRoom.bytes(of: children))
             try fm.createDirectory(at: target, withIntermediateDirectories: true)
-            for child in children { try fm.copyItem(at: child, to: target.appendingPathComponent(child.lastPathComponent)) }
+            for child in children {
+                let into = target.appendingPathComponent(child.lastPathComponent)
+                try fm.copyItem(at: child, to: into)
+                Self.keepQuarantine(from: child, to: into)
+            }
         case .sealedZip, .liveMirror:
             let bundle = opened.root.appendingPathComponent(bundleName)
             var isDir: ObjCBool = false
@@ -291,9 +296,42 @@ public struct RestoreEngine: Sendable {
             }
             try checkRoom(RestoreRoom.bytes(of: [bundle]))
             try fm.copyItem(at: bundle, to: target)
+            Self.keepQuarantine(from: bundle, to: target)
         }
 
         onStage(.completed)
         return target
+    }
+
+    static let quarantine = "com.apple.quarantine"
+
+    /// Put back every downloaded file's quarantine exactly as the archive holds it.
+    ///
+    /// The copy (copyfile(3), as Finder's) re-stamps it: measured, "0083;66f9a1b2;
+    /// Safari;<id>" arrives as "0283;<time of the copy>;;<id>", so a restored download
+    /// looked as if it had been downloaded at the restore and lost which app fetched
+    /// it. The archive's own bytes are written back, as the mirror now does. Best
+    /// effort: a file that refuses (locked in Finder) keeps the re-stamped value, and
+    /// the restore still succeeds. Only the attribute changes; the file's dates don't.
+    static func keepQuarantine(from source: URL, to copy: URL) {
+        var rels = [""]
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue,
+           let walker = FileManager.default.enumerator(atPath: source.path) {
+            while let rel = walker.nextObject() as? String { rels.append(rel) }
+        }
+        for rel in rels {
+            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
+            let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
+            guard let value = MirrorCopy.attributeValue(from, quarantine),
+                  MirrorCopy.attributeValue(to, quarantine) != value else { continue }
+            if setxattr(to, quarantine, value, value.count, 0, XATTR_NOFOLLOW) == 0 { continue }
+            // a read-only file: writable for the moment it takes
+            var st = stat()
+            guard errno == EACCES || errno == EPERM, lstat(to, &st) == 0, st.st_mode & S_IFMT != S_IFLNK else { continue }
+            guard chmod(to, (st.st_mode & 0o7777) | S_IWUSR) == 0 else { continue }
+            _ = setxattr(to, quarantine, value, value.count, 0, XATTR_NOFOLLOW)
+            chmod(to, st.st_mode & 0o7777)
+        }
     }
 }
