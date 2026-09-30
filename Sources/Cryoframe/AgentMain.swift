@@ -86,19 +86,23 @@ enum AgentMain {
                     alerts.append(record)
                     limit.signal(); continue
                 }
+                // the job as it is now it's ours: edited or deleted since the list was read
+                guard let current = store.load().jobs.first(where: { $0.id == job.id }) else {
+                    lease.release(); limit.signal(); continue
+                }
                 let control = RunControl()
                 lease.onStopRequest { control.cancel() }        // Stop, pressed in the app
                 group.enter()
-                let resolved = job.resolvingLibraries(in: registry)
+                let resolved = current.resolvingLibraries(in: registry)
                 Task {
                     let started = Date()
                     let record: RunRecord
                     do {
                         let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date(), control: control)
-                        record = RunRecord.make(job: job, outcome: outcome,
+                        record = RunRecord.make(job: current, outcome: outcome,
                                                 startedAt: started, finishedAt: Date(), trigger: "scheduled")
                     } catch {
-                        record = RunRecord.failure(job: job, error: error.localizedDescription,
+                        record = RunRecord.failure(job: current, error: error.localizedDescription,
                                                    startedAt: started, finishedAt: Date(), trigger: "scheduled")
                     }
                     historyStore.append(record)

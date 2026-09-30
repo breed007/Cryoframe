@@ -306,7 +306,9 @@ private struct JobRow: View {
                     }
                     Button(job.enabled ? "Disable schedule" : "Enable schedule") { model.setEnabled(job, !job.enabled) }
                     Divider()
-                    Button("Delete", role: .destructive) { model.deleteJob(job.id) }.disabled(model.isBusy(job.id))
+                    Button("Delete", role: .destructive) {
+                        Task { let r = await model.deleteJob(job, expected: await model.removalPlan(for: job)); _ = r }
+                    }.disabled(model.isBusy(job.id))
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
                 .accessibilityLabel("More actions for \(job.name)")

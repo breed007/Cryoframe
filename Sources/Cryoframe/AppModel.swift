@@ -437,7 +437,37 @@ final class AppModel: ObservableObject {
             return true
         }
     }
-    func deleteJob(_ id: String) { stopJob(id); KeychainArchiveKey.delete(jobID: id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
+    /// What deleting `job` would do (see JobRemoval). Reads its destinations, so off
+    /// the main thread.
+    nonisolated func removalPlan(for job: BackupJob) async -> JobRemoval.Plan {
+        await Task.detached {
+            JobRemoval.plan(for: job, pending: .standard(), scratchBase: TransferConfig.scratchBase())
+        }.value
+    }
+
+    /// Delete `job` if it isn't in use and deleting it still does what `expected`
+    /// says. Its backups and its passphrase stay. nil when it was deleted.
+    func deleteJob(_ job: BackupJob, expected: JobRemoval.Plan) async -> JobRemoval.Refusal? {
+        let store = self.store, locks = runLocks, id = job.id
+        let refusal: JobRemoval.Refusal? = await Task.detached {
+            do {
+                try JobRemoval.delete(job, expected: expected, store: store, pending: .standard(),
+                                      scratchBase: TransferConfig.scratchBase(), locks: locks,
+                                      isQueued: { DispatchQueue.main.sync { MainActor.assumeIsolated { self.queue.contains(id) } } })
+                return nil
+            } catch let r as JobRemoval.Refusal {
+                return r
+            } catch {
+                return .unavailable(error.localizedDescription)
+            }
+        }.value
+        if refusal == nil {
+            jobs = store.load().jobs; lastRecords[id] = nil; lastCopies[id] = nil
+            log("🗑 \(job.name) was deleted. Its backups stay where they are.")
+            revalidate(); armWake(); refreshProtectedSize(force: true)
+        }
+        return refusal
+    }
     func addTarget(_ target: Target) {
         targets.removeAll { $0.id == target.id }; targets.append(target)
         Self.saveKnownTargets(targets)
@@ -680,7 +710,6 @@ final class AppModel: ObservableObject {
         refreshSleepGuard()
         let control = RunControl(); controls[id] = control
         jobStage[id] = .preparing
-        let resolved = job.resolvingLibraries(in: registry)
         let executor = TransferConfig.makeExecutor(detector: detector, store: store)
         let locks = runLocks
         Task {
@@ -701,6 +730,11 @@ final class AppModel: ObservableObject {
                 return
             }
             lease.onStopRequest { control.cancel() }
+            // the job as it is now it's ours: edited or deleted since it was queued
+            guard let current = store.load().jobs.first(where: { $0.id == id }) else {
+                lease.release(); finishRun(id); return
+            }
+            let resolved = current.resolvingLibraries(in: registry)
             let startedAt = Date()
             // marks the run as started; its result line replaces it when it finishes, so
             // the log doesn't accumulate a timestamp-less "▶ JobName" beside every
@@ -711,9 +745,9 @@ final class AppModel: ObservableObject {
                     onStage: { s in Task { @MainActor in self.jobStage[id] = s } },
                     onLibrary: { lib in Task { @MainActor in self.jobLibrary[id] = lib; self.log("  ▸ \(lib)") } },
                     onProgress: { p in Task { @MainActor in self.jobProgress[id] = p } })
-                apply(RunRecord.make(job: job, outcome: outcome, startedAt: startedAt, finishedAt: Date(), trigger: "manual"))
+                apply(RunRecord.make(job: current, outcome: outcome, startedAt: startedAt, finishedAt: Date(), trigger: "manual"))
             } catch {
-                apply(RunRecord.failure(job: job, error: error.localizedDescription,
+                apply(RunRecord.failure(job: current, error: error.localizedDescription,
                                         startedAt: startedAt, finishedAt: Date(), trigger: "manual"))
             }
             lease.release()
