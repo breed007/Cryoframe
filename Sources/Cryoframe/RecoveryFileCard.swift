@@ -40,13 +40,5 @@ struct RecoveryFileCard: View {
         .onReceive(NotificationCenter.default.publisher(for: .escrowExported)) { _ in status = EscrowFreshness.current() }
     }
 
-    private var message: String? {
-        switch status {
-        case .notNeeded, .current: return nil
-        case .neverExported:
-            return "Your encrypted backups have no recovery file yet. Without it they can't be opened on another Mac. Export one and keep it apart from the backups."
-        case .outOfDate(_, let why):
-            return "Your recovery file is out of date (\(why.joined(separator: "; "))). Export a new one so every encrypted backup can be opened on another Mac."
-        }
-    }
+    private var message: String? { EscrowFreshness.notice(status) }
 }

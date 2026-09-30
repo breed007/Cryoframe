@@ -241,7 +241,9 @@ public enum EscrowFreshness {
     public enum Status: Sendable, Equatable {
         /// no encrypted job, nothing to export
         case notNeeded
-        case neverExported
+        /// no export is recorded on this Mac. Not "never exported": exports made before
+        /// 1.6 weren't recorded, so someone who exported then has a file all the same.
+        case noExportRecorded
         case current(Date)
         /// exported at the date, and these jobs have changed since (plain sentences)
         case outOfDate(Date, [String])
@@ -249,7 +251,7 @@ public enum EscrowFreshness {
 
     public static func status(export: Export?, jobs: [Job]) -> Status {
         guard !jobs.isEmpty else { return .notNeeded }
-        guard let export else { return .neverExported }
+        guard let export else { return .noExportRecorded }
         var reasons: [String] = []
         for job in jobs {
             guard let covered = export.jobs[job.id] else { reasons.append("\(job.name) isn't in it"); continue }
@@ -257,6 +259,17 @@ public enum EscrowFreshness {
             if let saved = job.keySavedAt, saved > export.exportedAt { reasons.append("\(job.name)'s passphrase was saved after it") }
         }
         return reasons.isEmpty ? .current(export.exportedAt) : .outOfDate(export.exportedAt, reasons)
+    }
+
+    /// What the main window says about the recovery file, or nil when all is well.
+    public static func notice(_ status: Status) -> String? {
+        switch status {
+        case .notNeeded, .current: return nil
+        case .noExportRecorded:
+            return "Cryoframe has no record of your recovery file being exported from this Mac (exports made before version 1.6 weren't recorded). Without an up-to-date one, your encrypted backups can't be opened on another Mac. If you haven't exported it since your encrypted jobs last changed, export it now and keep it apart from the backups."
+        case .outOfDate(_, let why):
+            return "Your recovery file is out of date (\(why.joined(separator: "; "))). Export a new one so every encrypted backup can be opened on another Mac."
+        }
     }
 
     /// what an export of `entries` covers

@@ -66,8 +66,9 @@ struct EscrowView: View {
         switch freshness {
         case .notNeeded:
             EmptyView()
-        case .neverExported:
-            Label("No recovery file has been exported from this Mac yet.", systemImage: "exclamationmark.triangle.fill")
+        case .noExportRecorded:
+            Label("No export of the recovery file is recorded on this Mac (exports made before version 1.6 weren't recorded). If you haven't exported it since your encrypted jobs last changed, export it now.",
+                  systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.cryoWarn).font(.callout)
         case .current(let date):
             Label("Last exported \(date.formatted(date: .abbreviated, time: .shortened)); it covers every encrypted job.",

@@ -119,12 +119,16 @@ private func attached(_ dir: URL) -> Bool {
 
     // MARK: freshness
 
-    @Test func theRecoveryFileIsOutOfDateWhenJobsOrKeysChangeAfterIt() {
+    @Test func theRecoveryFileIsOutOfDateWhenJobsOrKeysChangeAfterIt() throws {
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         let jobs = [EscrowFreshness.Job(id: "a", name: "Nightly", libraries: ["Photos"], keySavedAt: t0.addingTimeInterval(-60)),
                     EscrowFreshness.Job(id: "b", name: "Docs", libraries: ["Documents"], keySavedAt: nil)]
         #expect(EscrowFreshness.status(export: nil, jobs: []) == .notNeeded)
-        #expect(EscrowFreshness.status(export: nil, jobs: jobs) == .neverExported)
+        #expect(EscrowFreshness.status(export: nil, jobs: jobs) == .noExportRecorded)
+        // after an upgrade from 1.5 a file may well exist: the notice doesn't say there's none
+        let notice = try #require(EscrowFreshness.notice(.noExportRecorded))
+        #expect(!notice.localizedCaseInsensitiveContains("no recovery file") && notice.contains("before version 1.6"), "\(notice)")
+        #expect(EscrowFreshness.notice(.notNeeded) == nil && EscrowFreshness.notice(.current(Date())) == nil)
         let export = EscrowFreshness.record([entry("a", "Nightly", ["Photos"], "p"), entry("b", "Docs", ["Documents"], "q"),
                                              entry(nil, "Legacy", ["X"], "r")], at: t0)
         #expect(export.jobs == ["a": ["Photos"], "b": ["Documents"]])
