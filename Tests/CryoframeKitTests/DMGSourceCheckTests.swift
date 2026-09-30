@@ -92,6 +92,39 @@ private func unlock(_ dir: URL) {
         #expect(text.hasSuffix("or switch this job to the sealed zip format, which archives them without asking."), "\(text)")
     }
 
+    // A socket makes hdiutil and ditto both fail ("Operation not supported on
+    // socket"), a named pipe makes both wait forever. Either is named for either
+    // sealed format, and zip isn't offered as the way out: it can't hold them either.
+    @Test func pipesAndSocketsAreNamedForBothSealedFormats() throws {
+        // a short path: a socket's path must fit in 104 bytes
+        let lib = URL(fileURLWithPath: "/private/tmp/cf-sk-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: lib) }
+        try Data("x".utf8).write(to: lib.appendingPathComponent("notes.txt"))
+        #expect(mkfifo(lib.appendingPathComponent("build.pipe").path, 0o644) == 0)
+        let sock = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { close(sock) }
+        var addr = sockaddr_un(); addr.sun_family = sa_family_t(AF_UNIX)
+        let path = lib.appendingPathComponent("agent.sock").path
+        _ = withUnsafeMutableBytes(of: &addr.sun_path) { buf in
+            path.utf8CString.withUnsafeBytes { buf.copyMemory(from: UnsafeRawBufferPointer(rebasing: $0.prefix(buf.count))) }
+        }
+        let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(sock, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+        try #require(bound == 0, "couldn't make a socket file")
+        for zip in [false, true] {
+            let found = JobExecutor.directoryStats(lib, forDMG: !zip, forZip: zip).dmgBlockers
+            #expect(found.counts[.special] == 2 && found.counts.count == 1, "\(found.counts)")
+            let text = found.explanation(library: "Projects", zip: zip)
+            #expect(text.hasPrefix("Projects holds 2 named pipes, sockets or devices ("), "\(text)")
+            #expect(text.contains("(agent.sock, build.pipe)") || text.contains("(build.pipe, agent.sock)"), "\(text)")
+            #expect(text.contains(zip ? "which a sealed zip can't hold: ditto waits" : "which a sealed disk image can't hold: hdiutil waits"), "\(text)")
+            #expect(text.hasSuffix("move them out of the folder (or the program that makes them)."), "\(text)")
+            #expect(!text.contains("sealed zip format"), "\(text)")
+        }
+        // a folder backed up as a mirror isn't looked at
+        #expect(JobExecutor.directoryStats(lib).dmgBlockers.isEmpty)
+    }
+
     // Through a whole sealed-DMG run: the library fails before hdiutil is started,
     // with the list, and the run moves on. (Never run without the check: see the top.)
     @Test func aSealedDMGRunFailsUpFrontNamingThem() async throws {

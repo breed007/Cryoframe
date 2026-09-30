@@ -15,7 +15,12 @@
 import Foundation
 
 public struct DMGBlockers: Sendable, Equatable {
-    public enum Kind: Sendable, CaseIterable { case unreadable, foreign, setgid }
+    /// `special`: a named pipe, a socket or a device, which neither sealed format can
+    /// hold. Measured: `hdiutil create -srcfolder` and `ditto -c -k` both open a named
+    /// pipe and wait for a writer forever, and both refuse a socket ("Operation not
+    /// supported on socket"). Devices can't be made without root to measure; neither
+    /// tool can recreate one as the user, so they are named too.
+    public enum Kind: Sendable, CaseIterable { case unreadable, foreign, setgid, special }
 
     /// how many examples of each kind are kept to name
     public static let examplesKept = 5
@@ -34,12 +39,16 @@ public struct DMGBlockers: Sendable, Equatable {
     }
 
     /// Look at one item of the library. A symbolic link is copied as a link, so only
-    /// its owner matters; a folder must be listable as well as readable.
+    /// its owner matters; a folder must be listable as well as readable. `forDMG`
+    /// adds what makes hdiutil ask for a password to what neither sealed format can
+    /// hold (`special`).
     mutating func inspect(_ path: String, relative rel: String, groups: inout Membership,
-                          uid: uid_t = geteuid()) {
+                          uid: uid_t = geteuid(), forDMG: Bool = true) {
         var st = stat()
-        guard lstat(path, &st) == 0 else { note(.unreadable, rel); return }
+        guard lstat(path, &st) == 0 else { if forDMG { note(.unreadable, rel) }; return }
         let type = st.st_mode & S_IFMT
+        if type == S_IFIFO || type == S_IFSOCK || type == S_IFBLK || type == S_IFCHR { note(.special, rel); return }
+        guard forDMG else { return }
         if st.st_uid != uid { note(.foreign, rel); return }
         switch type {
         case S_IFREG:
@@ -83,24 +92,40 @@ public struct DMGBlockers: Sendable, Equatable {
     }
 
     /// What the run reports: which items, and what to do about them.
-    public func explanation(library: String) -> String {
+    /// What the run reports: which items, and what to do about them. `zip`: the
+    /// sealed zip format, which only `special` items stop.
+    public func explanation(library: String, zip: Bool = false) -> String {
         func list(_ kind: Kind, _ one: String, _ many: String) -> String? {
             guard let n = counts[kind], n > 0 else { return nil }
             let shown = examples[kind] ?? []
             return "\(n) \(n == 1 ? one : many) (\(shown.joined(separator: ", "))\(n > shown.count ? ", …" : ""))"
         }
+        var said: [String] = []
         let found = [list(.unreadable, "item you can't read", "items you can't read"),
                      list(.foreign, "item owned by another user", "items owned by another user"),
                      list(.setgid, "file set to run as a group you're not in", "files set to run as a group you're not in")]
             .compactMap { $0 }
-        var fix = "Nothing was backed up. Make these items yours and readable (in Finder, Get Info, then Sharing & Permissions), or move them out of the folder"
-        if counts[.foreign] != nil || counts[.setgid] != nil {
-            fix += (counts[.unreadable] == nil ? ", or switch this job to the sealed zip format, which archives them without asking."
-                                               : "; the sealed zip format archives items owned by others, but not ones you can't read.")
-        } else {
-            fix += "."
+        if !found.isEmpty {
+            said.append("\(library) can't be sealed into a disk image unattended: the disk image tool would stop and wait for an administrator's password because of "
+                        + found.joined(separator: ", and ") + ".")
         }
-        return "\(library) can't be sealed into a disk image unattended: the disk image tool would stop and wait for an administrator's password because of "
-            + found.joined(separator: ", and ") + ". " + fix
+        if let pipes = list(.special, "named pipe, socket or device", "named pipes, sockets or devices") {
+            let tool = zip ? "ditto" : "hdiutil"
+            said.append("\(library) holds \(pipes), which a sealed \(zip ? "zip" : "disk image") can't hold: \(tool) waits on a named pipe forever and refuses a socket.")
+        }
+        var fix = "Nothing was backed up."
+        if !found.isEmpty {
+            fix += " Make these items yours and readable (in Finder, Get Info, then Sharing & Permissions), or move them out of the folder"
+            if counts[.special] == nil, counts[.foreign] != nil || counts[.setgid] != nil {
+                fix += (counts[.unreadable] == nil ? ", or switch this job to the sealed zip format, which archives them without asking."
+                                                   : "; the sealed zip format archives items owned by others, but not ones you can't read.")
+            } else {
+                fix += "."
+            }
+        }
+        if counts[.special] != nil {
+            fix += " Named pipes and sockets are connections a running program makes and hold no data: move them out of the folder (or the program that makes them)."
+        }
+        return said.joined(separator: " ") + " " + fix
     }
 }

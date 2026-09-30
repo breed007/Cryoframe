@@ -201,7 +201,7 @@ public struct JobExecutor: Sendable {
                       let root = placement.root(in: mounts) else {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
                 }
-                let stats = Self.directoryStats(root, forDMG: sealed == .dmg)
+                let stats = Self.directoryStats(root, forDMG: sealed == .dmg, forZip: sealed == .zip)
                 let sourceSize = stats.bytes
                 let source = ArchiveSource(name: root.lastPathComponent, root: root, sizeHint: sourceSize)
 
@@ -226,10 +226,11 @@ public struct JobExecutor: Sendable {
                     continue
                 }
                 // hdiutil stops and waits for an administrator's password when it meets
-                // any of these, and an unattended run waited on that prompt all night
-                // with its snapshot held. Name them now instead.
+                // some of these, and hdiutil and ditto both wait forever on a named pipe:
+                // an unattended run waited all night with its snapshot held. Name them
+                // now instead.
                 if !stats.dmgBlockers.isEmpty {
-                    let why = stats.dmgBlockers.explanation(library: library.displayName)
+                    let why = stats.dmgBlockers.explanation(library: library.displayName, zip: sealed == .zip)
                     for d in dests {
                         results.append(.failed(library: library.displayName, destination: d.target.displayName, error: why))
                     }
@@ -595,7 +596,8 @@ public struct JobExecutor: Sendable {
         var dmgBlockers = DMGBlockers()
     }
 
-    static func directoryStats(_ url: URL, forDMG: Bool = false) -> DirectoryStats {
+    /// With `forZip`, what a sealed zip can't hold (named pipes, sockets, devices).
+    static func directoryStats(_ url: URL, forDMG: Bool = false, forZip: Bool = false) -> DirectoryStats {
         var out = DirectoryStats()
         let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
         let root = url.standardizedFileURL.path
@@ -607,9 +609,10 @@ public struct JobExecutor: Sendable {
             out.readable = false; return out
         }
         var groups = DMGBlockers.Membership()
-        if forDMG { out.dmgBlockers.inspect(url.path, relative: url.lastPathComponent, groups: &groups) }   // copied too
+        let sealed = forDMG || forZip
+        if sealed { out.dmgBlockers.inspect(url.path, relative: url.lastPathComponent, groups: &groups, forDMG: forDMG) }   // copied too
         for case let u as URL in e {
-            if forDMG { out.dmgBlockers.inspect(u.path, relative: DMGBlockers.relative(u.path, to: root), groups: &groups) }
+            if sealed { out.dmgBlockers.inspect(u.path, relative: DMGBlockers.relative(u.path, to: root), groups: &groups, forDMG: forDMG) }
             guard let v = try? u.resourceValues(forKeys: keys) else { continue }
             if v.isSymbolicLink == true { out.entries += 1; continue }
             guard v.isRegularFile == true else { continue }
