@@ -75,6 +75,7 @@ enum RehearsalSchedule {
                     let report = RecoveryRehearsal().rehearse(
                         destination: target.destinationDir,
                         expecting: expecting,
+                        alsoKnownAs: Dictionary(resolved.libraries.map { ($0.displayName, $0.formerNames ?? []) }, uniquingKeysWith: +),
                         isCloud: target.kind == .cloudSync,
                         materializeCloud: materializeCloud,
                         passphrase: { _ in key })

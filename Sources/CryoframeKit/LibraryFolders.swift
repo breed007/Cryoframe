@@ -80,7 +80,7 @@ public enum LibraryFolders {
                 ofItsKind(a) && (a.version == nil || e.identity?.owns(a.dir.lastPathComponent) != false)
             })) }
         for e in entries where e.identity?.key != key && e.identity?.jobID != job.id
-            && LibraryNames.same(e.url.lastPathComponent, library.displayName) {
+            && library.answers(to: e.url.lastPathComponent) {
             // another job's folder only if it's a mirror job's: the one kind of folder
             // 1.5.6 writes another job's versions into. A sealed job's folder, deleted
             // or no longer written to, holds that job's backups, under its key. Of
@@ -113,7 +113,7 @@ public enum LibraryFolders {
         let mine = runs.filter { $0.jobID == job.id }
         guard !mine.isEmpty else { return false }
         for e in entries where e.identity == nil {
-            let names = job.libraries.map(\.displayName).filter { LibraryNames.same($0, e.url.lastPathComponent) }
+            let names = job.libraries.filter { $0.answers(to: e.url.lastPathComponent) }.flatMap(\.names)
             guard !names.isEmpty else { continue }
             for a in RestoreDiscovery.scan(e.url, maxDepth: 1) {
                 guard let made = a.version else { continue }
@@ -167,14 +167,19 @@ public enum LibraryFolders {
     ///     among them or not
     ///   - isOpen: whether a disk image under a folder is attached (a folder isn't
     ///     renamed from under a reader)
+    ///   - transferring: whether an interrupted transfer is still to finish into a
+    ///     folder under it: the transfer knows its folder by path, so the folder keeps
+    ///     its name until it has
     public static func prepare(job: BackupJob, library: ContentType, in destination: URL, jobs: [BackupJob],
-                               isOpen: (URL) -> Bool = { LibraryFolders.anyImageAttached(under: $0) }) throws -> Prepared {
+                               isOpen: (URL) -> Bool = { LibraryFolders.anyImageAttached(under: $0) },
+                               transferring: (URL) -> Bool = { _ in false }) throws -> Prepared {
         let fm = FileManager.default
         let key = LibraryIdentity.key(job: job, library: library)
         let identity = LibraryIdentity(job: job, library: library)
         let entries = listing(destination)
         var notes: [String] = []
-        let legacy = entries.first { $0.identity == nil && LibraryNames.same($0.url.lastPathComponent, library.displayName) }
+        // by its name or one it had: a drive away when the library was renamed
+        let legacy = entries.first { $0.identity == nil && library.answers(to: $0.url.lastPathComponent) }
         var folder = entries.filter { $0.identity?.key == key }
             .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
             .first?.url
@@ -201,7 +206,7 @@ public enum LibraryFolders {
         // the name follows the library's; the identity says whose it is either way
         if !LibraryFolderName.fits(folder.lastPathComponent, name: library.displayName, key: key) {
             let renamed = destination.appendingPathComponent(LibraryFolderName.choose(job: job, library: library, in: destination), isDirectory: true)
-            if !fm.fileExists(atPath: renamed.path), !isOpen(folder), rename(folder.path, renamed.path) == 0 {
+            if !fm.fileExists(atPath: renamed.path), !transferring(folder), !isOpen(folder), rename(folder.path, renamed.path) == 0 {
                 folder = renamed
             }
         }
@@ -232,7 +237,7 @@ public enum LibraryFolders {
         // libraries of one name, so nothing of this one's is there.)
         let others = listing(destination).filter {
             $0.url.path != folder.path && $0.identity?.key != key && $0.identity?.jobID != job.id
-                && LibraryNames.same($0.url.lastPathComponent, library.displayName)
+                && library.answers(to: $0.url.lastPathComponent)
         }
         // Out of another job's folder only when that job is a mirror job writing here,
         // and was one when it last wrote to it: a sealed job's folder, the job deleted
@@ -295,7 +300,7 @@ public enum LibraryFolders {
     static func claimants(named name: String, bundles: Set<String>, in destination: URL, jobs: [BackupJob]) -> [Claimant] {
         var seen = Set<String>(), out: [Claimant] = []
         for job in jobs where job.targets.contains(where: { samePlace($0.destinationDir, destination) }) {
-            for lib in job.libraries where LibraryNames.same(lib.displayName, name) {
+            for lib in job.libraries where lib.answers(to: name) {
                 if !bundles.isEmpty {
                     guard bundles.contains(where: { isOf(lib, bundle: $0) }) else { continue }
                 }

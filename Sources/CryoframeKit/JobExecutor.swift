@@ -243,8 +243,11 @@ public struct JobExecutor: Sendable {
         // Each library's folder at each destination it can reach, found by identity:
         // taken over from 1.5 or made new (see LibraryFolders), before anything is
         // frozen. A folder that can't be got ready fails that one copy.
+        // a folder an interrupted transfer still writes into keeps its name until it's done
+        let transferDirs = (pendingStore?.all() ?? []).map { URL(fileURLWithPath: $0.targetDir, isDirectory: true) }
         let (folderOf, folderFailures, folderNotes) = Self.prepareFolders(job, at: dests.filter(\.available).map(\.target),
-                                                                          jobs: (jobStore?.load().jobs ?? []).map { DestinationResolver(volumes: self.volumes).resolve($0).job })
+                                                                          jobs: (jobStore?.load().jobs ?? []).map { DestinationResolver(volumes: self.volumes).resolve($0).job },
+                                                                          transferring: { folder in transferDirs.contains { DestinationRules.contains(folder, $0) } })
 
         onStage(.preparing)
 
@@ -586,13 +589,14 @@ public struct JobExecutor: Sendable {
 
     /// every library's folder at every destination `targets` names, ready to write to;
     /// why for each that couldn't be got ready; and what the run should say about it
-    static func prepareFolders(_ job: BackupJob, at targets: [Target], jobs: [BackupJob])
+    static func prepareFolders(_ job: BackupJob, at targets: [Target], jobs: [BackupJob],
+                               transferring: (URL) -> Bool = { _ in false })
         -> (folders: [String: [String: URL]], failures: [String: [String: String]], notes: [String]) {
         var folders: [String: [String: URL]] = [:], failures: [String: [String: String]] = [:], notes: [String] = []
         for t in targets {
             for lib in job.libraries {
                 do {
-                    let p = try LibraryFolders.prepare(job: job, library: lib, in: t.destinationDir, jobs: jobs)
+                    let p = try LibraryFolders.prepare(job: job, library: lib, in: t.destinationDir, jobs: jobs, transferring: transferring)
                     folders[t.id, default: [:]][lib.id] = p.folder
                     for n in p.notes where !notes.contains(n) { notes.append(n) }
                 } catch {

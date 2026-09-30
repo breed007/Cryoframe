@@ -128,10 +128,13 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         try c.encode(createdAt, forKey: .createdAt)
     }
 
-    /// re-resolve any built-in libraries to their current (possibly overridden) paths.
+    /// Re-resolve any built-in libraries to their current (possibly overridden)
+    /// paths, keeping what the job says of each: the name it gave it (a built-in
+    /// renamed in this job), the names it had, the drive it's on. Taking the
+    /// registry's copy whole threw a rename away at every run, check and rehearsal.
     public func resolvingLibraries(in registry: ContentTypeRegistry) -> BackupJob {
         var copy = self
-        copy.libraries = libraries.map { registry.type(id: $0.id) ?? $0 }
+        copy.libraries = libraries.map { lib in registry.type(id: lib.id).map { lib.resolved(with: $0) } ?? lib }
         return copy
     }
 }

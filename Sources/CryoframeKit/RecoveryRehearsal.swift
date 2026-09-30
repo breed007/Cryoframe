@@ -71,15 +71,18 @@ public struct RecoveryRehearsal: Sendable {
     ///     library that has silently stopped arriving can be named.
     ///   - passphrase: key for an encrypted library, by library name. A library with
     ///     no key is reported locked rather than failed — nothing is wrong with it.
+    ///   - alsoKnownAs: other names an expected library may be found under (the
+    ///     ones it had before it was renamed, until a run brings its folder up to date)
     ///   - isCloud: skip archives evicted to placeholders instead of pulling gigabytes.
     public func rehearse(destination: URL,
                          expecting: [String],
+                         alsoKnownAs: [String: [String]] = [:],
                          isCloud: Bool = false,
                          materializeCloud: Bool = false,
                          passphrase: @Sendable (String) -> String? = { _ in nil }) -> Report {
         let archives = RestoreDiscovery.scan(destination)     // the recovery entry point
         let found = Set(archives.map(\.displayName))
-        let missing = expecting.filter { !found.contains($0) }.sorted()
+        let missing = expecting.filter { name in !([name] + (alsoKnownAs[name] ?? [])).contains(where: found.contains) }.sorted()
 
         let moment = RecoveryPlan.moments(in: archives).last
         let selections = moment.map { RecoveryPlan.selections(at: $0, in: archives) }

@@ -66,6 +66,11 @@ public struct ContentType: Codable, Sendable, Identifiable, Hashable {
     /// the volume a folder on a drive other than the startup disk is on, so it's
     /// found after the drive is renamed (see `located`); nil otherwise
     public var volume: VolumeIdentity? = nil
+    /// The names the library had in its job before it was renamed there, oldest
+    /// first. A drive that was away when it was renamed still has its folder under an
+    /// old name, and a folder made before 1.6 has no identity file to say whose it is,
+    /// only its name (see LibraryFolders).
+    public var formerNames: [String]? = nil
 
     public init(id: String, displayName: String, paths: [LibraryPath],
                 owningProcess: OwningProcess?, kind: ContentKind, integrityProbe: String? = nil) {
@@ -74,6 +79,27 @@ public struct ContentType: Codable, Sendable, Identifiable, Hashable {
     }
 
     public var requiresSnapshot: Bool { kind == .liveDB }
+
+    /// its name, and the ones it had before
+    public var names: [String] { [displayName] + (formerNames ?? []) }
+
+    /// whether `name` is its name, or one it had
+    public func answers(to name: String) -> Bool { names.contains { LibraryNames.same($0, name) } }
+
+    /// Call it `name` from now on, remembering the name it had. Empty names (after
+    /// trimming) are refused.
+    @discardableResult
+    public mutating func rename(to name: String) -> Bool {
+        let new = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !new.isEmpty else { return false }
+        guard new != displayName else { return true }
+        var former = formerNames ?? []
+        if !former.contains(where: { LibraryNames.same($0, displayName) }) { former.append(displayName) }
+        former.removeAll { LibraryNames.same($0, new) }
+        displayName = new
+        formerNames = former.isEmpty ? nil : Array(former.suffix(20))
+        return true
+    }
 
     public func owningProcessRunning(_ detector: ProcessDetector) -> Bool {
         guard let owner = owningProcess else { return false }
@@ -161,6 +187,7 @@ public extension ContentType {
         var out = current
         out.displayName = displayName
         out.volume = volume
+        out.formerNames = formerNames
         return out
     }
 

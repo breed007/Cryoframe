@@ -252,6 +252,16 @@ public struct JobDraftState: Sendable, Equatable {
         selectedLibraryIDs.insert(ct.id)
     }
 
+    /// Rename a library in this job only (a built-in keeps its name in every other
+    /// job). Its folders at the job's destinations follow at the next run that
+    /// reaches each; one whose drive is away keeps its name until then, and is still
+    /// known by it (see ContentType.formerNames). False for an empty name.
+    @discardableResult
+    public mutating func renameLibrary(_ id: String, to name: String) -> Bool {
+        guard let i = libraries.firstIndex(where: { $0.id == id }) else { return false }
+        return libraries[i].rename(to: name)
+    }
+
     /// re-read the built-in library list (after a location edit) while keeping added
     /// ones, and the edited job's own name for each of its libraries
     public mutating func replaceBuiltInLibraries(_ builtins: [ContentType]) {
