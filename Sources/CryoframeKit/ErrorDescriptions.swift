@@ -101,6 +101,15 @@ public enum RestoreFailureText {
         return "couldn't restore \(file) — \(plain)"
     }
 
+    /// the numbers, and what to do: nothing was written
+    static func roomMessage(needed: UInt64, free: UInt64, volume: String, inPlace: Bool) -> String {
+        func size(_ b: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(clamping: b), countStyle: .file) }
+        if inPlace {
+            return "not enough room on \(volume) to restore in place: it needs about \(size(needed)) free and has \(size(free)). The verified copy is made beside your library before it is swapped in, and your current library goes to the Trash on the same drive, where it keeps its space until you empty the Trash. Nothing was changed; free up space, or restore beside to another drive."
+        }
+        return "not enough room on \(volume): this restore needs about \(size(needed)) free and there is \(size(free)). Nothing was written; free up space, or choose a folder on another drive."
+    }
+
     /// why one archive failed to restore, for the Restore window's result list.
     public static func restoreMessage(_ e: Error, encrypted: Bool) -> String {
         switch e as? RestoreError {
@@ -108,6 +117,8 @@ public enum RestoreFailureText {
         case .destinationExists:         return "already exists in the destination — rename or move it, then try again"
         case .libraryNotFound:           return "library not found inside the archive"
         case .noManifest:                return "no checksum manifest beside the archive"
+        case .notEnoughRoom(let needed, let free, let volume, let inPlace):
+            return roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
         case .none: break
         }
         // an ArchiveError surfaces when the archive itself won't open. Its raw
@@ -142,6 +153,8 @@ public enum RestoreFailureText {
             case .destinationExists(let p):  return "something is already at \((p as NSString).lastPathComponent) — it was left alone"
             case .libraryNotFound:           return "the archive didn't contain the library"
             case .noManifest:                return "no checksum manifest beside the archive"
+            case .notEnoughRoom(let needed, let free, let volume, let inPlace):
+                return roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
             }
         }
         if let a = e as? ArchiveError {
@@ -175,6 +188,8 @@ extension RestoreError: LocalizedError {
         case .libraryNotFound:                return "the archive didn't contain the library"
         case .destinationExists(let path):    return "something is already at \(path)"
         case .noManifest:                     return "no checksum manifest beside the archive"
+        case .notEnoughRoom(let needed, let free, let volume, let inPlace):
+            return RestoreFailureText.roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
         }
     }
 }

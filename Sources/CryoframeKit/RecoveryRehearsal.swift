@@ -151,6 +151,9 @@ public struct RecoveryRehearsal: Sendable {
             case .verificationFailed(let d): return "checksums don't match — \(d)"
             case .libraryNotFound:           return "the archive didn't contain the library"
             case .destinationExists:         return "something is already in the way"
+            case .notEnoughRoom(let needed, let free, let volume, _):
+                let f = ByteCountFormatter()
+                return "not enough room on \(volume) to rehearse the restore: it needs about \(f.string(fromByteCount: Int64(clamping: needed))) free and has \(f.string(fromByteCount: Int64(clamping: free)))"
             }
         }
         if let copy = RestoreFailureText.copyFailure(e) { return copy }

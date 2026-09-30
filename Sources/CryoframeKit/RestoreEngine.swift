@@ -20,6 +20,92 @@ public enum RestoreError: Error, Equatable {
     case libraryNotFound
     case destinationExists(String)
     case noManifest
+    /// the drive the restore writes to hasn't room for it (see RestoreRoom). `volume`
+    /// names the drive; `inPlace`: a restore over the live library, which keeps its
+    /// space in the Trash.
+    case notEnoughRoom(needed: UInt64, free: UInt64, volume: String, inPlace: Bool)
+}
+
+/// What to do when the restored item's name is already taken in the destination.
+public enum RestoreClash: Sendable, Equatable {
+    /// stop and report it (RestoreError.destinationExists); nothing is written
+    case refuse
+    /// restore beside it, under the first free "Name (2)", "Name (3)", …
+    case alongside
+}
+
+/// The name a restore takes beside an item already there.
+public enum RestoreNames {
+    /// the first of "Name (2)", "Name (3)", … not taken in `dir`. A library's package
+    /// extension stays last ("Photos Library (2).photoslibrary") so it still opens as
+    /// one; anything else after a dot is part of the name ("Thesis.v2 (2)").
+    public static func alongside(_ name: String, in dir: URL) -> URL {
+        let ns = name as NSString
+        let ext = ns.pathExtension
+        let keepsExtension = ext.count >= 2 && ext.allSatisfy { $0.isASCII && $0.isLetter }
+        let stem = keepsExtension ? ns.deletingPathExtension : name
+        var n = 2
+        while true {
+            let candidate = keepsExtension ? "\(stem) (\(n)).\(ext)" : "\(stem) (\(n))"
+            let url = dir.appendingPathComponent(candidate)
+            var st = stat()
+            if lstat(url.path, &st) != 0 { return url }          // nothing there, not even a broken link
+            n += 1
+        }
+    }
+}
+
+/// Whether the drive a restore writes to has room for it.
+///
+/// A restore used to find out by running out: part-way through a copy of a large
+/// library, with the drive full and a half-restored folder left behind. It is checked
+/// twice. Before anything is read, against the archive's size on the backup drive:
+/// a compressed archive's library is at least that big, so a drive with less room
+/// can be refused at once. Then, once the archive is open, against the library it
+/// actually holds.
+///
+/// Restoring in place needs the same room as restoring beside: the verified copy is
+/// made next to the library first, and the library it replaces goes to the Trash on
+/// the same drive, where it keeps its space until the Trash is emptied.
+public enum RestoreRoom {
+    /// what a restore of `bytes` needs free: the library, and 5% (at least 256 MB)
+    /// for the file system's own use and whatever else is writing
+    public static func needed(for bytes: UInt64) -> UInt64 {
+        bytes + max(bytes / 20, 256 * 1024 * 1024)
+    }
+
+    /// nil when it fits (or the free space can't be read: a share that doesn't say),
+    /// else the refusal
+    public static func refusal(bytes: UInt64, free: UInt64?, volume: String, inPlace: Bool) -> RestoreError? {
+        guard let free else { return nil }
+        let need = needed(for: bytes)
+        return free >= need ? nil : .notEnoughRoom(needed: need, free: free, volume: volume, inPlace: inPlace)
+    }
+
+    /// the name of the drive holding `url` (its first existing ancestor), for messages
+    public static func volumeName(for url: URL) -> String {
+        var dir = url
+        for _ in 0..<32 {
+            if let v = try? dir.resourceValues(forKeys: [.volumeLocalizedNameKey]), let name = v.volumeLocalizedName {
+                return name
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent == dir { break }
+            dir = parent
+        }
+        return url.lastPathComponent
+    }
+
+    /// bytes the items take up on disk, folders walked
+    static func bytes(of items: [URL]) -> UInt64 {
+        items.reduce(0) { sum, item in
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: item.path, isDirectory: &isDir) else { return sum }
+            if isDir.boolValue { return sum + JobExecutor.directoryStats(item).bytes }
+            let v = try? item.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey])
+            return sum + UInt64(v?.totalFileAllocatedSize ?? v?.fileAllocatedSize ?? 0)
+        }
+    }
 }
 
 /// one archive that can be restored — a directory with a checksum manifest.
@@ -128,15 +214,31 @@ public enum RestoreDiscovery {
 
 public struct RestoreEngine: Sendable {
     let runner: CommandRunner
-    public init(runner: CommandRunner = ProcessCommandRunner()) { self.runner = runner }
+    /// free bytes on the drive holding a folder (nil: unknown); injectable for tests
+    let freeSpace: @Sendable (URL) -> UInt64?
+    public init(runner: CommandRunner = ProcessCommandRunner(),
+                freeSpace: @escaping @Sendable (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) }) {
+        self.runner = runner; self.freeSpace = freeSpace
+    }
 
     /// verify → open → copy the library into `destinationDir/<bundleName>`. Returns
-    /// the restored library URL. Refuses to overwrite an existing item there.
+    /// the restored library URL. Never overwrites an existing item there: with
+    /// `onClash: .refuse` it stops, with `.alongside` it restores beside it under a
+    /// new name. Refuses a drive without room for it (see RestoreRoom); `inPlace` only
+    /// changes how that is worded.
     @discardableResult
     public func restore(_ archive: RestorableArchive, to destinationDir: URL, verify: Bool = true,
-                        passphrase: String? = nil,
+                        passphrase: String? = nil, onClash: RestoreClash = .refuse, inPlace: Bool = false,
                         onStage: @escaping @Sendable (RestoreStage) -> Void = { _ in }) throws -> URL {
         let fm = FileManager.default
+        func checkRoom(_ bytes: UInt64) throws {
+            if let refusal = RestoreRoom.refusal(bytes: bytes, free: freeSpace(destinationDir),
+                                                 volume: RestoreRoom.volumeName(for: destinationDir), inPlace: inPlace) {
+                throw refusal
+            }
+        }
+        // before reading anything: the library is at least as big as its archive
+        try checkRoom(archive.bytes)
 
         if verify {
             onStage(.verifying)
@@ -152,8 +254,11 @@ public struct RestoreEngine: Sendable {
 
         onStage(.copying)
         let bundleName = archive.bundleName
-        let target = destinationDir.appendingPathComponent(bundleName)
-        guard !fm.fileExists(atPath: target.path) else { throw RestoreError.destinationExists(target.path) }
+        var target = destinationDir.appendingPathComponent(bundleName)
+        if fm.fileExists(atPath: target.path) {
+            guard onClash == .alongside else { throw RestoreError.destinationExists(target.path) }
+            target = RestoreNames.alongside(bundleName, in: destinationDir)
+        }
         try fm.createDirectory(at: destinationDir, withIntermediateDirectories: true)
 
         // zip / live mirror keep the bundle intact one level down. A sealed DMG does
@@ -169,11 +274,13 @@ public struct RestoreEngine: Sendable {
         case .sealedDMG:
             let packaged = opened.root.appendingPathComponent(bundleName)
             if (try? packaged.resourceValues(forKeys: [.isPackageKey]))?.isPackage == true {
+                try checkRoom(RestoreRoom.bytes(of: [packaged]))
                 try fm.copyItem(at: packaged, to: target)
                 break
             }
             let children = try fm.contentsOfDirectory(at: opened.root, includingPropertiesForKeys: nil)
             guard !children.isEmpty else { throw RestoreError.libraryNotFound }
+            try checkRoom(RestoreRoom.bytes(of: children))
             try fm.createDirectory(at: target, withIntermediateDirectories: true)
             for child in children { try fm.copyItem(at: child, to: target.appendingPathComponent(child.lastPathComponent)) }
         case .sealedZip, .liveMirror:
@@ -182,6 +289,7 @@ public struct RestoreEngine: Sendable {
             guard fm.fileExists(atPath: bundle.path, isDirectory: &isDir), isDir.boolValue else {
                 throw RestoreError.libraryNotFound
             }
+            try checkRoom(RestoreRoom.bytes(of: [bundle]))
             try fm.copyItem(at: bundle, to: target)
         }
 
