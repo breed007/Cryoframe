@@ -57,6 +57,13 @@ public struct JobDraftState: Sendable, Equatable {
     public var onceDate: Date
 
     // edit context
+    /// the job as it was when the editor opened (nil for a new job): what Save merges
+    /// against (see JobEdit)
+    public let base: BackupJob?
+    /// the id the job has, or will have once saved: fixed now, so what the editor
+    /// shows of the folders a run makes (their names come from the id) is what the
+    /// first run makes
+    public let jobID: String
     public let editingID: String?
     public let editingEncrypted: Bool
     public let editingMirrorGB: Int?     // the size an existing mirror job recorded (see FormatChoice.liveMirror)
@@ -68,7 +75,10 @@ public struct JobDraftState: Sendable, Equatable {
     /// the choices on offer; an edited job's own libraries and targets are added to
     /// them if missing.
     public init(editing: BackupJob? = nil, libraries: [ContentType], targets: [Target],
-                defaults: Defaults = Defaults(), now: Date = Date(), calendar: Calendar = .current) {
+                defaults: Defaults = Defaults(), now: Date = Date(), calendar: Calendar = .current,
+                newID: String = UUID().uuidString) {
+        base = editing
+        jobID = editing?.id ?? newID
         editingID = editing?.id
         editingEncrypted = editing?.encrypted ?? false
         if case .liveMirror(let g)? = editing?.format { editingMirrorGB = g } else { editingMirrorGB = nil }
@@ -192,7 +202,12 @@ public struct JobDraftState: Sendable, Equatable {
     /// new encrypted job sets a key; an existing job keeps its key exactly as it is.
     public var storesNewPassphrase: Bool { !encryptionLocked && encrypt && !passphrase.isEmpty }
 
-    /// the job this draft saves as. `id` is the edited job's id, or a new one.
+    /// the job this draft saves as
+    public func makeJob(now: Date = Date(), calendar: Calendar = .current) -> BackupJob {
+        makeJob(id: jobID, now: now, calendar: calendar)
+    }
+
+    /// the job this draft saves as, under `id`
     public func makeJob(id: String, now: Date = Date(), calendar: Calendar = .current) -> BackupJob {
         // an existing job keeps its encryption exactly as it is (see encryptionLocked);
         // only a new job sets it
@@ -221,16 +236,59 @@ public struct JobDraftState: Sendable, Equatable {
         selectedLibraryIDs.insert(ct.id)
     }
 
-    /// re-read the built-in library list (after a location edit) while keeping added ones.
+    /// re-read the built-in library list (after a location edit) while keeping added
+    /// ones, and the edited job's own name for each of its libraries
     public mutating func replaceBuiltInLibraries(_ builtins: [ContentType]) {
         let ids = Set(builtins.map(\.id))
-        libraries = builtins + libraries.filter { !ids.contains($0.id) }
+        let current = libraries
+        libraries = builtins.map { b in current.first { $0.id == b.id }.map { $0.resolved(with: b) } ?? b }
+            + current.filter { !ids.contains($0.id) }
     }
 
     /// add a destination to the list on offer, replacing any with the same id, and select it.
     public mutating func addTarget(_ t: Target) {
         targets.removeAll { $0.id == t.id }; targets.append(t)
         if !selectedTargetIDs.contains(t.id) { selectedTargetIDs.append(t.id) }
+    }
+
+    /// Take one destination off the list on offer (and out of the selection). One of
+    /// the edited job's own stays: taking it off the list would take it out of the job
+    /// without saying so. Only this entry goes: the list used to be read back whole
+    /// from the app's remembered destinations, which dropped every destination only
+    /// this job had.
+    public mutating func removeFromOffer(_ id: String) {
+        guard base?.targets.contains(where: { $0.id == id }) != true else { return }
+        targets.removeAll { $0.id == id }
+        selectedTargetIDs.removeAll { $0 == id }
+    }
+
+    // MARK: saving
+
+    public enum CommitResult: Sendable, Equatable {
+        case saved(BackupJob)
+        /// the draft can't be saved as it is (see isValid), now that the saved jobs
+        /// were read again
+        case invalid
+        /// the job was deleted while it was being edited: nothing was saved
+        case deleted
+    }
+
+    /// Save the draft into `store`, merged with the job as it is on disk now (see
+    /// JobEdit), all under the store's lock. A new encrypted job's passphrase is
+    /// handed to `savePassphrase` (passphrase, job id) first, so no job is ever
+    /// saved without its key.
+    public func commit(to store: JobStore, now: Date = Date(), calendar: Calendar = .current,
+                       savePassphrase: (String, String) -> Void) -> CommitResult {
+        guard isValid(existing: store.load().jobs) else { return .invalid }
+        if storesNewPassphrase { savePassphrase(passphrase, jobID) }
+        let draft = makeJob(now: now, calendar: calendar)
+        return store.update { s -> CommitResult in
+            guard isValid(existing: s.jobs) else { return .invalid }
+            let stored = s.jobs.first { $0.id == jobID }
+            guard let job = JobEdit.merge(draft: draft, base: base, stored: stored) else { return .deleted }
+            if let i = s.jobs.firstIndex(where: { $0.id == jobID }) { s.jobs[i] = job } else { s.jobs.append(job) }
+            return .saved(job)
+        }
     }
 
     // MARK: seeding
@@ -244,9 +302,19 @@ public struct JobDraftState: Sendable, Equatable {
 
     private mutating func seed(from job: BackupJob, calendar: Calendar, now: Date) {
         name = job.name
-        for lib in job.libraries where !libraries.contains(where: { $0.id == lib.id }) { libraries.append(lib) }
+        // The job's own libraries and destinations, not the copies on offer with the
+        // same ids: the list of remembered destinations knows nothing of the drives a
+        // run recorded, and saving its copy erased them. A built-in library takes its
+        // folder from the list on offer (it may have been moved since), and keeps the
+        // job's name for it.
+        for lib in job.libraries {
+            if let i = libraries.firstIndex(where: { $0.id == lib.id }) { libraries[i] = lib.resolved(with: libraries[i]) }
+            else { libraries.append(lib) }
+        }
         selectedLibraryIDs = Set(job.libraries.map(\.id))
-        for t in job.targets where !targets.contains(where: { $0.id == t.id }) { targets.append(t) }
+        for t in job.targets {
+            if let i = targets.firstIndex(where: { $0.id == t.id }) { targets[i] = t } else { targets.append(t) }
+        }
         selectedTargetIDs = job.targets.map(\.id)
         switch job.format {
         case .sealedDMG: formatKind = "dmg"

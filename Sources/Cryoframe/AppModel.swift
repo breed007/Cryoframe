@@ -424,7 +424,19 @@ final class AppModel: ObservableObject {
 
     // MARK: jobs / targets
 
-    func addJob(_ job: BackupJob) { store.upsert(job); jobs = store.load().jobs; revalidate(); armWake(); refreshProtectedSize(force: true) }
+    /// Save a job the editor built, merged with the job as it is on disk (a run may
+    /// have recorded its drives since the editor opened). False if nothing was saved.
+    func save(_ draft: JobDraftState) -> Bool {
+        let result = draft.commit(to: store) { passphrase, id in KeychainArchiveKey.save(passphrase, jobID: id) }
+        jobs = store.load().jobs; revalidate(); armWake(); refreshProtectedSize(force: true)
+        switch result {
+        case .saved: return true
+        case .invalid: return false
+        case .deleted:
+            log("⚠︎ \(draft.name.isEmpty ? "This job" : draft.name) was deleted while it was being edited, so the changes weren't saved")
+            return true
+        }
+    }
     func deleteJob(_ id: String) { stopJob(id); KeychainArchiveKey.delete(jobID: id); store.remove(id: id); jobs = store.load().jobs; lastRecords[id] = nil; revalidate(); armWake() }
     func addTarget(_ target: Target) {
         targets.removeAll { $0.id == target.id }; targets.append(target)
@@ -470,7 +482,11 @@ final class AppModel: ObservableObject {
     }
 
     func setEnabled(_ job: BackupJob, _ enabled: Bool) {
-        var j = job; j.enabled = enabled; store.upsert(j); jobs = store.load().jobs; armWake()
+        // only this field: the in-memory copy may predate drives a run has recorded
+        store.update { s in
+            if let i = s.jobs.firstIndex(where: { $0.id == job.id }) { s.jobs[i].enabled = enabled }
+        }
+        jobs = store.load().jobs; armWake()
     }
 
     /// copy an encrypted job's passphrase to the clipboard so the user can escrow it

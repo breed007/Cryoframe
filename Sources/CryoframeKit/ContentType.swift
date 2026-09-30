@@ -154,6 +154,16 @@ public extension ContentType {
                     owningProcess: nil, kind: .staticContent, integrityProbe: nil)
     }
 
+    /// This library of a job, as `current` (the app's copy of a built-in, with any
+    /// location chosen in Settings) says it is now: its folder, app, kind and probe
+    /// from there; its name and its drive the job's own.
+    func resolved(with current: ContentType) -> ContentType {
+        var out = current
+        out.displayName = displayName
+        out.volume = volume
+        return out
+    }
+
     /// a copy pointing at a different location — keeps the identity, owning app,
     /// kind, and integrity probe. Used to repoint a built-in to a moved library.
     func overridingPath(_ path: LibraryPath) -> ContentType {

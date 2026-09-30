@@ -67,18 +67,12 @@ final class JobDraft: ObservableObject {
     }
     func removeTarget(_ id: String) {
         guard model.canRemoveTarget(id) else { return }
-        state.selectedTargetIDs.removeAll { $0 == id }
+        state.removeFromOffer(id)
         model.removeTarget(id)
-        state.targets = model.targets
     }
 
-    /// persist the job (Keychain + store). Returns false if the draft isn't valid.
+    /// persist the job (Keychain + store, see JobDraftState.commit). Returns false if
+    /// nothing was saved.
     @discardableResult
-    func commit() -> Bool {
-        guard isValid else { return false }
-        let id = state.editingID ?? UUID().uuidString
-        if state.storesNewPassphrase { KeychainArchiveKey.save(state.passphrase, jobID: id) }
-        model.addJob(state.makeJob(id: id))
-        return true
-    }
+    func commit() -> Bool { model.save(state) }
 }
