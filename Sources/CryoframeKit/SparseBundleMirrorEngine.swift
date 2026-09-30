@@ -195,7 +195,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let teardown = runner.forTeardown
         // Stop ends a wait for the image (see ImageLock.attaching), which the teardown
         // runner, with no control of its own, can't
-        switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: teardown, control: runner.control) {
+        switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: teardown, control: runner.control,
+                                     settle: ImageLock.settling) {
         case .damaged(let why):
             MirrorSeal.markDamaged(destinationDir, why: why)
             throw MirrorCopyError.imageDamaged(why)             // stays marked; not sealed
@@ -212,7 +213,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             OpenedArchive.removeWork(work)
         }
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        try ImageLock.attaching(bundle, runner: teardown, control: runner.control) { before in
+        try ImageLock.attaching(bundle, runner: teardown, control: runner.control, settle: ImageLock.settling) { before in
             // attached elsewhere: an attach would hand back that disk, not read the drive
             guard before.isEmpty else { throw MirrorCopyError.couldNotConfirm("it is attached elsewhere on this Mac") }
             let attached = try? AttachRecords.recording(bundle, sparing: before, mountedAt: mnt, runner: teardown) {
@@ -285,10 +286,12 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             // attached with nothing mounted by another program, and no attach of
             // Cryoframe's under way: refused now, before growing it (see attach below)
             if let lock = ImageLock.acquire(bundle) {
+                defer { lock.release() }
                 // one a crashed run or check of Cryoframe's left goes first (see AttachRecords)
                 AttachRecords.releaseLeftovers(of: bundle, runner: teardown, holding: lock)
-                let held = MirrorMounts.attachedDevices(of: bundle, runner: teardown)
-                lock.release()
+                // one that ends by itself is waited out, never detached (see ImageLock.settled)
+                let held = try ImageLock.settled(bundle, runner: teardown, within: ImageLock.settling,
+                                                 control: runner.control, holding: lock) ?? []
                 if !held.isEmpty { throw DiskImageInUse(image: bundle.path, mountedAt: [], attachedWithoutMount: true) }
             }
         }
@@ -338,7 +341,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // attach read-write at `mountpoint`; also used to attach it again for the read-back
         func attach() throws {
             try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
-            try ImageLock.attaching(bundle, runner: runner) { before in
+            try ImageLock.attaching(bundle, runner: runner, settle: ImageLock.settling) { before in
                 // Attached with nothing mounted (Disk Utility's First Aid, a command in
                 // Terminal, a volume unmounted without ejecting the image): the attach
                 // reused that device, read-only if it was, and failed "volume is read

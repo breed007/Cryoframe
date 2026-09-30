@@ -70,13 +70,48 @@ public enum MountPoint {
     /// detach the volume at `url`: retry while it's busy, then force. Leaves the
     /// directory if the volume would not go.
     public static func detach(_ url: URL, runner: CommandRunner) {
+        detachImage(at: url, runner: runner)
+        removeDirectory(url)
+    }
+
+    /// Detach the disk image mounted at `url`: retry while it's busy, then force. Returns
+    /// at once when nothing is mounted there.
+    ///
+    /// Detaching unmounts the volume and then ejects the image's disk, and the eject can
+    /// fail on its own ("couldn't eject disk4 - Resource busy", exit 16) when something
+    /// still has the disk open for a moment after the unmount. That left the image
+    /// attached with nothing mounted, for as long as the process ran: to the next run
+    /// it looks like Disk Utility's or Terminal's, so every later mirror run of the
+    /// scheduled agent was refused. So the attach that was mounted here is followed
+    /// until it has gone, by the disk-image process serving it (a later attach of the
+    /// image may be handed the same device name, never the same process).
+    static func detachImage(at url: URL, runner: CommandRunner) {
+        let own = attach(mountedAt: url, runner: runner)
         for i in 0..<5 {
             if !isMounted(url) { break }
             if let r = try? runner.run("/usr/bin/hdiutil", ["detach", url.path], stdin: nil), r.ok { break }
             Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
         }
         if isMounted(url) { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", url.path]) }
-        removeDirectory(url)
+        guard let own, !isMounted(url) else { return }
+        for i in 0..<6 {
+            guard let attaches = MirrorMounts.attachesIfKnown(runner: runner) else {
+                Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
+                continue
+            }
+            // gone, or mounted again (someone else's attach now): nothing of ours left
+            guard let left = attaches.first(where: { $0.path == own.path && $0.helper == own.helper && $0.devices.first == own.devices.first }),
+                  !left.mounted, let whole = left.devices.first else { return }
+            if let r = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", whole], stdin: nil), r.ok { return }
+            Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
+        }
+    }
+
+    /// the attach whose volume is mounted at `url`, as `hdiutil info` lists it
+    static func attach(mountedAt url: URL, runner: CommandRunner) -> MirrorMounts.Attach? {
+        guard let device = device(at: url) else { return nil }
+        let holding = MirrorMounts.attachesIfKnown(runner: runner)?.filter { $0.devices.contains(device) } ?? []
+        return holding.count == 1 ? holding.first : nil
     }
 
     /// statfs reports /private/var paths as /private/var, callers may say /var

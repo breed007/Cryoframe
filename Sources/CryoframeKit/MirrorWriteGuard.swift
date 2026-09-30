@@ -137,15 +137,16 @@ enum MirrorIntegrity {
     /// Not checked (unknown) while the image is attached elsewhere, or while another
     /// check or attach of it keeps it past ImageLock.patience: none is made without the
     /// image's lock. Stop ends a wait for the image when `control` (the run's) is given; `runner` is
-    /// usually a teardown runner, with no control of its own.
-    static func check(_ bundle: URL, passphrase: String?, runner: CommandRunner, control: RunControl? = nil) -> Verdict {
+    /// usually a teardown runner, with no control of its own. `settle`: see ImageLock.attaching.
+    static func check(_ bundle: URL, passphrase: String?, runner: CommandRunner, control: RunControl? = nil,
+                      settle: TimeInterval = 0) -> Verdict {
         // An attach that fails (or is retried after "Resource temporarily unavailable")
         // can still leave the image attached, and with nothing mounted no detach by
         // device or mount point finds it. Held from before the attach until after the
         // detach (attached without mounting, the check's own device looks like an
         // orphan to anyone else); a device the attach left is detached (see ImageLock).
         do {
-            return try ImageLock.attaching(bundle, runner: runner, control: control) { before in
+            return try ImageLock.attaching(bundle, runner: runner, control: control, settle: settle) { before in
                 // attached elsewhere: the attach would hand back that disk, and the
                 // detach below would take it from its holder
                 guard before.isEmpty else { return .unknown("the image is attached elsewhere on this Mac") }

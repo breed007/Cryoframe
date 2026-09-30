@@ -49,6 +49,10 @@ struct ImageLock {
     /// large mirror's file system holds it for a minute or so
     static let patience: TimeInterval = 120
 
+    /// how long a mirror run waits for an attach of its image with nothing mounted to
+    /// end by itself before it is refused (see settled)
+    static let settling: TimeInterval = 20
+
     static func url(for image: URL, in base: URL = MirrorMounts.defaultBase) -> URL {
         let path = TMUtilSnapshotBackend.canonicalPath(image.resolvingSymlinksInPath().path)
         let id = SHA256.hash(data: Data(path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
@@ -90,8 +94,12 @@ struct ImageLock {
     /// holder could be taken for the holder's debris and detached under it. After
     /// `wait` seconds that is `DiskImageInUse`, and Stop ends the wait early; the run's
     /// control is `control`, or else the runner's (a teardown runner has none).
+    ///
+    /// With `settle`, an attach of the image with nothing mounted is first given that
+    /// many seconds to end by itself (see settled).
     static func attaching<T>(_ image: URL, runner: CommandRunner, control: RunControl? = nil,
-                             wait: TimeInterval = patience, _ body: (_ before: Set<String>) throws -> T) throws -> T {
+                             wait: TimeInterval = patience, settle: TimeInterval = 0,
+                             _ body: (_ before: Set<String>) throws -> T) throws -> T {
         let control = control ?? runner.control
         let look = runner.forTeardown
         guard let lock = acquire(image, wait: wait, control: control) else {
@@ -101,11 +109,35 @@ struct ImageLock {
         defer { lock.release() }
         AttachRecords.releaseLeftovers(of: image, runner: look, holding: lock)
         // can't tell what is attached: nothing here could be told apart from this attach's
-        guard let before = MirrorMounts.devicesIfKnown(of: image, runner: look) else {
+        guard let before = try settled(image, runner: look, within: settle, control: control, holding: lock) else {
             throw ArchiveError.toolFailed(tool: "hdiutil", status: 1, stderr: "couldn't list the disk images attached on this Mac")
         }
         defer { ArchiveReader.detachOrphans(ofImage: image, runner: look, holding: lock, sparing: before) }
         return try body(before)
+    }
+
+    /// The image's devices once every attach of it with nothing mounted has ended, or
+    /// `within` seconds have passed; nil when hdiutil can't say what is attached. Stop
+    /// ends the wait (CancelledError).
+    ///
+    /// Such an attach isn't always someone holding the image. macOS can attach a new
+    /// disk image by itself for a moment to scan it, and a detach can still be finishing as the next
+    /// run of the same mirror starts. A nightly mirror was refused as "attached
+    /// elsewhere" over one of those, which had gone a moment later. Nothing is ever
+    /// detached here: waited out, one that stays is the caller's to refuse. A mounted
+    /// one won't go by itself, so it ends the wait at once.
+    static func settled(_ image: URL, runner: CommandRunner, within: TimeInterval, control: RunControl?,
+                        holding lock: ImageLock) throws -> Set<String>? {
+        let target = image.resolvingSymlinksInPath().path
+        let until = Date().addingTimeInterval(within)
+        while true {
+            guard let attaches = MirrorMounts.attachesIfKnown(runner: runner) else { return nil }
+            let mine = attaches.filter { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == target }
+            let devices = Set(mine.flatMap(\.devices))
+            if devices.isEmpty || mine.contains(where: \.mounted) || Date() >= until { return devices }
+            if control?.isCancelled == true { throw CancelledError() }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
     }
 }
 

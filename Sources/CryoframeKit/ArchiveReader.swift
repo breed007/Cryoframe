@@ -372,12 +372,7 @@ public struct ArchiveReader: Sendable {
     /// Returns at once when nothing is mounted there: a failed open cleaned up by
     /// retrying a detach that could only fail, five times with backoff, 6 s in all.
     @Sendable static func detach(_ mnt: URL, runner: CommandRunner) {
-        for i in 0..<5 {
-            if !MountPoint.isMounted(mnt) { return }
-            if let r = try? runner.run("/usr/bin/hdiutil", ["detach", mnt.path]), r.ok { return }
-            Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
-        }
-        if MountPoint.isMounted(mnt) { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", mnt.path]) }
+        MountPoint.detachImage(at: mnt, runner: runner)
     }
 
     /// on launch, force-detach and remove any archive a crashed process left open,
