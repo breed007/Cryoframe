@@ -123,6 +123,32 @@ private final class Calls: @unchecked Sendable {
         #expect(ArchiveReader.unpackedSize(of: URL(fileURLWithPath: "/x.zip"), runner: runner) == 12_900_000 + 144_100 * 4096)
     }
 
+    // MARK: what the report keeps
+
+    // Short numbers and numbers with a unit, dates and times, codes and versions stay,
+    // and so do the words the tools use in their errors.
+    @Test func theReportKeepsTheNumbersAndToolWordsAFixNeeds() {
+        let r = Redactor(names: [], userWords: ["jdoe"])
+        let kept = [
+            "rsync error: some files/attrs were not transferred (see previous errors) (code 23)",
+            "72,000 files, 1,234,567 bytes, 12.9 MB, 3 items, 2 parts",
+            "since 2026-09-28 02:00, and Sep 28, 2026 at 2:00 AM",
+            "error -36 (-5341), exit status 23, version 1.6.0 on macOS 26.7",
+            "stopped with SIGTERM, then SIGKILL after 10 s",
+            "sha256 checksum mismatch, AES-256 encrypted",
+        ]
+        for line in kept {
+            let out = r.redact(line)
+            let lost = line.split(separator: " ").filter { !out.contains($0) }
+            #expect(lost.isEmpty, "\(lost) lost from: \(out)")
+        }
+        // and what identifies someone goes, however it is written
+        for line in ["(404) 555-1234 is missing", "4111-1111-1111-1111 is missing", "4111111111111111 is missing",
+                     "123 45 6789 is missing", "404.555.1234 is missing", "1234567 is missing"] {
+            #expect(r.redact(line) == "[…] is missing", "\(line) → \(r.redact(line))")
+        }
+    }
+
     // MARK: the word list
 
     // One letter isn't a word of the vocabulary: every letter was in it.

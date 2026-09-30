@@ -17,6 +17,7 @@ above
 access
 acl
 address
+addresses
 administrator's
 adobe
 ae
@@ -48,6 +49,7 @@ archive
 archived
 archives
 are
+arm
 arrow
 artifact
 artifactnames
@@ -59,6 +61,7 @@ attach
 attention
 attribute
 attributes
+attrs
 authentication
 available
 axo
@@ -74,6 +77,7 @@ bands
 battery
 be
 because
+become
 been
 before
 being
@@ -255,6 +259,7 @@ fa
 fail
 failed
 fake
+fat
 fewer
 file
 files
@@ -345,12 +350,14 @@ info
 init
 input
 inside
+instead
 int
 intact
 integrity
 internet
 interrupted
 into
+ipv
 is
 isempty
 isencrypted
@@ -360,7 +367,6 @@ it
 item
 items
 its
-itself
 job
 job's
 jobs
@@ -391,7 +397,6 @@ library
 library's
 lightroom
 lightroomclassiccc
-like
 likely
 limits
 list
@@ -456,7 +461,6 @@ musicdb
 musiclibrary
 name
 named
-names
 nearly
 need
 needed
@@ -478,6 +482,7 @@ nothing
 noverify
 now
 ntfy
+numbered
 numbers
 octagon
 of
@@ -652,6 +657,7 @@ share
 sharing
 shasum
 shield
+short
 shown
 signed
 since
@@ -707,7 +713,6 @@ temp
 temporarily
 temporaryitems
 terminal
-text
 than
 that
 that's
@@ -745,7 +750,10 @@ turned
 txt
 type
 ubf
+udbz
 udzo
+ulfo
+ulmo
 umount
 unattended
 unavailable
@@ -771,6 +779,7 @@ user
 users
 using
 usr
+utf
 utility
 value
 var
@@ -792,6 +801,7 @@ warning
 was
 wasn't
 way
+web
 webhook
 weekly
 weeks
@@ -814,11 +824,11 @@ window
 with
 without
 won't
+words
 worth
 would
 wouldn't
 writable
-write
 writes
 writing
 written

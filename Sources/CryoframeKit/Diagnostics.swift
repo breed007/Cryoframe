@@ -57,11 +57,15 @@ public struct Redactor: Sendable {
         for code in 1..<120 { out.formUnion(words(in: String(cString: strerror(Int32(code))))) }
         out.formUnion(words(in: """
             hdiutil rsync openrsync ditto tmutil diskutil copyfile setxattr fsck_apfs mount_apfs cp split zipinfo
-            attach detach create convert compact resize verify failed error warning sender receiver opendir open
-            read write mkstempsock authentication resource busy temporarily unavailable invalid argument stat
+            attach detach create convert compact resize verify failed error errors warning sender receiver opendir
+            open read write mkstempsock authentication resource busy temporarily unavailable invalid argument stat
             lstat rename unlink mkdir chmod chown the disk image volume device file files folder
             job folder destination external drive network share cloud this mac ntfy webhook
             bytes kb mb gb tb kib mib gib tib zero
+            some were not transferred see previous code exit status signal killed terminated stopped timed out
+            sigterm sigkill sigint sighup sigstop sigcont sigpipe sigsegv sigbus sigabrt checksum mismatch
+            encrypted encryption passphrase keychain partition scheme apfs hfs exfat smb afp nfs
+            jan feb mar apr may jun jul aug sep oct nov dec am pm
             """))
         return out.filter(isVocabularyWord)
     }()
@@ -76,6 +80,11 @@ public struct Redactor: Sendable {
 
     /// the few words with a dot in them Cryoframe writes
     static let dottedWords: Set<String> = ["e.g", "i.e", "cryoframe-manifest.json", "info.plist"]
+
+    /// tool words with digits in them (a word mixing letters and digits is otherwise
+    /// taken for an id or a name)
+    static let toolTokens: Set<String> = ["sha256", "sha-256", "sha1", "aes-128", "aes-256", "aes128", "aes256",
+                                          "arm64", "x86_64", "utf-8", "utf8", "ipv4", "ipv6", "fat32", "udzo", "ulfo", "ulmo", "udbz"]
 
     /// the words of `text` as the vocabulary holds them: runs of ASCII letters and
     /// apostrophes starting with a letter, lowercased (scripts/diagnostics-vocabulary.py
@@ -120,7 +129,7 @@ public struct Redactor: Sendable {
         }
         // 4. paths inside a library ("Saved/report.pdf")
         s = Self.replace(#"(?<![\w/\[~])[^\s/"'“”(),;:\[\]]+(?:/[^\s/"'“”(),;:\[\]]+)+/?"#, in: s) {
-            $0.hasPrefix("/") || ["and/or", "ntfy/webhook"].contains($0) ? $0 : "[path]"
+            $0.hasPrefix("/") || ["and/or", "ntfy/webhook", "files/attrs"].contains($0) ? $0 : "[path]"
         }
         // 5. numbers: see keepsNumber
         s = Self.replace(Self.numberRun, in: s) { Self.keepsNumber($0) ? $0 : "[…]" }
@@ -178,6 +187,7 @@ public struct Redactor: Sendable {
            t[n.upperBound...].range(of: #"^(?:%|[KMGT]i?B|[KMGT]|s|ms|h|x)?$"#, options: .regularExpression) != nil {
             return Self.keepsNumber(String(t[n]) + (n.upperBound < t.endIndex ? " B" : ""))
         }
+        if Self.toolTokens.contains(t.lowercased()) { return true }
         // A letter outside ASCII: a name with an accent or in another script. The
         // words are looked up by their ASCII letters only, so its pieces could be
         // Cryoframe's words ("Noël": "no", "l") while the name as a whole is someone's.
@@ -319,8 +329,9 @@ public enum DiagnosticsReport {
         func add(_ line: String) { out.append(line) }
 
         add("Cryoframe diagnostics")
-        add("Made \(when(input.now)). Names of jobs, folders and destinations are replaced by numbers. Paths, file names and any other")
-        add("text Cryoframe didn't write itself are replaced by [path], […] and the like.")
+        add("Made \(when(input.now)). Jobs, folders and destinations are numbered instead of named. Messages keep only the")
+        add("words Cryoframe and macOS use in their own messages, and short numbers; paths, web addresses and everything")
+        add("else become [path], [url] or […].")
         add("")
         add("App: \(input.appVersion)")
         add("Helper: \(input.helperVersion ?? "not installed or not answering")")
