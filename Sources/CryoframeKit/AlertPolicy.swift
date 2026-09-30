@@ -56,10 +56,38 @@ public enum AlertPolicy {
     /// A scheduled job gone twice its interval without a good run. The agent decides
     /// how often to repeat it (see AlertThrottle); this decides what it says.
     public static func payload(forOverdue job: BackupJob, standing: ProtectionVerdict.Standing, now: Date) -> Payload? {
-        guard case .overdue(_, _, let critical, _) = standing else { return nil }
+        let (late, critical) = standing.isLate
+        guard late else { return nil }
         return Payload(title: "Cryoframe — \(job.name) is overdue",
                        body: "\(critical ? "⚠️" : "⏰") \(job.name) \(standing.reason(now: now)).",
                        high: critical, tags: critical ? "warning" : "alarm_clock")
+    }
+
+    /// The overdue alerts one pass of the scheduled agent sends: each enabled,
+    /// scheduled job that is late (see ProtectionVerdict.Standing.isLate), at most
+    /// once a day, and at once again when it turns critical. Each comes with the
+    /// subject to record with `throttle` once it has actually been delivered.
+    ///
+    /// The throttle is cleared only when the job's latest run is a good one. It used
+    /// to be cleared whenever the job wasn't overdue at that moment, and a failed run
+    /// isn't overdue (it is failed), so an hourly job alternating failed and put-off
+    /// runs was told it was overdue about every other hour.
+    public static func overdueAlerts(jobs: [BackupJob], latest: [String: RunRecord], lastGood: [String: Date],
+                                     now: Date, throttle: AlertThrottle) -> [(payload: Payload, subject: String)] {
+        var out: [(payload: Payload, subject: String)] = []
+        for job in jobs where job.enabled && job.frequency.isRecurring {
+            if latest[job.id]?.outcome.isGood == true {
+                throttle.clear(job.id); throttle.clear(job.id + ".critical")
+                continue
+            }
+            let standing = ProtectionVerdict.standing(of: job, latest: latest[job.id], lastGood: lastGood[job.id],
+                                                      health: nil, now: now)
+            guard let p = payload(forOverdue: job, standing: standing, now: now) else { continue }
+            let subject = standing.isLate.critical ? job.id + ".critical" : job.id
+            guard throttle.shouldSend(subject, now: now) else { continue }
+            out.append((p, subject))
+        }
+        return out
     }
 
     /// A destination about to run out. Only the "no room for the next run" case is

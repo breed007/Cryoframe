@@ -149,32 +149,17 @@ enum AgentMain {
         exit(0)
     }
 
-    /// Scheduled jobs gone twice their interval without a good run, as alerts: once a
-    /// day each while it lasts, and again at once when one turns critical. Each comes
-    /// with what to call once it is sent, so an alert that couldn't go (none set up)
-    /// is told when one can. A job that is fine again is forgotten, so its next
-    /// trouble is told at once. A job that failed is left to the failure alert its run
-    /// sent; a paused one was paused on purpose.
+    /// Scheduled jobs gone late, as alerts (see AlertPolicy.overdueAlerts), each with
+    /// what to call once it has been delivered, so one that couldn't go is tried again
+    /// at the next pass.
     private static func overdueNotices(jobs: [BackupJob], history: RunHistoryStore,
                                        now: Date) -> [(AlertPolicy.Payload, @Sendable () -> Void)] {
         let throttle = AlertThrottle(key: "overdue.lastAlerted")
-        let lastGood = history.lastGood()
         var latest: [String: RunRecord] = [:]
         for r in history.all() where latest[r.jobID] == nil { latest[r.jobID] = r }
-        var out: [(AlertPolicy.Payload, @Sendable () -> Void)] = []
-        for job in jobs where job.enabled && job.frequency.isRecurring {
-            let standing = ProtectionVerdict.standing(of: job, latest: latest[job.id], lastGood: lastGood[job.id],
-                                                      health: nil, now: now)
-            guard case .overdue(_, _, let critical, _) = standing,
-                  let p = AlertPolicy.payload(forOverdue: job, standing: standing, now: now) else {
-                throttle.clear(job.id); throttle.clear(job.id + ".critical")
-                continue
-            }
-            let subject = critical ? job.id + ".critical" : job.id
-            guard throttle.shouldSend(subject, now: now) else { continue }
-            out.append((p, { throttle.recordSent(subject, now: now) }))
-        }
-        return out
+        return AlertPolicy.overdueAlerts(jobs: jobs, latest: latest, lastGood: history.lastGood(),
+                                         now: now, throttle: throttle)
+            .map { alert in (alert.payload, { throttle.recordSent(alert.subject, now: now) }) }
     }
 
     /// Ask the helper to clean up after crashed runs before any run of ours starts.

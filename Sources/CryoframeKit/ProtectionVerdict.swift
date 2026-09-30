@@ -179,6 +179,12 @@ public struct ProtectionVerdict: Sendable, Equatable {
                 return note.map { "hasn't finished a backup yet (\($0))" } ?? "hasn't finished a backup yet"
             }
         }
+
+        /// late enough for an alert: overdue
+        public var isLate: (late: Bool, critical: Bool) {
+            if case .overdue(_, _, let critical, _) = self { return (true, critical) }
+            return (false, false)
+        }
     }
 
     /// A job's standing. A stopped or put-off run is not a success: only a verified or

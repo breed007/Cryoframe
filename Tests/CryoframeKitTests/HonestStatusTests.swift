@@ -132,4 +132,32 @@ private func record(_ job: BackupJob, _ outcome: RunOutcomeKind, at t: TimeInter
         t.clear("a")
         #expect(t.shouldSend("a", now: t0.addingTimeInterval(60)))
     }
+    // An hourly job whose runs alternate failed and put off, a week without a good
+    // one: told once, not every other hour. A good run clears it, and the next
+    // trouble is told at once.
+    @Test func anOverdueJobIsToldOnceADayWhateverItsRunsAlternateBetween() throws {
+        let suite = "cf-overdue-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let throttle = AlertThrottle(defaults: defaults, key: "overdue")
+        let h = job("h", .everyHours(1))
+        let start = 100.0 * 86_400
+        let good = ["h": Date(timeIntervalSince1970: start - 8 * 86_400)]
+        var sent = 0
+        for hour in 0..<24 {
+            let now = Date(timeIntervalSince1970: start + Double(hour) * 3600)
+            let latest = ["h": record(h, hour % 2 == 0 ? .failed : .deferred, at: now.timeIntervalSince1970 - 60)]
+            for alert in AlertPolicy.overdueAlerts(jobs: [h], latest: latest, lastGood: good, now: now, throttle: throttle) {
+                sent += 1; throttle.recordSent(alert.subject, now: now)
+            }
+        }
+        #expect(sent == 1, "told \(sent) times in a day")
+        // a good run clears it; the next time it is late, it is told at once
+        let later = Date(timeIntervalSince1970: start + 25 * 3600)
+        _ = AlertPolicy.overdueAlerts(jobs: [h], latest: ["h": record(h, .completed, at: later.timeIntervalSince1970)],
+                                      lastGood: ["h": later], now: later, throttle: throttle)
+        let lateAgain = later.addingTimeInterval(3 * 3600)
+        #expect(AlertPolicy.overdueAlerts(jobs: [h], latest: ["h": record(h, .deferred, at: lateAgain.timeIntervalSince1970)],
+                                          lastGood: ["h": later], now: lateAgain, throttle: throttle).count == 1)
+    }
 }
