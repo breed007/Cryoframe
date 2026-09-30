@@ -474,10 +474,11 @@ enum MirrorCopy {
     /// `from` copied to `to` as its data and holes: the copy is made its full length
     /// (all hole), and only the ranges holding data are written. APFS fills in a hole
     /// of under 16 MiB it is asked to write past, so each is punched out again once the
-    /// range after it is written: a disk image with a little data every few MiB would
-    /// otherwise be copied at its full length. Made beside `to` and renamed over it, so
-    /// a failure leaves the copy as it was. Mode and dates follow; attributes and the
-    /// access list are copyAttributes'.
+    /// range after it is written, and the one after the last range at the end: a disk
+    /// image with a little data every few MiB would otherwise be copied at its full
+    /// length, and a small file followed by a long hole wouldn't pass as current. Made
+    /// beside `to` and renamed over it, so a failure leaves the copy as it was. Mode
+    /// and dates follow; attributes and the access list are copyAttributes'.
     static func copyWithHoles(_ from: String, _ to: String, _ st: stat) throws {
         func failed(_ what: String) -> Error {
             ArchiveError.toolFailed(tool: "copy", status: errno,
@@ -529,6 +530,11 @@ enum MirrorCopy {
                 _ = fcntl(dst, F_PUNCHHOLE, &hole)
             }
             at = end
+        }
+        // the hole after the last data: APFS fills in up to 16 MiB of it too
+        if at < st.st_size {
+            var hole = fpunchhole_t(fp_flags: 0, reserved: 0, fp_offset: at, fp_length: st.st_size - at)
+            _ = fcntl(dst, F_PUNCHHOLE, &hole)
         }
         var times = [st.st_atimespec, st.st_mtimespec]
         guard fchmod(dst, st.st_mode & 0o7777) == 0, futimens(dst, &times) == 0 else { throw failed("be copied") }
