@@ -148,31 +148,55 @@ enum AttachRecords {
     }
 
     /// `attach`, an attach of `image` made holding its lock, and then a record of the
-    /// attach it made: whichever attach of the image has none of the devices in
-    /// `before` and is served by a process started since. Recorded even when `attach`
-    /// throws, since a failed attach can leave a device too.
-    static func recording<T>(_ image: URL, sparing before: Set<String>, runner: CommandRunner,
+    /// attach it made. Only an attach that is provably this one is recorded: the one
+    /// holding the disk `attach` printed (when it hands back hdiutil's result) or, failing
+    /// that, the volume mounted at `mnt`, taken with the disk-image process serving it
+    /// now. Anything else new of the image may be another program's, attached in the same
+    /// moment, and would be detached as Cryoframe's once it was unmounted. So a failed
+    /// attach records nothing (the attach's cleanup takes what it left, holding the lock),
+    /// and neither does one that says nothing about its disk.
+    ///
+    /// Even the attach's own disk is not recorded when it was there before (`before`) or
+    /// is served by a process that was already running: hdiutil hands back an existing
+    /// attach's disk instead of making one when the image is held read-only elsewhere.
+    static func recording<T>(_ image: URL, sparing before: Set<String>, mountedAt mnt: URL? = nil, runner: CommandRunner,
                              owner: ProcessIdentity? = .current, in base: URL = MirrorMounts.defaultBase,
                              _ attach: () throws -> T) rethrows -> T {
         let since = Date().timeIntervalSince1970
-        defer { record(image, since: since, sparing: before, runner: runner, owner: owner, in: base) }
-        return try attach()
+        let result = try attach()
+        if let device = attachedDevice(result, mountedAt: mnt) {
+            record(image, device: device, since: since, sparing: before, runner: runner, owner: owner, in: base)
+        }
+        return result
     }
 
-    private static func record(_ image: URL, since: TimeInterval, sparing before: Set<String>, runner: CommandRunner,
-                               owner: ProcessIdentity?, in base: URL) {
+    /// the disk an attach says it made: the first device hdiutil printed, or the one
+    /// mounted at `mnt`
+    static func attachedDevice<T>(_ result: T, mountedAt mnt: URL?) -> String? {
+        if let r = result as? CommandResult {
+            guard r.ok else { return nil }
+            if let printed = r.stdout.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }) {
+                return String(printed)
+            }
+        }
+        return mnt.flatMap { MountPoint.device(at: $0) }
+    }
+
+    private static func record(_ image: URL, device: String, since: TimeInterval, sparing before: Set<String>,
+                               runner: CommandRunner, owner: ProcessIdentity?, in base: URL) {
         guard let owner, let attaches = MirrorMounts.attachesIfKnown(runner: runner) else { return }
         let target = key(image.path)
-        for a in attaches where key(a.path) == target && !a.devices.isEmpty && !a.devices.contains(where: before.contains) {
-            // served by a process that was already running: an attach that began before
-            // this one, so not this one's
-            guard let pid = a.helper, let helper = ProcessIdentity.of(pid: pid), helper.startedAt >= since else { continue }
-            let r = Record(image: target, devices: a.devices, helper: helper, owner: owner)
-            guard let data = try? JSONEncoder().encode(r) else { continue }
-            let dir = folder(in: base)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try? data.write(to: dir.appendingPathComponent(UUID().uuidString + ".json"), options: .atomic)
-        }
+        // the attach of this image holding the disk; two claiming it say nothing
+        let holding = attaches.filter { key($0.path) == target && $0.devices.contains(device) }
+        guard holding.count == 1, let a = holding.first, !a.devices.contains(where: before.contains) else { return }
+        // served by a process that was already running: an attach that began before
+        // this one, so not this one's
+        guard let pid = a.helper, let helper = ProcessIdentity.of(pid: pid), helper.startedAt >= since else { return }
+        let r = Record(image: target, devices: a.devices, helper: helper, owner: owner)
+        guard let data = try? JSONEncoder().encode(r) else { return }
+        let dir = folder(in: base)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? data.write(to: dir.appendingPathComponent(UUID().uuidString + ".json"), options: .atomic)
     }
 
     /// Detach every attach of `image` recorded by a Cryoframe process that is no longer

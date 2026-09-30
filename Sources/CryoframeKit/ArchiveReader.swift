@@ -220,7 +220,7 @@ public struct ArchiveReader: Sendable {
             let mark = work.appendingPathComponent(OpenedArchive.borrowedFileName)
             if !before.isEmpty { FileManager.default.createFile(atPath: mark.path, contents: nil) }
             do {
-                try AttachRecords.recording(image, sparing: before, runner: look) {
+                try AttachRecords.recording(image, sparing: before, mountedAt: mnt, runner: look) {
                     try DiskImageGate.serialized {
                         try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
                     }

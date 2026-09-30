@@ -215,7 +215,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         try ImageLock.attaching(bundle, runner: teardown, control: runner.control) { before in
             // attached elsewhere: an attach would hand back that disk, not read the drive
             guard before.isEmpty else { throw MirrorCopyError.couldNotConfirm("it is attached elsewhere on this Mac") }
-            let attached = try? AttachRecords.recording(bundle, sparing: before, runner: teardown) {
+            let attached = try? AttachRecords.recording(bundle, sparing: before, mountedAt: mnt, runner: teardown) {
                 try DiskImageGate.serialized {
                     try runner.runRetryingBusy("/usr/bin/hdiutil",
                                                ArchivePlan.attach(image: bundle, mountpoint: mnt, readonly: true, encrypted: passphrase != nil).args,
@@ -351,7 +351,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                     throw DiskImageInUse(image: bundle.path, mountedAt: open, attachedWithoutMount: open.isEmpty)
                 }
                 do {
-                    try AttachRecords.recording(bundle, sparing: before, runner: teardown) {
+                    try AttachRecords.recording(bundle, sparing: before, mountedAt: mountpoint, runner: teardown) {
                         try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
                     }
                 } catch {
