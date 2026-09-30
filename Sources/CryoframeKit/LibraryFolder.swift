@@ -52,6 +52,19 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
     /// file written before it was recorded, where a held version is the job's own when
     /// the folder is a mirror job's now.
     public var ownHeldVersions: [String]?
+    /// The up-to-date copy a mirror job left at the folder's top when it was made a
+    /// sealed job: kept (nothing deletes it), and never read as the job's current copy
+    /// again. Cleared when the job is made a mirror job again: its runs update that
+    /// same copy (the image is named after the folder being backed up).
+    public var keptMirror: KeptMirror?
+
+    public struct KeptMirror: Codable, Sendable, Equatable {
+        /// the disk image's file name
+        public var name: String
+        /// when it stopped being kept up to date
+        public var keptAt: Date
+        public init(name: String, keptAt: Date) { self.name = name; self.keptAt = keptAt }
+    }
 
     public init(jobID: String, libraryID: String, name: String, jobName: String) {
         self.key = Self.key(jobID: jobID, libraryID: libraryID)
@@ -91,6 +104,7 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
         out.formerNames = names.isEmpty ? nil : Array(names.suffix(20))
         out.heldVersions = previous.heldVersions
         out.ownHeldVersions = previous.ownHeldVersions
+        out.keptMirror = previous.keptMirror
         return out
     }
 

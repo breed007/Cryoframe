@@ -137,6 +137,36 @@ public enum LibraryFolders {
     /// whether a folder holds a mirror at its top
     static func holdsMirror(_ folder: URL) -> Bool { RestoreDiscovery.archive(at: folder)?.format == .liveMirror }
 
+    /// the file name of the disk image of the mirror at a folder's top, if it holds one
+    static func mirrorImage(in folder: URL) -> String? {
+        guard holdsMirror(folder) else { return nil }
+        return ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .sorted().first { ["sparsebundle", "dmg"].contains(($0 as NSString).pathExtension.lowercased()) }
+    }
+
+    /// What a library folder keeps that its job no longer writes or prunes: versions
+    /// held when the job was changed between a mirror and sealed versions, and the
+    /// copy a mirror job left when it was made a sealed job.
+    public struct Kept: Sendable, Equatable {
+        public var versions: [String] = []
+        public var mirror: LibraryIdentity.KeptMirror?
+        public var isEmpty: Bool { versions.isEmpty && mirror == nil }
+    }
+
+    public static func kept(in folder: URL) -> Kept {
+        guard let identity = LibraryIdentity.read(in: folder) else { return Kept() }
+        return Kept(versions: identity.heldVersions ?? [], mirror: identity.mirror == true ? nil : identity.keptMirror)
+    }
+
+    /// Whether `archive` (found by a scan) is kept rather than current: a held
+    /// version, or the copy a mirror job left when it was made a sealed job. Shown as
+    /// such in Restore and Storage.
+    public static func isKept(_ archive: RestorableArchive) -> Bool {
+        let k = kept(in: archive.libraryFolder)
+        if let v = archive.version { return k.versions.contains(VersionStamp.string(v)) || k.versions.contains(archive.dir.lastPathComponent) }
+        return archive.format == .liveMirror && k.mirror != nil
+    }
+
     /// Whether an archive whose bundle is named `bundle` can be `library`'s: its folder
     /// on disk has that name, or, for a built-in library kept in a package, the bundle
     /// is a package of the same kind. The Photos library can be one other than the
@@ -226,6 +256,13 @@ public enum LibraryFolders {
             held.formIntersection(versions)
             updated.heldVersions = held.isEmpty ? nil : held.sorted()
             updated.ownHeldVersions = held.isEmpty ? nil : held.filter { current.owns($0) }.sorted()
+            // Made a sealed job: the copy the mirror job kept up to date stays, marked
+            // kept. Made a mirror job again: its runs keep that copy up to date again.
+            if updated.mirror == true {
+                updated.keptMirror = nil
+            } else if current.mirror == true, updated.keptMirror == nil, let image = mirrorImage(in: folder) {
+                updated.keptMirror = LibraryIdentity.KeptMirror(name: image, keptAt: Date())
+            }
         }
         if current != updated { try updated.write(in: folder) }
 
