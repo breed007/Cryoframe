@@ -22,15 +22,21 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
     public var format: ArchiveFormat
     public var encrypted: Bool               // the staged archive is AES-256 encrypted
     public var completed: [ArtifactDigest]   // parts already shipped, in order
+    /// The drive `targetDir` was on when the transfer began: its volume UUID (a
+    /// share's address). Two drives of one name mount at one path, so the path alone
+    /// can't say whether the drive plugged in now is the one holding the first parts.
+    /// nil: recorded before 1.6, or on a volume that couldn't be told.
+    public var volumeUUID: String?
 
     public var totalParts: Int { Int((totalBytes + chunkSize - 1) / max(chunkSize, 1)) }
 
     public init(jobID: String, sourceFile: String, baseName: String, totalBytes: UInt64,
                 chunkSize: UInt64, targetDir: String, format: ArchiveFormat,
-                encrypted: Bool = false, completed: [ArtifactDigest] = []) {
+                encrypted: Bool = false, completed: [ArtifactDigest] = [], volumeUUID: String? = nil) {
         self.jobID = jobID; self.sourceFile = sourceFile; self.baseName = baseName
         self.totalBytes = totalBytes; self.chunkSize = chunkSize; self.targetDir = targetDir
         self.format = format; self.encrypted = encrypted; self.completed = completed
+        self.volumeUUID = volumeUUID
     }
 
     public init(from decoder: Decoder) throws {       // tolerate records written before `encrypted` existed
@@ -44,6 +50,21 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
         format = try c.decode(ArchiveFormat.self, forKey: .format)
         encrypted = try c.decodeIfPresent(Bool.self, forKey: .encrypted) ?? false
         completed = try c.decodeIfPresent([ArtifactDigest].self, forKey: .completed) ?? []
+        volumeUUID = try c.decodeIfPresent(String.self, forKey: .volumeUUID)
+    }
+
+    /// The job this transfer belongs to: records are keyed `<job>:<dest>:<lib>`
+    /// (older ones just `<job>`).
+    public var owningJobID: String {
+        jobID.split(separator: ":", maxSplits: 1).first.map(String.init) ?? jobID
+    }
+
+    /// Whether `volume`, the volume holding `targetDir` now, is the drive the
+    /// transfer began on. Unknown when it began (before 1.6): any volume is.
+    public func isOnItsDrive(_ volume: MountedVolume?) -> Bool {
+        guard let id = volumeUUID else { return true }
+        guard let volume else { return false }
+        return volume.uuid == id || volume.shareKey == id.lowercased()
     }
 }
 
@@ -172,9 +193,9 @@ public enum TransferResumer {
     @discardableResult
     public static func resumeAll(store: PendingTransferStore,
                                  reachable: @Sendable (String) -> Bool = TransferResumer.isReachable,
-                                 locks: RunLocks? = nil,
+                                 locks: RunLocks? = nil, volumes: VolumeTable = SystemVolumeTable(),
                                  afterPart: (@Sendable (RunLease) -> Void)? = nil) -> [String] {
-        resume(store: store, reachable: reachable, locks: locks, afterPart: afterPart).resumed
+        resume(store: store, reachable: reachable, locks: locks, volumes: volumes, afterPart: afterPart).resumed
     }
 
     @Sendable public static func isReachable(_ path: String) -> Bool {
@@ -183,17 +204,21 @@ public enum TransferResumer {
             && FileManager.default.isWritableFile(atPath: path)
     }
 
-    /// resume every interrupted transfer whose destination is reachable again.
+    /// Resume every interrupted transfer whose destination is reachable again, on the
+    /// drive it began on: another drive of that name at the same path gets none of
+    /// its parts (see PendingTransfer.volumeUUID).
     public static func resume(store: PendingTransferStore,
                               reachable: @Sendable (String) -> Bool = TransferResumer.isReachable,
-                              locks: RunLocks? = nil,
+                              locks: RunLocks? = nil, volumes: VolumeTable = SystemVolumeTable(),
                               afterPart: (@Sendable (RunLease) -> Void)? = nil) -> Pass {
         var resumed: [String] = []
         var stopped = Set<String>()          // jobs whose resume was stopped: none of theirs this pass
         let fm = FileManager.default
         for pending in store.all() {
             guard fm.fileExists(atPath: pending.sourceFile), reachable(pending.targetDir),
-                  !stopped.contains(jobID(of: pending)) else { continue }
+                  !stopped.contains(jobID(of: pending)),
+                  pending.isOnItsDrive(volumes.volume(containing: URL(fileURLWithPath: pending.targetDir, isDirectory: true)))
+            else { continue }
             // A job that is running right now, here or in the other process, is
             // shipping its own transfers; resuming alongside it writes the same parts
             // twice at once. Leave it to the run, or to the next pass.
@@ -237,7 +262,5 @@ public enum TransferResumer {
 
     /// the job a pending transfer belongs to: records are keyed `<job>:<dest>:<lib>`
     /// (older ones just `<job>`).
-    static func jobID(of pending: PendingTransfer) -> String {
-        pending.jobID.split(separator: ":", maxSplits: 1).first.map(String.init) ?? pending.jobID
-    }
+    static func jobID(of pending: PendingTransfer) -> String { pending.owningJobID }
 }

@@ -449,10 +449,12 @@ public struct JobExecutor: Sendable {
                     if dest.constraints.resumableTransfer {
                         onStage(.transferring)
                         let key = "\(build.jobID):\(Self.safe(dest.id)):\(build.library.id)"
+                        // the drive it goes to, so it is finished on that drive and no other
                         let pending = PendingTransfer(jobID: key, sourceFile: build.builtFile.path,
                                                       baseName: build.builtFile.lastPathComponent, totalBytes: build.byteSize,
                                                       chunkSize: chunkSize, targetDir: destDir.path, format: build.format,
-                                                      encrypted: build.encrypted)
+                                                      encrypted: build.encrypted,
+                                                      volumeUUID: DestinationResolver(volumes: self.volumes).identity(for: dest.destinationDir)?.uuid)
                         pendingStore?.save(pending)
                         let tStart = Date(); let chunk = pending.chunkSize, totalBytes = pending.totalBytes
                         let manifest = try ChunkedShipper().ship(pending, persist: { pendingStore?.save($0) }, control: control,
