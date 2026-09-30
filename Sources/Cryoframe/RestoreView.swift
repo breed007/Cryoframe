@@ -252,7 +252,9 @@ struct RestoreView: View {
                 }
             }
         }
-        .frame(width: 740, height: 600)
+        // at least 740 × 600, and as tall as the window it covers (see ContentView)
+        .frame(width: 740)
+        .frame(minHeight: 600, maxHeight: .infinity)
         .onDisappear { r.endBrowse() }
         .sheet(isPresented: Binding(get: { r.browseRoot != nil }, set: { if !$0 { r.endBrowse() } })) {
             if let root = r.browseRoot {

@@ -18,6 +18,8 @@ struct ContentView: View {
     @State private var showOnboarding = false
     @AppStorage("onboarding.completed") private var onboardingCompleted = false
     @State private var editingJob: BackupJob?
+    /// the window's content height, so the restore sheets can cover all of it
+    @State private var contentHeight: CGFloat = 0
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -99,8 +101,20 @@ struct ContentView: View {
         }
         .sheet(isPresented: $model.showHelp) { HelpView(isPresented: $model.showHelp) }
         .sheet(isPresented: $model.showHistory) { HistoryView(model: model, isPresented: $model.showHistory) }
-        .sheet(isPresented: $model.showRestore) { RestoreView(model: model, isPresented: $model.showRestore) }
-        .sheet(isPresented: $model.showRecovery) { RecoveryWizard(model: model, isPresented: $model.showRecovery) }
+        // The restore sheets cover the whole window. At their own height they ended
+        // part-way down it, cutting through the activity log, with the window's live
+        // content showing below them as if it were part of the restore.
+        .background(GeometryReader { g in
+            Color.clear
+                .onAppear { contentHeight = g.size.height }
+                .onChange(of: g.size.height) { _, h in contentHeight = h }
+        })
+        .sheet(isPresented: $model.showRestore) {
+            RestoreView(model: model, isPresented: $model.showRestore).frame(height: max(600, contentHeight))
+        }
+        .sheet(isPresented: $model.showRecovery) {
+            RecoveryWizard(model: model, isPresented: $model.showRecovery).frame(height: max(620, contentHeight))
+        }
         .sheet(isPresented: $model.showStorage) { StorageView(model: model, isPresented: $model.showStorage) }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(model: model, isPresented: $showOnboarding,

@@ -180,7 +180,9 @@ struct RecoveryWizard: View {
             Divider()
             footer
         }
-        .frame(width: 640, height: 620)
+        // at least 640 × 620, and as tall as the window it covers (see ContentView)
+        .frame(width: 640)
+        .frame(minHeight: 620, maxHeight: .infinity)
     }
 
     private var header: some View {
