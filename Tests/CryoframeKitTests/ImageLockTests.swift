@@ -6,7 +6,9 @@
 //  attach of the image is under way. The orphan cleanup ran after any failed attach
 //  and before every mirror run, and force-detached such devices whoever's they were:
 //  another attach caught between attaching and mounting, or a check that attaches
-//  without mounting, lost its device.
+//  without mounting, lost its device. And a device there before an attach began is
+//  never that attach's: an image attached outside Cryoframe with nothing mounted takes
+//  no lock, and lost its disk too.
 //
 
 import Testing
@@ -16,8 +18,16 @@ import Foundation
 private final class InfoRunner: CommandRunner, @unchecked Sendable {
     let lock = NSLock()
     var detached: [String] = []
+    /// listed from the start, or only once something runs `hdiutil attach`
+    var listed: Bool
     let info: String
-    init(image: URL, device: String) {
+    let none = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0"><dict><key>images</key><array/></dict></plist>
+    """
+    init(image: URL, device: String, listed: Bool = true) {
+        self.listed = listed
         info = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -29,7 +39,8 @@ private final class InfoRunner: CommandRunner, @unchecked Sendable {
     }
     func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
         lock.lock(); defer { lock.unlock() }
-        if args.first == "info" { return CommandResult(status: 0, stdout: info, stderr: "") }
+        if args.first == "info" { return CommandResult(status: 0, stdout: listed ? info : none, stderr: "") }
+        if args.first == "attach" { listed = true }
         if args.first == "detach", args.count > 1 { detached.append(args[1]) }
         return CommandResult(status: 0, stdout: "", stderr: "")
     }
@@ -78,9 +89,11 @@ private func image(_ tag: String) -> URL {
     @Test func aFailedAttachDetachesItsOwnOrphan() {
         struct Failed: Error {}
         let img = image("failed")
-        let runner = InfoRunner(image: img, device: "/dev/disk43")
+        let runner = InfoRunner(image: img, device: "/dev/disk43", listed: false)
         #expect(throws: Failed.self) {
-            try ImageLock.attaching(img, runner: runner) {
+            try ImageLock.attaching(img, runner: runner) { before in
+                #expect(before.isEmpty)
+                _ = try runner.run("/usr/bin/hdiutil", ["attach", "-nomount", img.path], stdin: nil)
                 let other = Thread { ArchiveReader.detachOrphans(ofImage: img, runner: runner) }
                 other.start()
                 while !other.isFinished { Thread.sleep(forTimeInterval: 0.01) }
@@ -89,5 +102,57 @@ private func image(_ tag: String) -> URL {
             }
         }
         #expect(runner.detachedNow == ["/dev/disk43"])
+    }
+
+    // A device attached before the attach began, with nothing mounted on it, is
+    // another program's (Disk Utility, Terminal): handed to the attach as such, and
+    // left attached when the attach fails.
+    @Test func aDeviceThereBeforeTheAttachIsLeftAlone() {
+        struct Failed: Error {}
+        let img = image("before")
+        let runner = InfoRunner(image: img, device: "/dev/disk44")
+        #expect(throws: Failed.self) {
+            try ImageLock.attaching(img, runner: runner) { before in
+                #expect(before == ["/dev/disk44"])
+                _ = try runner.run("/usr/bin/hdiutil", ["attach", "-nomount", img.path], stdin: nil)
+                throw Failed()
+            }
+        }
+        #expect(runner.detachedNow.isEmpty, "detached a device that was there before: \(runner.detachedNow)")
+    }
+
+    // Given up on the holder, nothing is attached: an attach made without the lock
+    // could be taken for the holder's debris and detached under it.
+    @Test func aWaitThatRunsOutAttachesNothing() throws {
+        let img = image("timeout")
+        let runner = InfoRunner(image: img, device: "/dev/disk45", listed: false)
+        let holder = try #require(ImageLock.acquire(img))
+        defer { holder.release() }
+        var ran = false
+        #expect(throws: DiskImageInUse.self) {
+            try ImageLock.attaching(img, runner: runner, wait: 0.5) { _ in ran = true }
+        }
+        #expect(!ran, "attached without the lock")
+    }
+
+    // Stop ends the wait for the image, for a check run with a teardown runner (no
+    // control of its own) as for an attach.
+    @Test func stopEndsTheWaitForTheImage() throws {
+        let img = image("stop")
+        let runner = InfoRunner(image: img, device: "/dev/disk46", listed: false)
+        let holder = try #require(ImageLock.acquire(img))
+        defer { holder.release() }
+        let control = RunControl()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { control.cancel() }
+        var start = ProcessInfo.processInfo.systemUptime
+        #expect(throws: CancelledError.self) {
+            try ImageLock.attaching(img, runner: runner, control: control) { _ in }
+        }
+        #expect(ProcessInfo.processInfo.systemUptime - start < 10, "Stop didn't end the attach's wait")
+
+        start = ProcessInfo.processInfo.systemUptime
+        #expect(MirrorIntegrity.check(img, passphrase: nil, runner: runner, control: control) != .sound)
+        #expect(ProcessInfo.processInfo.systemUptime - start < 10, "Stop didn't end the check's wait")
+        #expect(!runner.listed, "the check attached the image")
     }
 }

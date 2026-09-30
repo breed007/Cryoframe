@@ -78,6 +78,14 @@ public enum MirrorMounts {
             .flatMap(\.devices)
     }
 
+    /// every device of `image` attached on this Mac, mounted or not; nil when hdiutil
+    /// couldn't be asked, which isn't the same as none
+    static func devicesIfKnown(of image: URL, runner: CommandRunner) -> Set<String>? {
+        guard let images = attachedImagesIfKnown(runner: runner) else { return nil }
+        let target = image.resolvingSymlinksInPath().path
+        return Set(images.filter { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == target }.flatMap(\.devices))
+    }
+
     /// every disk-image device attached on this Mac
     public static func allDevices(runner: CommandRunner) -> Set<String> {
         Set(attachedImages(runner: runner).flatMap(\.devices))
@@ -115,7 +123,7 @@ public enum MirrorMounts {
             let name = work.lastPathComponent
             guard mnt.lastPathComponent == "mnt", name.hasPrefix(prefix) || name.hasPrefix(OpenedArchive.workPrefix),
                   OpenedArchive.isAbandoned(work, now: now, isAlive: isAlive) else { continue }
-            MountPoint.detach(mnt, runner: runner)
+            if OpenedArchive.isBorrowed(work) { MountPoint.unmount(mnt, runner: runner) } else { MountPoint.detach(mnt, runner: runner) }
             OpenedArchive.removeWork(work)
         }
     }
@@ -137,11 +145,17 @@ extension MirrorMounts {
 public struct DiskImageInUse: Error, Equatable {
     public let image: String
     public let mountedAt: [String]
+    /// attached by another program with nothing mounted: Disk Utility, a command in
+    /// Terminal, or a volume unmounted without ejecting its image
+    public var attachedWithoutMount = false
 }
 
 extension DiskImageInUse: LocalizedError {
     public var errorDescription: String? {
         let name = (image as NSString).lastPathComponent
+        if attachedWithoutMount {
+            return "\(name) is attached on this Mac with nothing open on it, by another app or a command in Terminal, or its volume was unmounted without ejecting it. Eject it in Disk Utility, then try again."
+        }
         let where_ = mountedAt.first.map { " (at \($0))" } ?? ""
         return "\(name) is already open elsewhere on this Mac\(where_): in the restore window, being checked, or being updated by a backup. Try again once that has finished."
     }

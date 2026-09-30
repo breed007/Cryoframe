@@ -134,20 +134,31 @@ struct VolumeLock {
 enum MirrorIntegrity {
     enum Verdict: Equatable { case sound, damaged(String), unknown(String) }
 
-    static func check(_ bundle: URL, passphrase: String?, runner: CommandRunner) -> Verdict {
+    /// Not checked (unknown) while the image is attached elsewhere, or while another
+    /// check or attach of it keeps it past ImageLock.patience: none is made without the
+    /// image's lock. Stop ends a wait for the image when `control` (the run's) is given; `runner` is
+    /// usually a teardown runner, with no control of its own.
+    static func check(_ bundle: URL, passphrase: String?, runner: CommandRunner, control: RunControl? = nil) -> Verdict {
         // An attach that fails (or is retried after "Resource temporarily unavailable")
         // can still leave the image attached, and with nothing mounted no detach by
         // device or mount point finds it. Held from before the attach until after the
         // detach (attached without mounting, the check's own device looks like an
-        // orphan to anyone else); while it is held, anything of the image attached with
-        // nothing mounted is no attach's under way, and is detached (see ImageLock).
-        let lock = ImageLock.acquire(bundle, wait: ImageLock.patience, control: runner.control)
-        defer {
-            if let lock {
-                ArchiveReader.detachOrphans(ofImage: bundle, runner: runner, holding: lock)
-                lock.release()
+        // orphan to anyone else); a device the attach left is detached (see ImageLock).
+        do {
+            return try ImageLock.attaching(bundle, runner: runner, control: control) { before in
+                // attached elsewhere: the attach would hand back that disk, and the
+                // detach below would take it from its holder
+                guard before.isEmpty else { return .unknown("the image is attached elsewhere on this Mac") }
+                return checkAttaching(bundle, passphrase: passphrase, runner: runner)
             }
+        } catch is CancelledError {
+            return .unknown("the check was stopped")
+        } catch {
+            return .unknown("the image was busy, so it wasn't checked; try again once it isn't in use")
         }
+    }
+
+    private static func checkAttaching(_ bundle: URL, passphrase: String?, runner: CommandRunner) -> Verdict {
         var args = ["attach", "-nomount", "-readonly", "-nobrowse", bundle.path]
         if passphrase != nil { args.append("-stdinpass") }
         guard let a = try? runner.runRetryingBusy("/usr/bin/hdiutil", args, stdin: passphrase.map { Data($0.utf8) }), a.ok else {

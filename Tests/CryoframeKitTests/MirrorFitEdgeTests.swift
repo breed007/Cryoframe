@@ -324,12 +324,13 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
 
     // MARK: - attached with nothing mounted
 
-    // An image can stay attached with no volume mounted: a failed attach leaves one,
-    // and so does unmounting the volume without ejecting the image. `hdiutil info`
-    // then lists it with no mount point, so nobody "has it open", yet every attach
-    // fails "Resource busy". A reader clears such an orphan after a failed attach; a
-    // mirror run has to as well, or the job fails every night until a restart.
-    @Test func aMirrorAttachedWithNothingMountedDoesNotBlockItsRuns() throws {
+    // An image can stay attached with no volume mounted: unmounting the volume
+    // without ejecting the image leaves one, and so do Disk Utility's First Aid and
+    // `hdiutil attach -nomount`. `hdiutil info` then lists it with no mount point, yet
+    // it is someone's: detaching it pulled the disk from under its holder. A mirror
+    // run can't attach it read-write, so it is refused before anything changes, says
+    // how to let it go, and leaves the holder's disk attached.
+    @Test func aMirrorAttachedWithNothingMountedIsRefusedAndKept() throws {
         let src = fitDir("orphsrc").appendingPathComponent("Lib")
         try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
         try Data("one".utf8).write(to: src.appendingPathComponent("one.txt"))
@@ -349,13 +350,21 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
         try #require(unmounted.ok && !MountPoint.isMounted(mnt), "\(unmounted.stderr)")
         let left = devices(of: bundle)
         try #require(left.count > 0 && !left.mounted, "the image went with its volume, so this proves nothing")
+        let held = Set(MirrorMounts.attachedDevices(of: bundle, runner: ProcessCommandRunner()))
 
         try Data("two".utf8).write(to: src.appendingPathComponent("two.txt"))
-        #expect(throws: Never.self) { try engine.archive(ArchiveSource(name: "Lib", root: src), to: out) }
+        do {
+            _ = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out)
+            Issue.record("a run went ahead with the image attached elsewhere")
+        } catch let e as DiskImageInUse {
+            #expect(e.attachedWithoutMount, "\(e.localizedDescription)")
+        }
+        #expect(Set(MirrorMounts.attachedDevices(of: bundle, runner: ProcessCommandRunner())) == held, "the holder's disk was detached")
+        #expect(!MirrorSeal.isOpen(out), "a run refused before touching the image left it marked open")
     }
 
-    // The same orphan in the way of a restore: the reader's clean-up after a failed
-    // attach should take it away and the retry should open the mirror.
+    // The same in the way of a restore: held read-only, its volume is mounted for the
+    // restore and only unmounted afterwards, leaving the disk to its holder.
     @Test func aRestoreOpensAMirrorAttachedWithNothingMounted() throws {
         let src = fitDir("orphrsrc").appendingPathComponent("Lib")
         try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
@@ -374,10 +383,13 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
         }
         let unmounted = try ProcessCommandRunner().run("/usr/sbin/diskutil", ["unmount", mnt.path])
         try #require(unmounted.ok && !MountPoint.isMounted(mnt), "\(unmounted.stderr)")
+        let held = Set(MirrorMounts.attachedDevices(of: bundle, runner: ProcessCommandRunner()))
 
         let opened = try? ArchiveReader(workBase: base, transientSettle: 0.1).open(result)
-        defer { opened?.close() }
         #expect(opened.map { FileManager.default.fileExists(atPath: $0.root.appendingPathComponent("Lib/one.txt").path) } == true)
+        opened?.close()
+        #expect(opened.map { !MountPoint.isMounted($0.root) } ?? true, "the restore's volume was left mounted")
+        #expect(Set(MirrorMounts.attachedDevices(of: bundle, runner: ProcessCommandRunner())) == held, "the holder's disk was detached")
     }
 }
 

@@ -61,6 +61,7 @@ asking
 asks
 at
 attach
+attached
 attention
 attribute
 attributes
@@ -91,6 +92,7 @@ bigger
 bin
 block
 blocks
+borrowed
 box
 build
 built
@@ -140,6 +142,7 @@ cloudstorage
 com
 come
 comm
+command
 compact
 compare
 compared
@@ -235,6 +238,7 @@ during
 each
 earlier
 eject
+ejecting
 else
 elsewhere
 email
@@ -822,6 +826,7 @@ unchanged
 uncompressed
 unfinished
 unmount
+unmounted
 unpack
 unpacked
 unpacking

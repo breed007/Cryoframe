@@ -106,9 +106,10 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // fail on whatever hdiutil makes of it.
         if let why = MirrorSeal.damage(in: destinationDir), fm.fileExists(atPath: bundle.path) {
             if MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty,
-               MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown) == .sound {
+               MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown, control: runner.control) == .sound {
                 MirrorSeal.clearDamaged(destinationDir)
             } else {
+                if runner.control?.isCancelled == true { throw CancelledError() }
                 throw MirrorCopyError.imageRecordedDamaged(image: bundle.path, why: why)
             }
         }
@@ -142,7 +143,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             guard MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty else {
                 throw MirrorCopyError.driveFilledByAnother(swapped: watch.swapped)   // still attached: stays marked
             }
-            switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown) {
+            switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown, control: runner.control) {
             case .damaged(let why):
                 MirrorSeal.markDamaged(destinationDir, why: why)  // so restore, health and the next run say so
                 throw MirrorCopyError.imageDamaged(why)          // stays marked; not compacted, not sealed
@@ -192,11 +193,14 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// run reported a success.
     private func confirm(_ bundle: URL, name: String, against source: URL, in destinationDir: URL, stdin: Data?) throws {
         let teardown = runner.forTeardown
-        switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: teardown) {
+        // Stop ends a wait for the image (see ImageLock.attaching), which the teardown
+        // runner, with no control of its own, can't
+        switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: teardown, control: runner.control) {
         case .damaged(let why):
             MirrorSeal.markDamaged(destinationDir, why: why)
             throw MirrorCopyError.imageDamaged(why)             // stays marked; not sealed
         case .unknown(let why):
+            if runner.control?.isCancelled == true { throw CancelledError() }
             throw MirrorCopyError.couldNotConfirm(why)          // stays marked; not sealed
         case .sound:
             break
@@ -204,12 +208,13 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let work = try MirrorMounts.makeWork(in: mountBase)
         let mnt = work.appendingPathComponent("mnt", isDirectory: true)
         defer {
-            MountPoint.detach(mnt, runner: teardown)
-            ArchiveReader.detachOrphans(ofImage: bundle, runner: teardown)     // a failed attach's (see MirrorIntegrity)
+            MountPoint.detach(mnt, runner: teardown)        // a failed attach's devices went as it failed
             OpenedArchive.removeWork(work)
         }
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        try ImageLock.attaching(bundle, runner: teardown) {
+        try ImageLock.attaching(bundle, runner: teardown, control: runner.control) { before in
+            // attached elsewhere: an attach would hand back that disk, not read the drive
+            guard before.isEmpty else { throw MirrorCopyError.couldNotConfirm("it is attached elsewhere on this Mac") }
             let attached = try? DiskImageGate.serialized {
                 try runner.runRetryingBusy("/usr/bin/hdiutil",
                                            ArchivePlan.attach(image: bundle, mountpoint: mnt, readonly: true, encrypted: passphrase != nil).args,
@@ -275,11 +280,13 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // it or attaching it, rather than fail on hdiutil's "Resource busy" later
         if fm.fileExists(atPath: bundle.path) {
             try MirrorMounts.refuseIfOpen(bundle, runner: teardown)
-            // Attached with nothing mounted (a failed attach, or a volume unmounted
-            // without ejecting the image): nobody has it open, but the attach below
-            // reused that device, read-only if it was, and failed "volume is read
-            // only" every run. Nothing mounted on it means nobody is using it.
-            ArchiveReader.detachOrphans(ofImage: bundle, runner: teardown)
+            // attached with nothing mounted by another program, and no attach of
+            // Cryoframe's under way: refused now, before growing it (see attach below)
+            if let lock = ImageLock.acquire(bundle) {
+                let held = MirrorMounts.attachedDevices(of: bundle, runner: teardown)
+                lock.release()
+                if !held.isEmpty { throw DiskImageInUse(image: bundle.path, mountedAt: [], attachedWithoutMount: true) }
+            }
         }
 
         // `touched` is set at each step that changes the image, so a run that fails
@@ -321,14 +328,23 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let work = try MirrorMounts.makeWork(in: mountBase)
         let mountpoint = work.appendingPathComponent("mnt", isDirectory: true)
         defer {
-            MountPoint.detach(mountpoint, runner: teardown)
-            ArchiveReader.detachOrphans(ofImage: bundle, runner: teardown)     // a failed attach's (see MirrorIntegrity)
+            MountPoint.detach(mountpoint, runner: teardown)     // a failed attach's devices went as it failed
             OpenedArchive.removeWork(work)          // only once nothing is mounted there
         }
         // attach read-write at `mountpoint`; also used to attach it again for the read-back
         func attach() throws {
             try fm.createDirectory(at: mountpoint, withIntermediateDirectories: true)
-            try ImageLock.attaching(bundle, runner: runner) {
+            try ImageLock.attaching(bundle, runner: runner) { before in
+                // Attached with nothing mounted (Disk Utility's First Aid, a command in
+                // Terminal, a volume unmounted without ejecting the image): the attach
+                // reused that device, read-only if it was, and failed "volume is read
+                // only" every run, or failed busy. It was detached before this attach,
+                // which pulled the disk out from under whoever held it; now the run is
+                // refused, and says how to let it go.
+                guard before.isEmpty else {
+                    let open = MirrorMounts.mountPoints(of: bundle, runner: teardown)
+                    throw DiskImageInUse(image: bundle.path, mountedAt: open, attachedWithoutMount: open.isEmpty)
+                }
                 do {
                     try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
                 } catch {

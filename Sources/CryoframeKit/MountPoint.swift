@@ -25,6 +25,25 @@ public enum MountPoint {
         return canonical(on) == canonical(url.path)
     }
 
+    /// the device mounted exactly at `url` ("/dev/disk7s1"), or nil when nothing is
+    static func device(at url: URL) -> String? {
+        var s = statfs()
+        guard isMounted(url), statfs(url.path, &s) == 0 else { return nil }
+        return withUnsafeBytes(of: s.f_mntfromname) { raw in String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self) }
+    }
+
+    /// unmount the volume at `url` and leave its device attached: for a volume mounted
+    /// on another program's device (see ArchiveReader.attach), which detaching would
+    /// take from it
+    static func unmount(_ url: URL, runner: CommandRunner) {
+        for i in 0..<5 {
+            if !isMounted(url) { return }
+            if let r = try? runner.run("/usr/bin/hdiutil", ["unmount", url.path], stdin: nil), r.ok { return }
+            Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
+        }
+        if isMounted(url) { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["unmount", "-force", url.path]) }
+    }
+
     /// remove an EMPTY mount directory. Never recursive: if something is still
     /// mounted there, or anything is inside it, it stays.
     public static func removeDirectory(_ url: URL) {

@@ -18,6 +18,23 @@ public struct OpenedArchive: Sendable {
     static let ownerFileName = "owner.json"
     /// names every open archive's work dir
     static let workPrefix = "cf-open-"
+    /// in the work dir when the volume is mounted on another program's device, which
+    /// closing, or sweeping after a crash, unmounts and never detaches
+    static let borrowedFileName = "borrowed"
+
+    static func isBorrowed(_ work: URL) -> Bool {
+        FileManager.default.fileExists(atPath: work.appendingPathComponent(borrowedFileName).path)
+    }
+
+    /// take the volume at `mnt` (a work dir's "mnt") away: detached, or only unmounted
+    /// when its device is another program's
+    static func release(_ mnt: URL, runner: CommandRunner) {
+        if isBorrowed(mnt.deletingLastPathComponent()) {
+            MountPoint.unmount(mnt, runner: runner)
+        } else {
+            _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path], stdin: nil)
+        }
+    }
 
     static func recordOwner(in work: URL) {
         guard let me = ProcessIdentity.current, let data = try? JSONEncoder().encode(me) else { return }
@@ -132,21 +149,20 @@ public struct ArchiveReader: Sendable {
         // far as attaching a device. Left alone that debris compounds: a failed attach
         // makes the NEXT attach likelier to fail, until nothing will mount at all.
         var mountPoint: URL?
-        var attemptedImage: URL?          // so a device left behind by a failed attach can be found
         do {
             switch result.format {
             case .sealedDMG:
                 let dmg = try singleFile(result.artifacts, work: work, name: "reassembled.dmg", fm: fm)
                 let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-                mountPoint = mnt; attemptedImage = dmg
-                try attach(dmg, at: mnt, encrypted: enc, stdin: stdin)
-                return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: teardown) }
+                mountPoint = mnt
+                let borrowed = try attach(dmg, at: mnt, work: work, encrypted: enc, stdin: stdin)
+                return OpenedArchive(root: mnt, work: work) { Self.close(mnt, borrowed: borrowed, runner: teardown) }
 
             case .liveMirror:
                 let mnt = work.appendingPathComponent("mnt"); try fm.createDirectory(at: mnt, withIntermediateDirectories: true)
-                mountPoint = mnt; attemptedImage = result.artifacts[0]
-                try attach(result.artifacts[0], at: mnt, encrypted: enc, stdin: stdin)
-                return OpenedArchive(root: mnt, work: work) { Self.detach(mnt, runner: teardown) }
+                mountPoint = mnt
+                let borrowed = try attach(result.artifacts[0], at: mnt, work: work, encrypted: enc, stdin: stdin)
+                return OpenedArchive(root: mnt, work: work) { Self.close(mnt, borrowed: borrowed, runner: teardown) }
 
             case .sealedZip:
                 let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
@@ -161,14 +177,17 @@ public struct ArchiveReader: Sendable {
                 return OpenedArchive(root: ex, work: work) {}
             }
         } catch {
-            if let mnt = mountPoint { Self.detach(mnt, runner: teardown) }   // may be a no-op; cheap either way
-            if let image = attemptedImage { Self.detachOrphans(ofImage: image, runner: teardown) }
+            // may be a no-op; cheap either way. A failed attach's own devices were
+            // detached as it failed (see ImageLock.attaching).
+            if let mnt = mountPoint { Self.detach(mnt, runner: teardown) }
             OpenedArchive.removeWork(work)
             throw error
         }
     }
 
-    /// attach `image` read-only at `mnt`, or say plainly that it is already open.
+    /// attach `image` read-only at `mnt`, or say plainly that it is already open. True
+    /// when the volume is mounted on another program's device (see below), which
+    /// closing leaves attached.
     ///
     /// A second attach of an image that is already attached fails "Resource busy" in
     /// most cases (measured on macOS 26), which the busy retries then repeated for 13
@@ -179,23 +198,45 @@ public struct ArchiveReader: Sendable {
     /// Older macOS has been seen answering 0 without mounting anything. So the image
     /// is looked for in hdiutil info first, and an attach that mounted nothing here
     /// is caught too.
-    private func attach(_ image: URL, at mnt: URL, encrypted: Bool, stdin: Data?) throws {
+    ///
+    /// Held with nothing mounted (Disk Utility's First Aid, `hdiutil attach -nomount`,
+    /// a volume unmounted without ejecting its image), the image is someone else's
+    /// too: closing it used to detach the holder's disk, or a failed attach's cleanup
+    /// did. Read-only, its volume is mounted here and only unmounted on close; that
+    /// proves nothing about a passphrase, so an encrypted image held that way is
+    /// refused instead. Held read-write, the attach fails and is refused.
+    private func attach(_ image: URL, at mnt: URL, work: URL, encrypted: Bool, stdin: Data?) throws -> Bool {
         let look = runner.forTeardown
         MirrorMounts.releaseAbandoned(image, runner: look)       // a crashed process's attach
         try MirrorMounts.refuseIfOpen(image, runner: look)
-        try ImageLock.attaching(image, runner: runner) {
+        return try ImageLock.attaching(image, runner: runner) { before in
+            let held = DiskImageInUse(image: image.path, mountedAt: [], attachedWithoutMount: true)
+            if encrypted, !before.isEmpty { throw held }
             do {
                 try DiskImageGate.serialized {
                     try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
                 }
             } catch {
                 try MirrorMounts.refuseIfOpen(image, except: mnt, runner: look)   // opened by someone else meanwhile
+                // a system process scanning a fresh image holds it for a while and
+                // answers EAGAIN, which open waits out once more (see open)
+                if !before.isEmpty, !((error as? ArchiveError).map(Self.isTransient) ?? false) { throw held }
                 throw error
             }
             guard MountPoint.isMounted(mnt) else {
                 throw DiskImageInUse(image: image.path, mountedAt: MirrorMounts.mountPoints(of: image, runner: look))
             }
+            // the holder's disk, mounted here: marked before anything can crash, so a
+            // sweep unmounts it rather than detach it
+            guard let device = MountPoint.device(at: mnt), before.contains(device) else { return false }
+            FileManager.default.createFile(atPath: work.appendingPathComponent(OpenedArchive.borrowedFileName).path, contents: nil)
+            return true
         }
+    }
+
+    /// close what attach mounted at `mnt`
+    @Sendable static func close(_ mnt: URL, borrowed: Bool, runner: CommandRunner) {
+        if borrowed { MountPoint.unmount(mnt, runner: runner) } else { detach(mnt, runner: runner) }
     }
 
     /// a single file to operate on — the artifact itself, or split parts reassembled.
@@ -279,16 +320,22 @@ public struct ArchiveReader: Sendable {
     /// restore in the middle of its copy, or a mirror run in the middle of its rsync.
     /// And only while no attach of the image is under way (see ImageLock): one caught
     /// between attaching and mounting, or a check that attaches without mounting, has
-    /// a device with nothing mounted on it too. With an attach under way nothing is
-    /// detached; an orphan is left for the next attach, which detaches it.
+    /// a device with nothing mounted on it too.
+    ///
+    /// This one detaches every such device, whoever attached it, so Cryoframe itself
+    /// never calls it: an image attached by another program with nothing mounted (Disk
+    /// Utility, a command in Terminal) looks the same. Cryoframe's attaches clean up
+    /// through ImageLock.attaching, which spares every device there before it began.
     @Sendable static func detachOrphans(ofImage image: URL, runner: CommandRunner) {
         guard let lock = ImageLock.acquire(image) else { return }
         defer { lock.release() }
         detachOrphans(ofImage: image, runner: runner, holding: lock)
     }
 
-    /// detachOrphans, by one holding the image's lock
-    static func detachOrphans(ofImage image: URL, runner: CommandRunner, holding lock: ImageLock) {
+    /// detachOrphans, by one holding the image's lock, leaving `sparing` (the devices
+    /// attached before its own attach began) alone
+    static func detachOrphans(ofImage image: URL, runner: CommandRunner, holding lock: ImageLock,
+                              sparing: Set<String> = []) {
         guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"]), r.ok,
               let data = r.stdout.data(using: .utf8),
               let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
@@ -302,6 +349,8 @@ public struct ArchiveReader: Sendable {
             // whole-disk entries first: detaching one takes its partitions with it.
             let devices = entities.compactMap { $0["dev-entry"] as? String }
                 .sorted { $0.count < $1.count }
+            // one attach's devices: any of them there before makes them all someone else's
+            guard !devices.contains(where: sparing.contains) else { continue }
             // A detach issued during the contention that caused the failed attach is
             // itself likely to come back EAGAIN. Firing it once and discarding the
             // result leaves the orphan exactly where it was.
@@ -333,7 +382,7 @@ public struct ArchiveReader: Sendable {
         for e in entries where e.lastPathComponent.hasPrefix(OpenedArchive.workPrefix) || e.lastPathComponent.hasPrefix(MirrorMounts.prefix) {
             guard OpenedArchive.isAbandoned(e, now: now, isAlive: isAlive) else { continue }
             let mnt = e.appendingPathComponent("mnt")
-            if MountPoint.isMounted(mnt) { _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path]) }
+            if MountPoint.isMounted(mnt) { OpenedArchive.release(mnt, runner: runner) }
             OpenedArchive.removeWork(e)
         }
     }
