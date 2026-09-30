@@ -34,6 +34,8 @@ aid
 alarm
 alike
 all
+allow
+allows
 alone
 already
 always
@@ -45,7 +47,9 @@ any
 anything
 apart
 apfs
+apfsvolumeuuid
 app
+appeared
 apple
 applications
 apps
@@ -81,6 +85,7 @@ badge
 band
 bands
 battery
+bcdefghijklmnopqrstuvwxyz
 be
 because
 become
@@ -119,6 +124,7 @@ cf
 change
 changed
 changes
+characters
 chat
 check
 checked
@@ -144,6 +150,7 @@ cloudprovider
 cloudstorage
 com
 come
+comes
 comm
 command
 compact
@@ -152,6 +159,7 @@ compared
 complete
 completed
 computer
+confirmed
 connect
 connected
 connection
@@ -161,6 +169,7 @@ consistent
 contain
 container
 containers
+control
 copied
 copies
 copy
@@ -204,6 +213,7 @@ desktop
 dest
 destination
 destinationdir
+destinationinfo
 destinationrules
 destinations
 detach
@@ -217,6 +227,8 @@ did
 didn't
 different
 differs
+digits
+dir
 disk
 diskimages
 diskutil
@@ -230,6 +242,7 @@ does
 doesn't
 don't
 done
+dot
 double
 downloaded
 downloading
@@ -239,9 +252,11 @@ drive
 drive's
 drives
 dropbox
+ds
 during
 each
 earlier
+either
 eject
 ejecting
 else
@@ -266,6 +281,7 @@ everything
 examples
 exclamationmark
 exclude
+exfat
 exist
 exists
 exit
@@ -283,9 +299,11 @@ failed
 fails
 fake
 fat
+few
 fewer
 file
 files
+filesystemtype
 fill
 filled
 fills
@@ -330,8 +348,10 @@ get
 gets
 gfs
 gib
+give
 go
 goes
+gone
 good
 google
 googledrive
@@ -351,6 +371,7 @@ helper
 helperversion
 here
 hhmmss
+hidden
 history
 hold
 holding
@@ -390,6 +411,7 @@ instead
 int
 intact
 integrity
+internal
 internet
 interrupted
 into
@@ -434,6 +456,7 @@ least
 leaves
 left
 leftovers
+letters
 libraries
 library
 library's
@@ -451,6 +474,7 @@ lock
 locked
 locks
 logic
+long
 longer
 look
 looked
@@ -461,6 +485,8 @@ lptgode
 ls
 mac
 mac's
+machine
+machine's
 macl
 macos
 made
@@ -474,11 +500,13 @@ manual
 map
 mark
 marked
+marks
 master
 match
 may
 mb
 me
+meanwhile
 messages
 metadata
 mib
@@ -507,6 +535,7 @@ move
 moved
 movies
 ms
+msdos
 much
 music
 musicdb
@@ -638,6 +667,7 @@ reachable
 reached
 read
 readable
+reading
 readonly
 ready
 reason
@@ -682,6 +712,7 @@ retention
 rewrites
 right
 rlptgo
+roles
 room
 root
 rootless
@@ -746,6 +777,7 @@ somewhere
 sort
 source
 space
+spaces
 spare
 sparse
 sparsebundle
@@ -771,6 +803,7 @@ stdinpass
 still
 stop
 stopped
+store
 strerror
 string
 subject
@@ -843,6 +876,7 @@ unattended
 unavailable
 unchanged
 uncompressed
+undone
 unfinished
 unmount
 unmounted
@@ -868,6 +902,7 @@ using
 usr
 utf
 utility
+uuid
 value
 var
 verification
@@ -879,7 +914,9 @@ versions
 versionstamp
 volname
 volume
+volumename
 volumes
+volumeuuid
 wait
 waiting
 waits
@@ -917,6 +954,7 @@ worth
 would
 wouldn't
 writable
+writablevolume
 write
 writes
 writing
