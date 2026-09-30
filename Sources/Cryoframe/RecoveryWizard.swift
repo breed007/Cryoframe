@@ -41,10 +41,12 @@ final class RecoveryModel: ObservableObject {
         case notEncrypted, noKey, checking, unlocked, wrongKey
         /// a candidate that couldn't be tried now; tried at the restore
         case unchecked(String)
+        /// the archive itself is damaged, whatever the passphrase
+        case damaged(String)
         var canRestore: Bool {
             switch self {
             case .notEncrypted, .unlocked, .unchecked: return true
-            case .noKey, .checking, .wrongKey: return false
+            case .noKey, .checking, .wrongKey, .damaged: return false
             }
         }
     }
@@ -84,7 +86,7 @@ final class RecoveryModel: ObservableObject {
     /// encrypted libraries at this moment no recovered passphrase opens: they can't
     /// be restored
     var lockedOut: [String] {
-        selections.filter { let k = keyState($0); return k == .noKey || k == .wrongKey }.map(\.library)
+        selections.filter { !keyState($0).canRestore && keyState($0) != .checking && keyState($0) != .notEncrypted }.map(\.library)
     }
 
     func candidates(for library: String) -> [String] { PassphraseEscrow.candidates(for: library, in: entries) }
@@ -97,6 +99,7 @@ final class RecoveryModel: ObservableObject {
         case .opens: return .unlocked
         case .wrongKey: return .wrongKey
         case .unchecked(let why): return .unchecked(why)
+        case .damaged(let why): return .damaged(why)
         }
     }
 
@@ -111,7 +114,15 @@ final class RecoveryModel: ObservableObject {
         for (a, _) in todo { checking.insert(a.id) }
         Task {
             for (a, cands) in todo {
-                let found = await Task.detached { KeyCheck().firstOpening(a, candidates: cands) }.value
+                let found = await Task.detached { () -> (passphrase: String?, proof: KeyCheck.Proof) in
+                    let found = KeyCheck().firstOpening(a, candidates: cands)
+                    // Every passphrase refused: a damaged key area is refused the same way
+                    // as a wrong passphrase, and only the checksum tells the two apart.
+                    // Rather than blame the recovery file for a damaged archive, check.
+                    guard found.proof == .wrongKey,
+                          let report = try? ChecksumVerifier().reverify(archiveDir: a.dir), !report.passed else { return found }
+                    return (nil, .damaged("its checksum doesn't match the one recorded when it was made"))
+                }.value
                 keys[a.id] = KeyResult(passphrase: found.passphrase, proof: found.proof)
                 checking.remove(a.id)
             }
@@ -165,9 +176,13 @@ final class RecoveryModel: ObservableObject {
                 }
                 let state = keyState(s)
                 guard state.canRestore else {
-                    out.append(Outcome(library: lib, ok: false, detail: state == .wrongKey
-                                       ? "encrypted, and no passphrase in the recovery file opens this backup"
-                                       : "encrypted, and no passphrase was recovered", url: nil))
+                    let why: String
+                    switch state {
+                    case .wrongKey: why = "encrypted, and no passphrase in the recovery file opens this backup"
+                    case .damaged(let d): why = "this backup is damaged: \(d)"
+                    default: why = "encrypted, and no passphrase was recovered"
+                    }
+                    out.append(Outcome(library: lib, ok: false, detail: why, url: nil))
                     continue
                 }
                 stage = "\(lib): starting"
@@ -396,7 +411,7 @@ struct RecoveryWizard: View {
                 }
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.cryoElevated))
                 if !r.lockedOut.isEmpty {
-                    Text("\(r.lockedOut.count) encrypted \(r.lockedOut.count == 1 ? "library has" : "libraries have") no passphrase in the recovery file that opens \(r.lockedOut.count == 1 ? "it" : "them") — \(r.lockedOut.count == 1 ? "it" : "they") will be skipped.")
+                    Text("\(r.lockedOut.count) encrypted \(r.lockedOut.count == 1 ? "library" : "libraries") can't be opened (no passphrase in the recovery file opens \(r.lockedOut.count == 1 ? "it" : "them"), or the backup is damaged) — \(r.lockedOut.count == 1 ? "it" : "they") will be skipped.")
                         .font(.caption).foregroundStyle(.cryoWarn)
                 }
             }
@@ -674,6 +689,7 @@ struct RecoveryWizard: View {
         case .unlocked, .notEncrypted: Image(systemName: "lock.open.fill").foregroundStyle(.cryoGood)
         case .unchecked: Image(systemName: "key.fill").foregroundStyle(.secondary)
         case .noKey, .wrongKey: Image(systemName: "lock.fill").foregroundStyle(.cryoWarn)
+        case .damaged: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.cryoCrit)
         }
     }
 
@@ -685,6 +701,7 @@ struct RecoveryWizard: View {
         case .noKey: return "no passphrase in the recovery file"
         case .wrongKey: return "the recovery file's passphrase doesn't open it"
         case .unchecked(let why): return "passphrase found, not yet tried: \(why)"
+        case .damaged(let why): return "this backup is damaged: \(why)"
         }
     }
 

@@ -126,6 +126,8 @@ public struct KeyCheck: Sendable {
         case wrongKey
         /// not tried, and why; tried when the archive is restored
         case unchecked(String)
+        /// the archive isn't sound, whatever the passphrase: why
+        case damaged(String)
     }
 
     let runner: CommandRunner
@@ -158,6 +160,13 @@ public struct KeyCheck: Sendable {
         let look = runner.forTeardown
         guard MirrorMounts.attachedDevices(of: image, runner: look).isEmpty else {
             return .unchecked("it is open elsewhere on this Mac, so it is tried when it is restored")
+        }
+        // A damaged header makes an encrypted image attach as a plain raw disk, with any
+        // passphrase at all (measured: 8 zeroed bytes at the start). hdiutil reads the
+        // header without a passphrase; one it doesn't find encrypted is damaged.
+        if let r = try? look.run("/usr/bin/hdiutil", ["isencrypted", image.path], stdin: nil), r.ok,
+           r.stdout.contains("encrypted: NO") {
+            return .damaged("it doesn't read as an encrypted disk image any more, so it is damaged")
         }
         let before = MirrorMounts.allDevices(runner: look)
         let result: CommandResult
@@ -193,6 +202,7 @@ public struct KeyCheck: Sendable {
         for pass in candidates {
             switch check(archive, passphrase: pass) {
             case .opens: return (pass, .opens)
+            case .damaged(let why): return (nil, .damaged(why))
             case .wrongKey: continue
             case .unchecked(let why):
                 if unchecked == nil { unchecked = .unchecked(why) }
