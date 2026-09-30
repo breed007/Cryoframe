@@ -47,11 +47,12 @@ private func lookInside<T>(_ bundle: URL, _ body: (URL) throws -> T) throws -> T
 
 @Suite(.serialized) struct MirrorReadBackEdgeTests {
 
-    // The read-back compares every written file's data with the library, and the
-    // structure of everything else; it doesn't read extended attributes. A resource
-    // fork (or any attribute) is written through the same image and lost the same way
-    // when the drive fills for an instant. Here one is lost after rsync, same length,
-    // different bytes, and the run must not put that copy in place as a success.
+    // A resource fork (or any attribute) is written through the same image as the
+    // data and lost the same way when the drive fills for an instant. Here one is
+    // lost at the read-back's detach, after every copy and attribute pass (a loss
+    // right after rsync is now repaired by the run's own attribute pass, which
+    // proves nothing about the read-back): same length, different bytes. The run
+    // must not put that copy in place as a success.
     @Test func aResourceForkLostOnTheWayToTheDriveIsCaughtBeforeTheSwap() throws {
         let src = rbDir("forksrc").appendingPathComponent("Lib")
         try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
@@ -68,8 +69,13 @@ private func lookInside<T>(_ bundle: URL, _ body: (URL) throws -> T) throws -> T
         let fork2 = randomData(4096)
         #expect(fork2.withUnsafeBytes { setxattr(doc.path, "com.apple.ResourceFork", $0.baseAddress, 4096, 0, 0) } == 0)
         let loses = LosesAFork()
-        _ = try? SparseBundleMirrorEngine(sizeGB: 1, runner: loses, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        var failure: Error?
+        do { _ = try SparseBundleMirrorEngine(sizeGB: 1, runner: loses, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out) }
+        catch { failure = error }
         try #require(loses.lost, "no fork was lost, so this proves nothing")
+        guard case .readBackMismatch? = failure as? MirrorCopyError else {
+            Issue.record("a run that lost a fork wasn't failed by the read-back: \(String(describing: failure))"); return
+        }
 
         let inMirror = try lookInside(bundle) { xattr($0.appendingPathComponent("Lib/doc.txt"), "com.apple.ResourceFork") }
         #expect(inMirror == [UInt8](fork) || inMirror == [UInt8](fork2),
@@ -135,11 +141,12 @@ private func lookInside<T>(_ bundle: URL, _ body: (URL) throws -> T) throws -> T
 private final class LosesAFork: CommandRunner, @unchecked Sendable {
     let inner = ProcessCommandRunner()
     private(set) var lost = false
-    var forTeardown: CommandRunner { inner }
+    private var staging: URL?
+    var forTeardown: CommandRunner { self }      // the read-back detaches through the teardown runner
     func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
-        let r = try inner.run(launchPath, args, stdin: stdin)
-        if (launchPath as NSString).lastPathComponent == "rsync", !lost, r.ok, let dest = args.last {
-            let doc = URL(fileURLWithPath: dest).appendingPathComponent("doc.txt").path
+        let tool = (launchPath as NSString).lastPathComponent
+        if tool == "hdiutil", args.first == "detach", !lost, let staging {
+            let doc = staging.appendingPathComponent("doc.txt").path
             var junk = [UInt8](repeating: 0, count: 4096)
             arc4random_buf(&junk, 4096)
             // writing a fork moves the file's date; a lost write wouldn't, so put it back
@@ -149,6 +156,8 @@ private final class LosesAFork: CommandRunner, @unchecked Sendable {
                 lost = true
             }
         }
+        let r = try inner.run(launchPath, args, stdin: stdin)
+        if tool == "rsync", r.ok, staging == nil, let dest = args.last { staging = URL(fileURLWithPath: dest) }
         return r
     }
 }
