@@ -16,6 +16,14 @@
 //  written first: a crash between the two writes leaves jobs.json as it was, and
 //  what it holds wins over the other file.
 //
+//  The app and the scheduled agent both write these files: the app when a job is
+//  saved, the agent (and the app) when a run records what it found. Each write is a
+//  load, a change and a save, and two of them at once lost one change: a job saved
+//  while a run recorded its drive came back without the drive, or the run's record
+//  undid the edit. Every write goes through `update`, which holds a lock on a file
+//  beside jobs.json (flock(2), so it holds across processes) from the load to the
+//  save. Readers don't take it: each file is replaced whole, all at once.
+//
 
 import Foundation
 
@@ -37,8 +45,79 @@ public final class JobStore: @unchecked Sendable {
         url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + "-drives.json")
     }
 
+    /// the file `update` locks (see the top). Never removed: a lock is the inode, and
+    /// two processes locking two files of one name would each think it held it.
+    var lockURL: URL {
+        url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + ".lock")
+    }
+
+    /// how long `update` waits for the other process's write before going ahead: a
+    /// write takes milliseconds, so this is a process stopped while holding the lock
+    static let lockWait: TimeInterval = 30
+
     public func load() -> ScheduleState {
         lock.lock(); defer { lock.unlock() }
+        return read()
+    }
+
+    /// Replace everything with `state`. Only for a state that was loaded and changed
+    /// by someone who knows nothing else can be writing (tests, a migration); anything
+    /// else changes what it means to through `update`.
+    public func save(_ state: ScheduleState) {
+        update { $0 = state }
+    }
+
+    /// Load, change and save, with no other write in between, in this process or the
+    /// other one (see the top). `body` must not call the store: the lock isn't
+    /// reentrant. Nothing is written when `body` changes nothing.
+    @discardableResult
+    public func update<T>(_ body: (inout ScheduleState) throws -> T) rethrows -> T {
+        lock.lock(); defer { lock.unlock() }
+        let fd = takeFileLock()
+        defer { if fd >= 0 { flock(fd, LOCK_UN); close(fd) } }
+        var state = read()
+        let before = state
+        let result = try body(&state)
+        if state != before { write(state) }
+        return result
+    }
+
+    public func upsert(_ job: BackupJob) {
+        update { s in s.jobs.removeAll { $0.id == job.id }; s.jobs.append(job) }
+    }
+    public func remove(id: String) {
+        update { s in s.jobs.removeAll { $0.id == id }; s.lastRun[id] = nil; s.lastCopy[id] = nil }
+    }
+    public func recordRun(id: String, at date: Date) {
+        update { s in s.lastRun[id] = date }
+    }
+    /// record that each of `targetIDs` got a complete copy of `jobID`'s libraries
+    public func recordCopies(jobID: String, targetIDs: [String], at date: Date) {
+        guard !targetIDs.isEmpty else { return }
+        update { s in for t in targetIDs { s.lastCopy[jobID, default: [:]][t] = date } }
+    }
+    /// record the volume a destination set up before 1.6 is on, if none is recorded yet
+    public func recordVolume(jobID: String, targetID: String, _ volume: VolumeIdentity) {
+        update { s in
+            guard let j = s.jobs.firstIndex(where: { $0.id == jobID }),
+                  let t = s.jobs[j].targets.firstIndex(where: { $0.id == targetID }), s.jobs[j].targets[t].volume == nil else { return }
+            s.jobs[j].targets[t].volume = volume
+        }
+    }
+    /// record another drive a destination takes turns on (see Target.otherVolumes)
+    public func recordOtherVolume(jobID: String, targetID: String, _ volume: VolumeIdentity) {
+        update { s in
+            guard let j = s.jobs.firstIndex(where: { $0.id == jobID }),
+                  let t = s.jobs[j].targets.firstIndex(where: { $0.id == targetID }),
+                  s.jobs[j].targets[t].volume?.uuid != volume.uuid,
+                  !(s.jobs[j].targets[t].otherVolumes ?? []).contains(where: { $0.uuid == volume.uuid }) else { return }
+            s.jobs[j].targets[t].otherVolumes = (s.jobs[j].targets[t].otherVolumes ?? []) + [volume]
+        }
+    }
+
+    // MARK: files
+
+    private func read() -> ScheduleState {
         guard let data = try? Data(contentsOf: url),
               var state = try? JSONDecoder().decode(ScheduleState.self, from: data) else {
             return ScheduleState()
@@ -49,46 +128,25 @@ public final class JobStore: @unchecked Sendable {
         return state
     }
 
-    public func save(_ state: ScheduleState) {
-        lock.lock(); defer { lock.unlock() }
+    private func write(_ state: ScheduleState) {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? encoder.encode(DriveRecords(state)) { try? data.write(to: drivesURL, options: .atomic) }
         if let data = try? encoder.encode(state) { try? data.write(to: url, options: .atomic) }
     }
 
-    public func upsert(_ job: BackupJob) {
-        var s = load(); s.jobs.removeAll { $0.id == job.id }; s.jobs.append(job); save(s)
-    }
-    public func remove(id: String) {
-        var s = load(); s.jobs.removeAll { $0.id == id }; s.lastRun[id] = nil; save(s)
-    }
-    public func recordRun(id: String, at date: Date) {
-        var s = load(); s.lastRun[id] = date; save(s)
-    }
-    /// record that each of `targetIDs` got a complete copy of `jobID`'s libraries
-    public func recordCopies(jobID: String, targetIDs: [String], at date: Date) {
-        guard !targetIDs.isEmpty else { return }
-        var s = load()
-        for t in targetIDs { s.lastCopy[jobID, default: [:]][t] = date }
-        save(s)
-    }
-    /// record the volume a destination set up before 1.6 is on, if none is recorded yet
-    public func recordVolume(jobID: String, targetID: String, _ volume: VolumeIdentity) {
-        var s = load()
-        guard let j = s.jobs.firstIndex(where: { $0.id == jobID }),
-              let t = s.jobs[j].targets.firstIndex(where: { $0.id == targetID }), s.jobs[j].targets[t].volume == nil else { return }
-        s.jobs[j].targets[t].volume = volume
-        save(s)
-    }
-    /// record another drive a destination takes turns on (see Target.otherVolumes)
-    public func recordOtherVolume(jobID: String, targetID: String, _ volume: VolumeIdentity) {
-        var s = load()
-        guard let j = s.jobs.firstIndex(where: { $0.id == jobID }),
-              let t = s.jobs[j].targets.firstIndex(where: { $0.id == targetID }),
-              !(s.jobs[j].targets[t].otherVolumes ?? []).contains(where: { $0.uuid == volume.uuid }) else { return }
-        s.jobs[j].targets[t].otherVolumes = (s.jobs[j].targets[t].otherVolumes ?? []) + [volume]
-        save(s)
+    /// the lock file, locked, or -1 when it can't be opened or the wait ran out (the
+    /// write goes ahead: losing a write to a stuck process is worse than the race)
+    private func takeFileLock() -> Int32 {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let fd = open(lockURL.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { return -1 }
+        let deadline = Date().addingTimeInterval(Self.lockWait)
+        while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            guard errno == EWOULDBLOCK || errno == EINTR, Date() < deadline else { close(fd); return -1 }
+            usleep(5_000)
+        }
+        return fd
     }
 }
 
