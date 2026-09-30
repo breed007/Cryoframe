@@ -38,10 +38,7 @@ public struct RestoreDriller: Sendable {
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             for library in job.libraries {
                 var archives = LibraryFolders.archives(job: job, library: library, in: t.destinationDir)   // newest first
-                if latestOnly {
-                    var seen = Set<String>()
-                    archives = archives.filter { seen.insert($0.libraryName).inserted }
-                }
+                if latestOnly { archives = Array(archives.prefix(1)) }      // its newest version, or its mirror
                 for archive in archives {
                     // a drill restores the whole archive, so an evicted cloud placeholder
                     // would pull it all down — skip unless the user opted to download.

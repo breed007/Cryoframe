@@ -29,23 +29,60 @@ public enum LibraryFolders {
     }
 
     /// The folders at `destination` holding `library`'s backups for `job`, the one it
-    /// writes to first (if there is one yet), then a 1.5 folder of its name not yet
-    /// taken over. For reading: drills, checks, retention's view of what exists,
-    /// storage.
+    /// writes to first (if there is one yet), then any other folder of its name holding
+    /// archives of its (see `holdings`). For reading: drills, checks, retention's view
+    /// of what exists, storage.
     public static func folders(job: BackupJob, library: ContentType, in destination: URL) -> [URL] {
+        holdings(job: job, library: library, in: destination).map(\.folder)
+    }
+
+    /// every archive of `library` for `job` at `destination`, in all its folders, newest
+    /// first; of two without a version (mirrors), the one in its own folder first. So
+    /// the first is what a latest-only check looks at.
+    public static func archives(job: BackupJob, library: ContentType, in destination: URL) -> [RestorableArchive] {
+        holdings(job: job, library: library, in: destination).flatMap(\.archives).enumerated()
+            .sorted { a, b in
+                let (x, y) = (a.element.version ?? .distantPast, b.element.version ?? .distantPast)
+                return x != y ? x > y : a.offset < b.offset
+            }.map(\.element)
+    }
+
+    /// The folders holding `library`'s archives for `job`, and those archives.
+    ///
+    /// A job's archives are of its own kind: a mirror job's, the mirror at its folder's
+    /// top; a sealed job's, its versions. A 1.5 folder a mirror job and a sealed job
+    /// shared holds both until the versions have moved out, and the mirror job took
+    /// the versions for its own: a latest-only check picked the newest of them and
+    /// never looked at the mirror, and passed.
+    ///
+    /// Its own folders come first, whole. Then the folders of its name (where 1.5 and
+    /// 1.5.6 write it) that aren't its own: a 1.5 folder, or another job's folder that
+    /// 1.5.6 wrote into after a return to it. From those only archives whose bundle
+    /// is this library's are read, as a run tells whose they are before taking a
+    /// folder over (a custom folder "Photos" isn't the Photos library). A folder of
+    /// another library of this same job is never read: 1.5.6 doesn't run a job with
+    /// two libraries of one name. A 1.5 folder holding nothing is listed too.
+    static func holdings(job: BackupJob, library: ContentType, in destination: URL) -> [(folder: URL, archives: [RestorableArchive])] {
         let key = LibraryIdentity.key(job: job, library: library)
+        let mirror = !job.format.isSealed
+        func ofItsKind(_ a: RestorableArchive) -> Bool { mirror ? a.format == .liveMirror && a.version == nil : a.format != .liveMirror }
+        let roots = rootNames(of: library)
         let entries = listing(destination)
-        var out = entries.filter { $0.identity?.key == key }.map(\.url)
-        if let legacy = entries.first(where: { $0.identity == nil && LibraryNames.same($0.url.lastPathComponent, library.displayName) }) {
-            out.append(legacy.url)
+        var out: [(folder: URL, archives: [RestorableArchive])] = entries.filter { $0.identity?.key == key }
+            .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
+            .map { ($0.url, RestoreDiscovery.scan($0.url, maxDepth: 1).filter(ofItsKind)) }
+        for e in entries where e.identity?.key != key && e.identity?.jobID != job.id
+            && LibraryNames.same(e.url.lastPathComponent, library.displayName) {
+            let found = RestoreDiscovery.scan(e.url, maxDepth: 1)
+            let mine = found.filter { ofItsKind($0) && roots.contains($0.bundleName) }
+            if !mine.isEmpty || (e.identity == nil && found.isEmpty) { out.append((e.url, mine)) }
         }
         return out
     }
 
-    /// every archive of `library` for `job` at `destination`, in all its folders, newest first
-    public static func archives(job: BackupJob, library: ContentType, in destination: URL) -> [RestorableArchive] {
-        folders(job: job, library: library, in: destination).flatMap { RestoreDiscovery.scan($0, maxDepth: 1) }
-            .sorted { ($0.version ?? .distantPast) > ($1.version ?? .distantPast) }
+    /// the names of a library's folders on disk: what its archives' bundles are named
+    static func rootNames(of library: ContentType) -> Set<String> {
+        Set(library.paths.map { $0.liveURL(home: NSHomeDirectory()).lastPathComponent })
     }
 
     /// the folder a library's backups for `job` are written to, if there is one yet
@@ -160,8 +197,7 @@ public enum LibraryFolders {
         for job in jobs where job.targets.contains(where: { samePlace($0.destinationDir, destination) }) {
             for lib in job.libraries where LibraryNames.same(lib.displayName, name) {
                 if !bundles.isEmpty {
-                    let roots = Set(lib.paths.map { ($0.liveURL(home: NSHomeDirectory()).lastPathComponent) })
-                    guard !roots.isDisjoint(with: bundles) else { continue }
+                    guard !rootNames(of: lib).isDisjoint(with: bundles) else { continue }
                 }
                 let key = LibraryIdentity.key(job: job, library: lib)
                 if seen.insert(key).inserted { out.append(Claimant(key: key, mirror: !job.format.isSealed)) }
