@@ -62,7 +62,6 @@ attributes
 authentication
 available
 axo
-b
 back
 backed
 backing
@@ -91,7 +90,6 @@ busy
 but
 by
 bytes
-c
 caches
 called
 came
@@ -165,7 +163,6 @@ cryokeys
 cstring
 current
 cut
-d
 daily
 damaged
 data
@@ -219,7 +216,6 @@ drive
 drive's
 dropbox
 during
-e
 each
 earlier
 eject
@@ -255,7 +251,6 @@ extended
 external
 extra
 extract
-f
 fa
 fail
 failed
@@ -295,7 +290,6 @@ fseventsd
 fth
 full
 fully
-g
 garageband
 generic
 get
@@ -305,7 +299,6 @@ good
 google
 googledrive
 group
-h
 had
 hand
 hardware
@@ -331,7 +324,6 @@ hourminutesecond
 hours
 how
 human
-i
 icloud
 id
 identified
@@ -369,14 +361,12 @@ item
 items
 its
 itself
-j
 job
 job's
 jobs
 join
 joined
 json
-k
 keep
 keepparent
 keeps
@@ -385,7 +375,6 @@ key
 kind
 kmdlabel
 kmgt
-l
 large
 last
 lastalerted
@@ -421,7 +410,6 @@ lost
 low
 lptgode
 ls
-m
 mac
 macl
 macos
@@ -464,7 +452,6 @@ ms
 music
 musicdb
 musiclibrary
-n
 name
 named
 names
@@ -490,7 +477,6 @@ noverify
 now
 ntfy
 numbers
-o
 octagon
 of
 off
@@ -524,7 +510,6 @@ own
 owned
 owner
 owners
-p
 part
 partial
 parts
@@ -577,12 +562,10 @@ puppetstrings
 purgeable
 put
 puts
-q
 quarantine
 quick
 quiet
 quit
-r
 ran
 rdonly
 re
@@ -639,7 +622,6 @@ rsync
 run
 running
 runs
-s
 safely
 same
 saved
@@ -714,7 +696,6 @@ swapped
 switch
 sync
 system
-t
 tags
 taken
 target
@@ -759,7 +740,6 @@ try
 turned
 txt
 type
-u
 ubf
 udzo
 umount
@@ -787,7 +767,6 @@ users
 using
 usr
 utility
-v
 value
 var
 verification
@@ -799,7 +778,6 @@ versionstamp
 volname
 volume
 volumes
-w
 wait
 waiting
 waits
@@ -838,7 +816,6 @@ writes
 writing
 written
 wrong
-x
 xmark
 ya
 year
@@ -848,7 +825,6 @@ you're
 your
 yours
 yyyy
-z
 z'
 za
 zip

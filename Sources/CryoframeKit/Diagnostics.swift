@@ -63,8 +63,16 @@ public struct Redactor: Sendable {
             job folder destination external drive network share cloud this mac ntfy webhook
             bytes kb mb gb tb kib mib gib tib zero
             """))
-        return out
+        return out.filter(isVocabularyWord)
     }()
+
+    /// A word the vocabulary may hold: not a single letter other than "a". Every
+    /// letter was in it (from "%d" and "\n" in the source), and a name split into
+    /// pieces around its accents or another script ("Noël": "no", "l") was kept
+    /// piece by piece.
+    static func isVocabularyWord(_ word: String) -> Bool {
+        word.count > 1 || word == "a"
+    }
 
     /// the few words with a dot in them Cryoframe writes
     static let dottedWords: Set<String> = ["e.g", "i.e", "cryoframe-manifest.json", "info.plist"]
@@ -112,7 +120,7 @@ public struct Redactor: Sendable {
         }
         // 4. paths inside a library ("Saved/report.pdf")
         s = Self.replace(#"(?<![\w/\[~])[^\s/"'“”(),;:\[\]]+(?:/[^\s/"'“”(),;:\[\]]+)+/?"#, in: s) {
-            $0.hasPrefix("/") || $0 == "and/or" || $0 == "ntfy/webhook" ? $0 : "[path]"
+            $0.hasPrefix("/") || ["and/or", "ntfy/webhook"].contains($0) ? $0 : "[path]"
         }
         // 5. then only words Cryoframe or macOS write, and numbers, are kept
         return keepingKnownWords(s)
@@ -121,10 +129,13 @@ public struct Redactor: Sendable {
     /// every word that isn't Cryoframe's own, macOS's, a stand-in's, or a number,
     /// replaced by "[…]", and a run of those by one
     func keepingKnownWords(_ text: String) -> String {
-        let token = #"\[[^\[\]\s]+\]|/(?:usr|bin|sbin|System)/[^\s"'“”(),;:]+|[\p{L}\p{N}][\p{L}\p{N}'’_.\-]*"#
+        let token = #"\[[^\[\]\s]+\](?:['’]s\b)?|/(?:usr|bin|sbin|System)/[^\s"'“”(),;:]+|[\p{L}\p{N}][\p{L}\p{N}'’_.\-]*"#
         var out = Self.replace(token, in: text) { t in
-            if Self.placeholders.contains(t) || t.hasPrefix("/") { return t }
-            if t.hasPrefix("[") { return "[…]" }
+            if t.hasPrefix("/") { return t }
+            if t.hasPrefix("[") {       // a stand-in, possibly with its possessive ("[user]'s")
+                let bare = t.hasSuffix("s") && !t.hasSuffix("]") ? String(t.dropLast(2)) : t
+                return Self.placeholders.contains(bare) ? t : "[…]"
+            }
             return isKnown(t) ? t : "[…]"
         }
         out = Self.replace(#"\[…\](?:[\s,.;:'’\-]*\[…\])+"#, in: out) { _ in "[…]" }
@@ -137,12 +148,19 @@ public struct Redactor: Sendable {
         if t.isEmpty { return true }
         // numbers, sizes, dates and times, counts
         if t.range(of: #"^\d[\d.,:\-]*(?:%|[KMGT]i?B|[KMGT]|s|ms|h|x)?$"#, options: .regularExpression) != nil { return true }
+        // A letter outside ASCII: a name with an accent or in another script. The
+        // words are looked up by their ASCII letters only, so its pieces could be
+        // Cryoframe's words ("Noël": "no", "l") while the name as a whole is someone's.
+        // Cryoframe's own messages are in plain English.
+        if t.unicodeScalars.contains(where: { !$0.isASCII && CharacterSet.letters.contains($0) }) { return false }
         // a dot inside a word makes a file name ("Notes.pipe"), whatever its words
         if t.contains(".") { return Self.dottedWords.contains(t.lowercased()) }
         let parts = Self.words(in: t)
         guard !parts.isEmpty else { return false }        // digits mixed with other characters: an id, a name
         guard t.range(of: #"\d"#, options: .regularExpression) == nil else { return false }
-        return parts.allSatisfy { Self.productWords.contains($0) || Self.systemWords.contains($0) || standInWords.contains($0) }
+        return parts.allSatisfy {
+            Self.isVocabularyWord($0) && (Self.productWords.contains($0) || Self.systemWords.contains($0) || standInWords.contains($0))
+        }
     }
 
     static func replace(_ pattern: String, in text: String, with make: (String) -> String) -> String {

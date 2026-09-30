@@ -98,7 +98,9 @@ private func run(_ job: BackupJob, _ outcome: RunOutcomeKind, at: Date, summary:
             for m in literals.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                 let literal = (text as NSString).substring(with: m.range(at: 1))
                     .replacingOccurrences(of: #"\\\((?:[^()]|\([^()]*\))*\)"#, with: " ", options: .regularExpression)
-                for w in Redactor.words(in: literal) where !Redactor.productWords.contains(w) { missing.insert(w) }   // split as the script does
+                for w in Redactor.words(in: literal) where Redactor.isVocabularyWord(w) && !Redactor.productWords.contains(w) {
+                    missing.insert(w)   // split and filtered as the script does
+                }
             }
         }
         #expect(missing.isEmpty, "run scripts/diagnostics-vocabulary.py: missing \(missing.sorted())")

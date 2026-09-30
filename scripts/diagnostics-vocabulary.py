@@ -25,7 +25,11 @@ def words(text):
     for m in re.finditer(r'"((?:[^"\\\n]|\\.)*)"', text):
         literal = re.sub(r"\\\((?:[^()]|\([^()]*\))*\)", " ", m.group(1))
         for w in re.findall(r"[A-Za-z][A-Za-z'’]*", literal):
-            out.add(w.lower().replace("’", "'"))
+            w = w.lower().replace("’", "'")
+            # no single letters but "a" (Redactor.isVocabularyWord): they come from
+            # "%d" and "\n", and let a name split around an accent keep its pieces
+            if len(w) > 1 or w == "a":
+                out.add(w)
     return out
 
 def main():
