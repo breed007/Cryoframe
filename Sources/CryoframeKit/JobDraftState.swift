@@ -175,7 +175,7 @@ public struct JobDraftState: Sendable, Equatable {
         for job in existing where job.id != editingID && job.format.isSealed == isSealed {
             for t in selectedTargets where job.targets.contains(where: { Self.samePlace($0.destinationDir, t.destinationDir) }) {
                 for lib in selectedLibraries where job.libraries.contains(where: { LibraryNames.same($0.displayName, lib.displayName) }) {
-                    out.insert("“\(job.name)” already \(isSealed ? "archives" : "mirrors") \(lib.displayName) to \(t.displayName)")
+                    out.insert("“\(job.name)” already keeps \(isSealed ? "dated versions" : "an up-to-date copy") of \(lib.displayName) at \(t.displayName)")
                 }
             }
         }

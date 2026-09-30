@@ -161,7 +161,7 @@ public enum DriveRename {
 
     /// The names a new name mustn't take: every mounted volume's but this drive's,
     /// and every drive recorded for a job's destinations and folders but this one.
-    static func takenNames(except uuid: String, jobs: [BackupJob], volumes: VolumeTable) -> [String] {
+    public static func takenNames(except uuid: String, jobs: [BackupJob], volumes: VolumeTable) -> [String] {
         var out = volumes.mounted().filter { $0.uuid?.caseInsensitiveCompare(uuid) != .orderedSame }.map(\.name)
         for j in jobs {
             let ids = j.targets.flatMap { [$0.volume].compactMap { $0 } + ($0.otherVolumes ?? []) } + j.libraries.compactMap(\.volume)

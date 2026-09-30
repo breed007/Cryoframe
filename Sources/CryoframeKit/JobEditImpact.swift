@@ -15,7 +15,9 @@
 
 import Foundation
 
-public struct JobEditImpact: Sendable, Equatable {
+public struct JobEditImpact: Sendable, Equatable, Identifiable {
+    public var id: [Line] { lines }
+
     public struct Line: Sendable, Equatable, Hashable {
         public enum Kind: Sendable, Equatable, Hashable {
             /// folders or copies made

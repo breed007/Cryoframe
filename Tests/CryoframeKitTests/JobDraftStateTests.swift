@@ -199,7 +199,7 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
     let other = job(name: "Nightly", libraries: [photos], targets: [dest("x", "/Volumes/t7/backups/")])
     var d = draft()
     d.formatKind = "dmg"; d.selectedLibraryIDs = [photos.id]
-    #expect(d.destinationConflicts(existing: [other]) == ["“Nightly” already archives Photos to T7"])
+    #expect(d.destinationConflicts(existing: [other]) == ["“Nightly” already keeps dated versions of Photos at T7"])
     #expect(!d.isValid(existing: [other]))
 }
 
@@ -207,7 +207,7 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
     let other = job(name: "Live", libraries: [photos], targets: [t7], format: .liveMirror(sizeGB: 500))
     var d = draft()
     d.selectedLibraryIDs = [photos.id]
-    #expect(d.destinationConflicts(existing: [other]) == ["“Live” already mirrors Photos to T7"])
+    #expect(d.destinationConflicts(existing: [other]) == ["“Live” already keeps an up-to-date copy of Photos at T7"])
 }
 
 @Test func aSealedJobAndAMirrorMayShareAFolder() {
@@ -222,7 +222,7 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
     let other = job(name: "Work", libraries: [projects], targets: [t7])
     var d = draft()
     d.formatKind = "dmg"; d.selectedLibraryIDs = [otherProjects.id]
-    #expect(d.destinationConflicts(existing: [other]) == ["“Work” already archives projects to T7"])
+    #expect(d.destinationConflicts(existing: [other]) == ["“Work” already keeps dated versions of projects at T7"])
 }
 
 @Test func editingAJobNeverConflictsWithItself() {

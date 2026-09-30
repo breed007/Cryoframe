@@ -18,6 +18,7 @@ struct ContentView: View {
     @State private var showOnboarding = false
     @AppStorage("onboarding.completed") private var onboardingCompleted = false
     @State private var editingJob: BackupJob?
+    @State private var deletingJob: BackupJob?
     /// the window's content height, so the restore sheets can cover all of it
     @State private var contentHeight: CGFloat = 0
     @Environment(\.scenePhase) private var scenePhase
@@ -65,7 +66,7 @@ struct ContentView: View {
                                 .font(.caption).foregroundStyle(.tertiary)
                         }
                         VStack(spacing: 8) {
-                            ForEach(model.jobs) { JobRow(model: model, job: $0, onEdit: { editingJob = $0 }) }
+                            ForEach(model.jobs) { JobRow(model: model, job: $0, onEdit: { editingJob = $0 }, onDelete: { deletingJob = $0 }) }
                         }
                     }
                     .padding(.bottom, 2)      // room for the last row's shadow
@@ -83,8 +84,8 @@ struct ContentView: View {
         // the height the window has to be.
         .frame(minWidth: 600, minHeight: 620)
         .sheet(isPresented: $model.showNewJob) {
-            NewJobWizard(model: model, isPresented: $model.showNewJob,
-                         initialFolder: droppedFolder, initialLibraryID: model.newJobLibraryID)
+            JobEditor(model: model, isPresented: $model.showNewJob,
+                      initialFolder: droppedFolder, initialLibraryID: model.newJobLibraryID)
         }
         .onChange(of: model.showNewJob) { _, open in if !open { droppedFolder = nil; model.newJobLibraryID = nil } }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
@@ -96,9 +97,14 @@ struct ContentView: View {
             return true
         }
         .sheet(item: $editingJob) { job in
-            NewJobSheet(model: model,
-                        isPresented: Binding(get: { editingJob != nil }, set: { if !$0 { editingJob = nil } }),
-                        editing: job)
+            JobEditor(model: model,
+                      isPresented: Binding(get: { editingJob != nil }, set: { if !$0 { editingJob = nil } }),
+                      editing: job)
+        }
+        .sheet(item: $deletingJob) { job in
+            JobDeleteSheet(model: model, job: job,
+                           isPresented: Binding(get: { deletingJob != nil }, set: { if !$0 { deletingJob = nil } }),
+                           onDeleted: { deletingJob = nil })
         }
         .sheet(isPresented: $model.showHelp) {
             HelpView(isPresented: $model.showHelp, onReportProblem: {
@@ -220,7 +226,7 @@ struct ContentView: View {
         }
     }
 
-    /// shared by NewJobSheet — map a picked folder to a Data-volume LibraryPath.
+    /// shared by the job editor: map a picked folder to a Data-volume LibraryPath.
     static func libraryPath(for url: URL, home: String) -> LibraryPath {
         let p = url.path
         if p == home { return .home("") }
@@ -233,6 +239,7 @@ private struct JobRow: View {
     @ObservedObject var model: AppModel
     let job: BackupJob
     let onEdit: (BackupJob) -> Void
+    let onDelete: (BackupJob) -> Void
 
     private var isRunning: Bool { model.isRunning(job.id) }
     private var isQueued: Bool { model.isQueued(job.id) }
@@ -306,9 +313,8 @@ private struct JobRow: View {
                     }
                     Button(job.enabled ? "Disable schedule" : "Enable schedule") { model.setEnabled(job, !job.enabled) }
                     Divider()
-                    Button("Delete", role: .destructive) {
-                        Task { let r = await model.deleteJob(job, expected: await model.removalPlan(for: job)); _ = r }
-                    }.disabled(model.isBusy(job.id))
+                    Button("Delete…", role: .destructive) { onDelete(job) }
+                        .disabled(model.isBusy(job.id))
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
                 .accessibilityLabel("More actions for \(job.name)")

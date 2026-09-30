@@ -437,6 +437,55 @@ final class AppModel: ObservableObject {
             return true
         }
     }
+    // MARK: the job editor's looks at the destinations (off the main thread)
+
+    /// what saving `draft` does at the next backup (see JobEditImpact)
+    nonisolated func impact(of draft: JobDraftState) async -> JobEditImpact {
+        let checks = await MainActor.run { healthRecords }
+        return await Task.detached {
+            JobEditImpact.of(draft: draft.makeJob(), base: draft.base, checks: checks, pending: PendingTransferStore.standard().all())
+        }.value
+    }
+
+    /// what taking turns with the other drive of `target`'s name does (see DrivePairing)
+    nonisolated func pairing(_ target: Target, of job: BackupJob) async -> DrivePairing? {
+        let (jobs, checks) = await MainActor.run { (self.jobs, healthRecords) }
+        return await Task.detached { DrivePairing.look(target, job: job, jobs: jobs, checks: checks) }.value
+    }
+
+    /// what `job` has on its destinations (see JobFootprint)
+    nonisolated func footprint(of job: BackupJob) async -> JobFootprint {
+        await Task.detached { JobFootprint.measure(job) }.value
+    }
+
+    /// the names a drive may not be renamed to (see DriveRename)
+    func takenDriveNames(except uuid: String) -> [String] {
+        DriveRename.takenNames(except: uuid, jobs: jobs, volumes: SystemVolumeTable())
+    }
+
+    /// Rename the drive `uuid` and change `job` to match (see DriveRename). The job's
+    /// new saved state on success.
+    func renameDrive(_ uuid: String, to name: String, targetID: String, job: BackupJob) async -> Result<DriveRename.Outcome, DriveRename.Refusal> {
+        let store = self.store, locks = runLocks
+        let result: Result<DriveRename.Outcome, DriveRename.Refusal> = await Task.detached {
+            do {
+                return .success(try DriveRename.rename(uuid, to: name, targetID: targetID, jobID: job.id, store: store, locks: locks,
+                                                       pending: .standard(),
+                                                       isQueued: { id in DispatchQueue.main.sync { MainActor.assumeIsolated { self.queue.contains(id) } } }))
+            } catch let r as DriveRename.Refusal {
+                return .failure(r)
+            } catch {
+                return .failure(.unchecked(error.localizedDescription))
+            }
+        }.value
+        jobs = store.load().jobs
+        if case .success(let o) = result {
+            log("✎ \(job.name): the drive is now called “\(o.drive.name)”, and takes turns with the other one")
+            revalidate(); armWake()
+        }
+        return result
+    }
+
     /// What deleting `job` would do (see JobRemoval). Reads its destinations, so off
     /// the main thread.
     nonisolated func removalPlan(for job: BackupJob) async -> JobRemoval.Plan {
