@@ -94,6 +94,7 @@ public final class RunControl: @unchecked Sendable {
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = FileHandle.nullDevice   // never read, so never a pipe to fill
         guard (try? p.run()) != nil else { return [(root, "")] }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        try? pipe.fileHandleForReading.close()      // releasing the Pipe doesn't (see ProcessCommandRunner)
         _ = p.waitForExit()
         var children: [pid_t: [pid_t]] = [:]
         var comm: [pid_t: String] = [:]

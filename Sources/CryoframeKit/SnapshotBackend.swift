@@ -198,6 +198,12 @@ public struct ProcessCommandRunner: CommandRunner {
                     sink.append(chunk)
                     watch.printed(chunk.count)
                 }
+                // Close it here, once it has ended: releasing the Pipe doesn't (on
+                // macOS 26 its read end stays open), and a process that leaked two
+                // descriptors per tool ran out after about a hundred of them and could
+                // launch nothing more. The reader closes it, not the caller, which may
+                // give up on a tool stuck in the kernel while this read still waits.
+                try? handle.close()
                 drained.leave()
             }
         }
