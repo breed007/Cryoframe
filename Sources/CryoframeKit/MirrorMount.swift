@@ -68,6 +68,33 @@ public enum MirrorMounts {
         return out
     }
 
+    /// every device of `image` attached on this Mac, mounted or not (an attach with
+    /// -nomount has no mount point). Empty when it isn't attached, or when hdiutil
+    /// couldn't be asked.
+    public static func attachedDevices(of image: URL, runner: CommandRunner) -> [String] {
+        let target = image.resolvingSymlinksInPath().path
+        return attachedImages(runner: runner)
+            .filter { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == target }
+            .flatMap(\.devices)
+    }
+
+    /// every disk-image device attached on this Mac
+    public static func allDevices(runner: CommandRunner) -> Set<String> {
+        Set(attachedImages(runner: runner).flatMap(\.devices))
+    }
+
+    static func attachedImages(runner: CommandRunner) -> [(path: String, devices: [String])] {
+        guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"], stdin: nil), r.ok,
+              let data = r.stdout.data(using: .utf8),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let images = root["images"] as? [[String: Any]] else { return [] }
+        return images.compactMap { img in
+            guard let path = img["image-path"] as? String else { return nil }
+            let entities = img["system-entities"] as? [[String: Any]] ?? []
+            return (path, entities.compactMap { $0["dev-entry"] as? String })
+        }
+    }
+
     /// detach `image` from wherever a process that no longer exists left it attached:
     /// a mirror run (`cf-mirror-`) or a reader (`cf-open-`: a drill, a rehearsal, a
     /// restore), and tidy that process's directory. Only the app's launch sweep used

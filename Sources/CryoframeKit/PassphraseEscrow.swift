@@ -149,6 +149,17 @@ public struct KeyCheck: Sendable {
         }
         let image = archive.dir.appendingPathComponent(name)
         guard !isEvicted(image) else { return .unchecked("it is in a cloud folder and not downloaded, so it is tried when it is restored") }
+        // An image already attached (opened in Finder, as the recovery note says to,
+        // or by a drill, a check or a restore) attaches again read-only with ANY
+        // passphrase and hands back the holder's own disk, measured on macOS 26.7. That
+        // proves nothing, and detaching that disk pulled it from under its reader. So
+        // an image that is open anywhere isn't tried, and only a disk that wasn't
+        // attached before this attach is counted, or detached.
+        let look = runner.forTeardown
+        guard MirrorMounts.attachedDevices(of: image, runner: look).isEmpty else {
+            return .unchecked("it is open elsewhere on this Mac, so it is tried when it is restored")
+        }
+        let before = MirrorMounts.allDevices(runner: look)
         let result: CommandResult
         do {
             result = try DiskImageGate.serialized {
@@ -164,11 +175,12 @@ public struct KeyCheck: Sendable {
             return .unchecked(line.trimmingCharacters(in: .whitespaces))
         }
         // the first device listed is the image's own disk; detaching it detaches the rest
-        if let device = result.stdout.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }) {
-            let teardown = runner.forTeardown
-            if (try? teardown.runRetryingBusy("/usr/bin/hdiutil", ["detach", String(device)], stdin: nil))?.ok != true {
-                _ = try? teardown.run("/usr/bin/hdiutil", ["detach", "-force", String(device)], stdin: nil)
-            }
+        guard let device = result.stdout.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }).map(String.init),
+              !before.contains(device) else {
+            return .unchecked("it was opened elsewhere on this Mac while it was being tried, so it is tried when it is restored")
+        }
+        if (try? look.runRetryingBusy("/usr/bin/hdiutil", ["detach", device], stdin: nil))?.ok != true {
+            _ = try? look.run("/usr/bin/hdiutil", ["detach", "-force", device], stdin: nil)
         }
         return .opens
     }
