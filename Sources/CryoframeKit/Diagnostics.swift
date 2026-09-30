@@ -7,14 +7,24 @@
 //  said) and nothing about what is being backed up.
 //
 //  The report is public once it is attached, so it is built to hold no file name
-//  from a library, no path inside the home folder, no volume, job or folder name
-//  the user chose, no user or Mac name, and no passphrase, key, token or alert URL.
-//  Jobs, custom libraries and destinations are numbered instead ("job 1", "folder
-//  1", "destination 2 (external drive)"); the built-in library names (Photos, Mail)
-//  are the same on every Mac and stay. Error text passes through the Redactor, which
-//  knows every name above and recognizes paths, URLs and file names. It is a
-//  heuristic, so the app shows the report for reading before it is saved, and
-//  nothing is ever sent from here.
+//  from a library, no path, no volume, job or folder name the user chose, no user
+//  or Mac name, and no passphrase, key, token or alert URL. Jobs, custom libraries
+//  and destinations are numbered instead ("job 1", "folder 1", "destination 2
+//  (external drive)"); the built-in library names (Photos, Mail) are the same on
+//  every Mac and stay.
+//
+//  Free text (a run's error, a check's failure) is treated as untrusted. Matching
+//  what might be private can't be made complete: Mac file names are words with
+//  spaces between them, and a pattern can't tell "Board Minutes" from the message
+//  around it. So the Redactor works the other way round. After taking out what it
+//  recognizes (URLs, addresses, ids, paths, the names above), it keeps a word only
+//  if Cryoframe itself uses it in its messages (DiagnosticsVocabulary, generated
+//  from the source) or macOS does in its error messages, and numbers. Everything
+//  else becomes "[…]". A file name made only of such words keeps them, and
+//  says nothing about the file; what the report says a fix needs survives.
+//
+//  The app shows the report for reading before it is saved, and nothing is ever
+//  sent from here.
 //
 
 import Foundation
@@ -24,6 +34,8 @@ public struct Redactor: Sendable {
     /// exact strings and what they become, longest first
     let replacements: [(String, String)]
     let userWords: [String]
+    /// every word a stand-in above is made of
+    let standInWords: Set<String>
 
     /// - Parameters:
     ///   - names: known names (jobs, custom libraries, destinations, folders) and
@@ -32,44 +44,105 @@ public struct Redactor: Sendable {
     public init(names: [(String, String)], userWords: [String]) {
         replacements = names.filter { !$0.0.isEmpty }.sorted { $0.0.count > $1.0.count }
         self.userWords = userWords.filter { $0.count >= 2 }.sorted { $0.count > $1.count }
+        standInWords = Set(names.flatMap { Self.words(in: $0.1) })
     }
 
-    /// words of our own that hold a slash or look like a file name, left alone
-    static let ownWords: Set<String> = ["ntfy/webhook", "and/or", "read/write", "on/off", "cryoframe-manifest.json",
-                                        "Info.plist", "e.g.", "i.e.", "etc."]
+    /// what stands in for what was taken out
+    static let placeholders: Set<String> = ["[path]", "[url]", "[email]", "[user]", "[drive]", "[temp]", "[id]", "[address]", "[…]"]
+
+    /// words macOS itself writes in its error messages (strerror), and the tools and
+    /// phrases the command-line tools Cryoframe runs put in theirs
+    static let systemWords: Set<String> = {
+        var out: Set<String> = []
+        for code in 1..<120 { out.formUnion(words(in: String(cString: strerror(Int32(code))))) }
+        out.formUnion(words(in: """
+            hdiutil rsync openrsync ditto tmutil diskutil copyfile setxattr fsck_apfs mount_apfs cp split zipinfo
+            attach detach create convert compact resize verify failed error warning sender receiver opendir open
+            read write mkstempsock authentication resource busy temporarily unavailable invalid argument stat
+            lstat rename unlink mkdir chmod chown the disk image volume device file files folder
+            job folder destination external drive network share cloud this mac ntfy webhook
+            bytes kb mb gb tb kib mib gib tib zero
+            """))
+        return out
+    }()
+
+    /// the few words with a dot in them Cryoframe writes
+    static let dottedWords: Set<String> = ["e.g", "i.e", "cryoframe-manifest.json", "info.plist"]
+
+    /// the words of `text` as the vocabulary holds them: runs of ASCII letters and
+    /// apostrophes starting with a letter, lowercased (scripts/diagnostics-vocabulary.py
+    /// splits the same way)
+    static func words(in text: String) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: "[A-Za-z][A-Za-z'\u{2019}]*") else { return [] }
+        let ns = text as NSString
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
+            ns.substring(with: $0.range).lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        }
+    }
 
     public func redact(_ text: String) -> String {
         var s = text
-        // 1. URLs: an alert topic or a webhook's token lives in the path or query
+        // 1. URLs (an alert topic or a webhook's token lives in the path or query),
+        //    email addresses, ids, network addresses
         s = Self.replace(#"[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>)\]]+"#, in: s) { _ in "[url]" }
-        // 2. email addresses
         s = Self.replace(#"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"#, in: s) { _ in "[email]" }
-        // 3. paths under the home folder, on other drives, in temporary folders. A path
-        //    can hold spaces, so it runs to the next piece of punctuation that ends one.
-        //    (A name can hold an apostrophe: "Jane's T7".) The space before what ends
-        //    it stays.
-        let end = #"(?:[^\n"()\[\],;]|: (?=\S*/))*?(?=$|[\n"()\[\],;]|: | — | - )"#
+        s = Self.replace(#"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"#, in: s) { _ in "[id]" }
+        s = Self.replace(#"\b(?:\d{1,3}\.){3}\d{1,3}\b"#, in: s) { _ in "[address]" }
+        s = Self.replace(#"(?i)(?<![\w:])[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?![\w:])"#, in: s) {
+            // a time of day ("14:13:20") has neither hex letters nor "::"
+            $0.range(of: "[a-fA-F]|::", options: .regularExpression) == nil ? $0 : "[address]"
+        }
+        // 2. paths. A path can hold spaces (and an apostrophe: "Jane's T7"), so it runs
+        //    to the next piece of punctuation that ends one; the space before that
+        //    stays. The command-line tools keep their paths (/usr/bin/hdiutil): they
+        //    say which one failed, and hold nothing of the user's.
+        let end = #"(?:[^\n"“”()\[\],;]|: (?=\S*/))*?(?=$|[\n"“”()\[\],;]|: | — | - )"#
         func path(_ standIn: String) -> (String) -> String {
             { found in standIn + String(found.reversed().prefix(while: \.isWhitespace).reversed()) }
         }
         s = Self.replace(#"/Users/[^/\s"]+"# + "(?:/" + end + ")?", in: s, with: path("~/[path]"))
         s = Self.replace(#"/Volumes/[^/\n"]+"# + "(?:/" + end + ")?", in: s, with: path("/Volumes/[drive]/[path]"))
-        s = Self.replace(#"(?:/private)?/(?:var/folders|tmp)/"# + end, in: s, with: path("[temp]/[path]"))
+        s = Self.replace(#"(?:/private)?/(?:var|tmp)/"# + end, in: s, with: path("[temp]/[path]"))
         s = Self.replace(#"~/"# + #"(?!\[path\])"# + end, in: s, with: path("~/[path]"))
-        // 4. every name the user chose
+        s = Self.replace(#"(?<![\w/\]~])/(?!(?:usr|bin|sbin|System)/|Volumes/\[drive\])(?=[^\s/])"# + end, in: s, with: path("[path]"))
+        // 3. every name the user chose, and the user's own names and this Mac's
         for (name, standIn) in replacements { s = s.replacingOccurrences(of: name, with: standIn) }
-        // 5. the user's own names and this Mac's, as whole words
         for word in userWords {
             s = Self.replace("(?<![A-Za-z0-9])" + NSRegularExpression.escapedPattern(for: word) + "(?![A-Za-z0-9])", in: s) { _ in "[user]" }
         }
-        // 6. paths inside a library ("Saved/report.pdf"), and file names
-        s = Self.replace(#"(?<![\w/\[])[^\s/"'(),;:\[\]]+(?:/[^\s/"'(),;:\[\]]+)+/?"#, in: s) {
-            Self.ownWords.contains($0) ? $0 : "[path]"
+        // 4. paths inside a library ("Saved/report.pdf")
+        s = Self.replace(#"(?<![\w/\[~])[^\s/"'“”(),;:\[\]]+(?:/[^\s/"'“”(),;:\[\]]+)+/?"#, in: s) {
+            $0.hasPrefix("/") || $0 == "and/or" || $0 == "ntfy/webhook" ? $0 : "[path]"
         }
-        s = Self.replace(#"(?<![\w.\[/])[^\s/"'(),;:\[\]…]*[A-Za-z0-9_\-][.][A-Za-z][A-Za-z0-9]{0,11}(?![\w.])"#, in: s) {
-            Self.ownWords.contains($0) ? $0 : "[file]"
+        // 5. then only words Cryoframe or macOS write, and numbers, are kept
+        return keepingKnownWords(s)
+    }
+
+    /// every word that isn't Cryoframe's own, macOS's, a stand-in's, or a number,
+    /// replaced by "[…]", and a run of those by one
+    func keepingKnownWords(_ text: String) -> String {
+        let token = #"\[[^\[\]\s]+\]|/(?:usr|bin|sbin|System)/[^\s"'“”(),;:]+|[\p{L}\p{N}][\p{L}\p{N}'’_.\-]*"#
+        var out = Self.replace(token, in: text) { t in
+            if Self.placeholders.contains(t) || t.hasPrefix("/") { return t }
+            if t.hasPrefix("[") { return "[…]" }
+            return isKnown(t) ? t : "[…]"
         }
-        return s
+        out = Self.replace(#"\[…\](?:[\s,.;:'’\-]*\[…\])+"#, in: out) { _ in "[…]" }
+        return out
+    }
+
+    func isKnown(_ token: String) -> Bool {
+        var t = token
+        while let last = t.last, ".'’-_".contains(last) { t.removeLast() }
+        if t.isEmpty { return true }
+        // numbers, sizes, dates and times, counts
+        if t.range(of: #"^\d[\d.,:\-]*(?:%|[KMGT]i?B|[KMGT]|s|ms|h|x)?$"#, options: .regularExpression) != nil { return true }
+        // a dot inside a word makes a file name ("Notes.pipe"), whatever its words
+        if t.contains(".") { return Self.dottedWords.contains(t.lowercased()) }
+        let parts = Self.words(in: t)
+        guard !parts.isEmpty else { return false }        // digits mixed with other characters: an id, a name
+        guard t.range(of: #"\d"#, options: .regularExpression) == nil else { return false }
+        return parts.allSatisfy { Self.productWords.contains($0) || Self.systemWords.contains($0) || standInWords.contains($0) }
     }
 
     static func replace(_ pattern: String, in text: String, with make: (String) -> String) -> String {
@@ -198,7 +271,8 @@ public enum DiagnosticsReport {
         func add(_ line: String) { out.append(line) }
 
         add("Cryoframe diagnostics")
-        add("Made \(when(input.now)). Names of jobs, folders and destinations are replaced by numbers; paths and file names are removed.")
+        add("Made \(when(input.now)). Names of jobs, folders and destinations are replaced by numbers. Paths, file names and any other")
+        add("text Cryoframe didn't write itself are replaced by [path], […] and the like.")
         add("")
         add("App: \(input.appVersion)")
         add("Helper: \(input.helperVersion ?? "not installed or not answering")")

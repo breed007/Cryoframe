@@ -24,7 +24,7 @@ struct ReportProblemView: View {
                             subtitle: "A report to attach to a GitHub issue") { isPresented = false }
             Divider()
             VStack(alignment: .leading, spacing: 10) {
-                Text("This report holds versions, how your jobs are set up, and what recent backups and checks said. Names of jobs, folders and drives are replaced with numbers, and paths, file names, web addresses and passwords are left out. Read it through before you save it; nothing is sent anywhere.")
+                Text("This report holds versions, how your jobs are set up, and what recent backups and checks said. Names of jobs, folders and drives are replaced with numbers. Paths, file names, web addresses and anything else in a message that Cryoframe didn't write itself are replaced with [path], […] and the like, and passwords are never included. Read it through before you save it; nothing is sent anywhere.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 ScrollView {
                     Text(report.isEmpty ? "Gathering…" : report)
