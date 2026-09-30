@@ -414,10 +414,13 @@ public enum LibraryFolders {
         return canon(a) == canon(b)
     }
 
-    /// whether a disk image under `folder` is attached on this Mac
+    /// whether a disk image under `folder` is attached on this Mac. When hdiutil can't
+    /// be asked, or its answer can't be read, it may be: what this guards (a folder or
+    /// a drive renamed from under a reader) waits for an answer.
     public static func anyImageAttached(under folder: URL, runner: CommandRunner = ProcessCommandRunner()) -> Bool {
         let base = TMUtilSnapshotBackend.canonicalPath(folder.resolvingSymlinksInPath().path) + "/"
-        return MirrorMounts.attachedImages(runner: runner).contains {
+        guard let attached = MirrorMounts.attachedImagesIfKnown(runner: runner) else { return true }
+        return attached.contains {
             TMUtilSnapshotBackend.canonicalPath(URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path).hasPrefix(base)
         }
     }

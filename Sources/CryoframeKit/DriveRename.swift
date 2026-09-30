@@ -66,7 +66,7 @@ public enum DriveRename {
             case .readOnly(let n): "\(n) can't be written to, so it can't be renamed."
             case .inUse(let why): "It wasn't renamed: \(why). Try again once that's done."
             case .transferPending(let n): "It wasn't renamed: an interrupted upload is still to finish on \(n)."
-            case .imageAttached(let n): "It wasn't renamed: a disk image on \(n) is open. Close what's reading it, or eject it in Disk Utility."
+            case .imageAttached(let n): "It wasn't renamed: a disk image on \(n) is open, or whether one is can't be told. Close what's reading it, or eject it in Disk Utility, then try again."
             case .timeMachine(let n): "\(n) is a Time Machine drive. Rename it in Time Machine's settings, not here."
             case .invalidName(let why): why
             case .nameTaken(let n): "A drive named “\(n)” is already connected or known to your backups. Choose another name."
