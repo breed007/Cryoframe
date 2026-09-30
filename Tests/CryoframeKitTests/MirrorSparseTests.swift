@@ -53,7 +53,89 @@ private func syncLikeMacOS15(_ src: URL, into next: URL) throws {
     }
 }
 
+/// rsync as the openrsync of macOS 15 also runs it with -S: every file with holes it
+/// writes lands dense (CI's runner: a 1 GiB file holding 8 KB took 937 MB of the image)
+private func syncWritingSparseFilesDense(_ src: URL, into next: URL) throws {
+    let runner = ProcessCommandRunner()
+    try MirrorCopy.sync(src, into: next, runner: runner) { cmd in
+        let r = try runner.run(cmd.tool, cmd.args, stdin: nil)
+        guard r.ok else { throw ArchiveError.toolFailed(tool: cmd.tool, status: r.status, stderr: r.stderr) }
+        guard let walker = FileManager.default.enumerator(atPath: next.path) else { return }
+        while let rel = walker.nextObject() as? String {
+            let path = next.appendingPathComponent(rel).path
+            var st = stat()
+            guard lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG, off_t(st.st_blocks) * 512 < st.st_size,
+                  let data = FileManager.default.contents(atPath: path) else { continue }
+            chmod(path, (st.st_mode & 0o7777) | S_IWUSR)
+            let fd = open(path, O_WRONLY)
+            _ = data.withUnsafeBytes { pwrite(fd, $0.baseAddress, data.count, 0) }
+            var times = [st.st_atimespec, st.st_mtimespec]
+            _ = futimens(fd, &times)
+            close(fd)
+            chmod(path, st.st_mode & 0o7777)
+        }
+    }
+}
+
 @Suite(.serialized) struct MirrorSparseTests {
+
+    // Sparse files come out of a copier that writes them dense (macOS 15's openrsync)
+    // still sparse, whole and dated right, and a dense copy an earlier run left is
+    // made sparse again. Each way the sync runs: nothing read-only, a read-only file
+    // (a second pass), and a read-only file whose name holds a backslash.
+    @Test(arguments: ["plain", "readonly", "backslash"])
+    func sparseFilesStaySparseWhateverTheCopierWrites(_ variant: String) throws {
+        let base = folder("dense-\(variant)")
+        defer {
+            _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "u+rwx", base.path])
+            try? FileManager.default.removeItem(at: base)
+        }
+        let lib = base.appendingPathComponent("Lib"), next = base.appendingPathComponent("copy")
+        for d in [lib.appendingPathComponent("disks"), next] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        func sparseFile(_ url: URL, _ length: UInt64, data: [(UInt64, String)]) throws {
+            try #require(FileManager.default.createFile(atPath: url.path, contents: nil))
+            let fh = try FileHandle(forWritingTo: url)
+            try fh.truncate(atOffset: length)
+            for (at, text) in data { try fh.seek(toOffset: at); try fh.write(contentsOf: Data(text.utf8)) }
+            try fh.close()
+        }
+        let vm = lib.appendingPathComponent("disks/disk.img")
+        try sparseFile(vm, 256 << 20, data: [(0, "boot"), (100 << 20, "middle")])                 // ends in a hole
+        try sparseFile(lib.appendingPathComponent("tail.img"), 64 << 20, data: [((64 << 20) - 4, "end!")])
+        try Data("small".utf8).write(to: lib.appendingPathComponent("notes.txt"))
+        if variant != "plain" {
+            let locked = lib.appendingPathComponent(variant == "backslash" ? "old\\disk.img" : "locked.img")
+            try sparseFile(locked, 128 << 20, data: [(4096, "key")])
+            try FileManager.default.createDirectory(at: lib.appendingPathComponent("x"), withIntermediateDirectories: true)
+            try Data("plain".utf8).write(to: lib.appendingPathComponent(variant == "backslash" ? "x/a\\b.txt" : "x/ro.txt"))
+            #expect(chmod(locked.path, 0o444) == 0)
+            #expect(chmod(lib.appendingPathComponent(variant == "backslash" ? "x/a\\b.txt" : "x/ro.txt").path, 0o444) == 0)
+        }
+        func checkCopy(_ when: String) throws {
+            let found = try MirrorCopy.structure(of: next, against: lib, previous: nil, control: nil)
+            #expect(found.count == 0, "\(variant), \(when): \(found.examples)")
+            var held: off_t = 0
+            for rel in (FileManager.default.subpaths(atPath: next.path) ?? []) {
+                var st = stat()
+                if lstat(next.appendingPathComponent(rel).path, &st) == 0, st.st_mode & S_IFMT == S_IFREG { held += off_t(st.st_blocks) * 512 }
+            }
+            #expect(held < 8 << 20, "\(variant), \(when): the copy takes \(held >> 20) MB for about 20 KB of data")
+            for rel in ["disks/disk.img", "tail.img"] {
+                #expect(FileManager.default.contents(atPath: lib.appendingPathComponent(rel).path)
+                        == FileManager.default.contents(atPath: next.appendingPathComponent(rel).path), "\(variant), \(when): \(rel) differs")
+            }
+        }
+        try syncWritingSparseFilesDense(lib, into: next)
+        try checkCopy("first run")
+        // an earlier run's dense copy, as rsync left it on macOS 15 before this
+        let fd = open(next.appendingPathComponent("disks/disk.img").path, O_WRONLY)
+        let zeros = Data(count: 1 << 20)
+        for mb in stride(from: 1, to: 64, by: 1) where mb != 100 { _ = zeros.withUnsafeBytes { pwrite(fd, $0.baseAddress, zeros.count, off_t(mb) << 20) } }
+        var times = [timespec(), timespec()]; var st = stat(); lstat(vm.path, &st); times = [st.st_atimespec, st.st_mtimespec]
+        _ = futimens(fd, &times); close(fd)
+        try syncWritingSparseFilesDense(lib, into: next)
+        try checkCopy("after a dense copy")
+    }
 
     // Files that end in zeros, or are nothing but zeros, come out of a copier that
     // leaves their zero tails off (macOS 15's openrsync) at their full size and date,

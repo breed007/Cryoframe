@@ -324,15 +324,21 @@ enum MirrorCopy {
     /// files, they are left out of the -E pass, copied by a plain -a pass (which
     /// handles them), and given their attributes and ACL with copyfile(3).
     ///
+    /// Sparse files (a virtual machine's disk) are left out of rsync too and copied
+    /// with their holes by `copySparse`: the openrsync of macOS 15 writes a sparse
+    /// file out whole with -S (CI's runner: a 1 GiB file holding 8 KB took 937 MB of
+    /// the image), which the room check and the image's cap, counting what files take
+    /// on disk, don't allow for; a drive could fill in the middle of a run.
+    ///
     /// Named pipes, sockets and devices are left out (see `leftOut(in:)`), and any a
     /// copy made before this holds are taken out of it. Returns the ones left out.
     @discardableResult
     static func sync(_ source: URL, into next: URL, runner: CommandRunner,
                      execute: (Command) throws -> Void) throws -> [String] {
         let survey = survey(source)
-        let readOnly = survey.readOnly, leftOut = survey.leftOut
+        let readOnly = survey.readOnly, leftOut = survey.leftOut, sparse = survey.sparse
         defer { removeLeftOut(in: next) }
-        guard !readOnly.isEmpty || !leftOut.isEmpty else {
+        guard !readOnly.isEmpty || !leftOut.isEmpty || !sparse.isEmpty else {
             try execute(ArchivePlan.rsync(root: source, into: next))
             try matchSizesAndDates(from: source, to: next, control: runner.control)
             try matchAttributes(from: source, to: next, control: runner.control)
@@ -345,12 +351,12 @@ enum MirrorCopy {
         let exclude = lists.appendingPathComponent("exclude"), files = lists.appendingPathComponent("files")
         // NUL-separated (-0), so no name can break a line; excludes anchored to the
         // top of the transfer, with rsync's pattern characters escaped
-        try Data((readOnly + leftOut).map { "/" + escapedPattern($0) + "\0" }.joined().utf8).write(to: exclude)
+        try Data((readOnly + leftOut + sparse).map { "/" + escapedPattern($0) + "\0" }.joined().utf8).write(to: exclude)
         // "./" first: openrsync reads a --files-from line starting with "#" or ";" as a
         // comment, even NUL-separated, and skipped those files without a word
         try Data(readOnly.map { "./" + $0 + "\0" }.joined().utf8).write(to: files)
 
-        if (readOnly + leftOut).contains(where: { $0.contains("\\") }) {
+        if (readOnly + leftOut + sparse).contains(where: { $0.contains("\\") }) {
             // openrsync's filters can't match a backslash, escaped or not, so such a
             // file can't be left out of the -E pass. Then no filter at all: a plain
             // pass for everything (content, modes, deletions; without -D, so it passes
@@ -358,9 +364,10 @@ enum MirrorCopy {
             // and those, named one by one and without recursing (-a's -r, or naming the
             // library folder itself, would reach them again). The library folder's own
             // attributes and ACL go by copyfile, as the read-only files' do. Slower,
-            // and only for this.
+            // and only for this. (The plain pass writes a changed sparse file out
+            // whole; copySparse then puts it back with its holes.)
             let others = lists.appendingPathComponent("others")
-            try Data(everythingBut(readOnly + leftOut, in: source).map { "./" + $0 + "\0" }.joined().utf8).write(to: others)
+            try Data(everythingBut(readOnly + leftOut + sparse, in: source).map { "./" + $0 + "\0" }.joined().utf8).write(to: others)
             try execute(Command("/usr/bin/rsync", ["-rlptgo", "-S", "--delete", "--partial", source.path + "/", next.path + "/"]))
             try execute(Command("/usr/bin/rsync", ["-lptgoDE", "-S", "-0", "--files-from=\(others.path)", source.path + "/", next.path + "/"]))
             try copyAttributes(from: source, to: next)
@@ -370,8 +377,9 @@ enum MirrorCopy {
                 try execute(Command("/usr/bin/rsync", ["-a", "-S", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
             }
         }
+        try copySparse(sparse, from: source, to: next, control: runner.control)
         try matchSizesAndDates(from: source, to: next, control: runner.control)
-        for (i, rel) in readOnly.enumerated() {
+        for (i, rel) in (readOnly + sparse).enumerated() {
             if i % 256 == 0, runner.control?.isCancelled == true { throw CancelledError() }
             try copyAttributes(from: source.appendingPathComponent(rel), to: next.appendingPathComponent(rel))
         }
@@ -394,18 +402,107 @@ enum MirrorCopy {
         return type == S_IFIFO || type == S_IFSOCK || type == S_IFBLK || type == S_IFCHR
     }
 
-    /// the library's read-only regular files and the items left out of the mirror,
-    /// relative to it, in one walk
-    static func survey(_ root: URL) -> (readOnly: [String], leftOut: [String]) {
-        guard let walker = FileManager.default.enumerator(atPath: root.path) else { return ([], []) }
-        var readOnly: [String] = [], leftOut: [String] = []
+    /// the library's read-only regular files, its sparse files (see `isSparse`; not
+    /// counted as read-only, whatever their mode) and the items left out of the
+    /// mirror, relative to it, in one walk
+    static func survey(_ root: URL) -> (readOnly: [String], leftOut: [String], sparse: [String]) {
+        guard let walker = FileManager.default.enumerator(atPath: root.path) else { return ([], [], []) }
+        var readOnly: [String] = [], leftOut: [String] = [], sparse: [String] = []
         while let rel = walker.nextObject() as? String {
             var st = stat()
-            guard lstat(root.appendingPathComponent(rel).path, &st) == 0 else { continue }
+            let path = root.appendingPathComponent(rel).path
+            guard lstat(path, &st) == 0 else { continue }
             if isLeftOut(st.st_mode) { leftOut.append(rel); continue }
-            if st.st_mode & S_IFMT == S_IFREG, st.st_mode & S_IWUSR == 0 { readOnly.append(rel) }
+            guard st.st_mode & S_IFMT == S_IFREG else { continue }
+            if isSparse(path, st) { sparse.append(rel) } else if st.st_mode & S_IWUSR == 0 { readOnly.append(rel) }
         }
-        return (readOnly, leftOut)
+        return (readOnly, leftOut, sparse)
+    }
+
+    /// Whether a file is sparse enough to be worth copying with its holes: at least
+    /// 1 MiB long, taking less on disk than its length, with a hole before its end.
+    /// (A compressed file takes less on disk too, and has no hole.)
+    static func isSparse(_ path: String, _ st: stat) -> Bool {
+        guard st.st_size >= 1 << 20, off_t(st.st_blocks) * 512 < st.st_size else { return false }
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        let hole = lseek(fd, 0, SEEK_HOLE)
+        return hole >= 0 && hole < st.st_size
+    }
+
+    /// Copy each of `rels` (sparse files) from `source` into `next` with its holes,
+    /// unless the copy there already is this file: its size and date, and not more
+    /// than 1 MiB more on disk than the library's. A dense copy (made by rsync on
+    /// macOS 15, before this) is made sparse again.
+    static func copySparse(_ rels: [String], from source: URL, to next: URL, control: RunControl?) throws {
+        for rel in rels {
+            if control?.isCancelled == true { throw CancelledError() }
+            let from = source.appendingPathComponent(rel).path, to = next.appendingPathComponent(rel).path
+            var a = stat(), b = stat()
+            guard lstat(from, &a) == 0, a.st_mode & S_IFMT == S_IFREG else { continue }
+            if lstat(to, &b) == 0, b.st_mode & S_IFMT == S_IFREG, b.st_size == a.st_size,
+               b.st_mtimespec.tv_sec == a.st_mtimespec.tv_sec, b.st_mtimespec.tv_nsec == a.st_mtimespec.tv_nsec,
+               b.st_blocks <= a.st_blocks + 2048 { continue }
+            try copyWithHoles(from, to, a)
+        }
+    }
+
+    /// `from` copied to `to` as its data and holes: the copy is made its full length
+    /// (all hole), and only the ranges holding data are written. Made beside `to` and
+    /// renamed over it, so a failure leaves the copy as it was. Mode and dates follow;
+    /// attributes and the access list are copyAttributes'.
+    static func copyWithHoles(_ from: String, _ to: String, _ st: stat) throws {
+        func failed(_ what: String) -> Error {
+            ArchiveError.toolFailed(tool: "copy", status: errno,
+                                    stderr: "\((from as NSString).lastPathComponent): couldn't \(what) (\(String(cString: strerror(errno))))")
+        }
+        let fm = FileManager.default
+        var existing = stat()
+        if lstat(to, &existing) == 0, existing.st_mode & S_IFMT == S_IFDIR { try fm.removeItem(atPath: to) }
+        // a read-only folder, kept read-only by the clone: writable for the moment
+        let dir = (to as NSString).deletingLastPathComponent
+        var d = stat()
+        let locked = lstat(dir, &d) == 0 && d.st_mode & S_IWUSR == 0
+        if locked { chmod(dir, (d.st_mode & 0o7777) | S_IWUSR) }
+        defer { if locked { chmod(dir, d.st_mode & 0o7777) } }
+
+        let src = open(from, O_RDONLY)
+        guard src >= 0 else { throw failed("be read") }
+        defer { close(src) }
+        let tmp = dir + "/.cf-sparse-" + UUID().uuidString
+        let dst = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard dst >= 0 else { throw failed("be copied") }
+        var done = false
+        defer { close(dst); if !done { unlink(tmp) } }
+        guard ftruncate(dst, st.st_size) == 0 else { throw failed("be copied") }
+        let size = 1 << 20
+        let buffer = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 16)
+        defer { buffer.deallocate() }
+        var at: off_t = 0
+        while at < st.st_size {
+            let data = lseek(src, at, SEEK_DATA)
+            if data < 0 { if errno == ENXIO { break }; throw failed("be read") }
+            var end = lseek(src, data, SEEK_HOLE)
+            if end < 0 { end = st.st_size }
+            var pos = data
+            while pos < end {
+                let n = pread(src, buffer, min(size, Int(end - pos)), pos)
+                guard n > 0 else { throw failed("be read") }
+                var written = 0
+                while written < n {
+                    let w = pwrite(dst, buffer + written, n - written, pos + off_t(written))
+                    guard w > 0 else { throw failed("be copied") }
+                    written += w
+                }
+                pos += off_t(n)
+            }
+            at = end
+        }
+        var times = [st.st_atimespec, st.st_mtimespec]
+        guard fchmod(dst, st.st_mode & 0o7777) == 0, futimens(dst, &times) == 0 else { throw failed("be copied") }
+        guard rename(tmp, to) == 0 else { throw failed("be copied") }
+        done = true
     }
 
     /// items left out of the mirror, relative to `root`
