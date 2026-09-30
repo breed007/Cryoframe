@@ -42,7 +42,13 @@ final class RecoveryModel: ObservableObject {
     @Published var stage = ""
     @Published var results: [Outcome] = []
 
-    struct Outcome: Identifiable { let id = UUID(); let library: String; let ok: Bool; let detail: String; let url: URL? }
+    /// `clashed`: something was already where the library goes, and it was left
+    /// alone; the library can still be restored beside it (to `dest`)
+    struct Outcome: Identifiable {
+        let id = UUID(); let library: String; let ok: Bool; let detail: String; let url: URL?
+        var clashed: RestorableArchive? = nil
+        var dest: URL? = nil
+    }
 
     var moments: [Date] { RecoveryPlan.moments(in: archives) }
     var moment: Date? { moments.indices.contains(momentIndex) ? moments[momentIndex] : moments.last }
@@ -107,7 +113,7 @@ final class RecoveryModel: ObservableObject {
                 }
                 stage = "\(lib): starting"
                 let pass = s.archive.encrypted ? keys[lib] : nil
-                out.append(await Self.restoreOne(s.archive, library: lib, to: dest, passphrase: pass) { st in
+                out.append(await Self.restoreOne(s.archive, library: lib, to: dest, passphrase: pass, onClash: .refuse) { st in
                     Task { @MainActor in self.stage = "\(lib): \(st.rawValue)" }
                 })
             }
@@ -115,17 +121,43 @@ final class RecoveryModel: ObservableObject {
         }
     }
 
+    /// restore the libraries that met something already in place beside it, under a
+    /// new name, as the restore window does; what is there stays as it was
+    func restoreAlongside(_ which: [Outcome]) {
+        guard !running else { return }
+        let items = which.filter { $0.clashed != nil && $0.dest != nil }
+        guard !items.isEmpty else { return }
+        let keys = passphrases
+        running = true
+        Task {
+            for o in items {
+                guard let a = o.clashed, let dest = o.dest else { continue }
+                stage = "\(o.library): starting"
+                let redone = await Self.restoreOne(a, library: o.library, to: dest, passphrase: a.encrypted ? keys[o.library] : nil,
+                                                   onClash: .alongside) { st in
+                    Task { @MainActor in self.stage = "\(o.library): \(st.rawValue)" }
+                }
+                if let i = results.firstIndex(where: { $0.id == o.id }) { results[i] = redone }
+            }
+            running = false; stage = ""
+        }
+    }
+
     private nonisolated static func restoreOne(_ a: RestorableArchive, library: String, to dest: URL,
-                                               passphrase: String?,
+                                               passphrase: String?, onClash: RestoreClash,
                                                onStage: @escaping @Sendable (RestoreStage) -> Void) async -> Outcome {
         await Task.detached {
             do {
                 try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
                 // always verify: a recovery you can't trust is worse than none.
-                let url = try RestoreEngine().restore(a, to: dest, verify: true, passphrase: passphrase, onStage: onStage)
-                return Outcome(library: library, ok: true, detail: "restored to \(dest.path)", url: url)
+                let url = try RestoreEngine().restore(a, to: dest, verify: true, passphrase: passphrase, onClash: onClash, onStage: onStage)
+                let renamed = url.lastPathComponent != a.bundleName ? " as “\(url.lastPathComponent)”, beside what was there" : ""
+                return Outcome(library: library, ok: true, detail: "restored to \(dest.path)\(renamed)", url: url)
             } catch {
-                return Outcome(library: library, ok: false, detail: RestoreFailureText.recoveryMessage(error, encrypted: a.encrypted), url: nil)
+                var clash: RestorableArchive?
+                if case .destinationExists? = error as? RestoreError { clash = a }
+                return Outcome(library: library, ok: false, detail: RestoreFailureText.recoveryMessage(error, encrypted: a.encrypted),
+                               url: nil, clashed: clash, dest: dest)
             }
         }.value
     }
@@ -388,7 +420,7 @@ struct RecoveryWizard: View {
             }
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: "checkmark.shield.fill").foregroundStyle(.cryoGood).font(.callout)
-                Text("Each archive is verified before it's written. If one can't be opened, that library is skipped and reported — the rest still restore. Nothing already on this Mac is overwritten.")
+                Text("Each archive is verified before it's written. If one can't be opened, that library is skipped and reported — the rest still restore. Nothing already on this Mac is overwritten: where something is already in place, you can restore beside it instead.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if !r.results.isEmpty { resultsBlock }
@@ -440,7 +472,9 @@ struct RecoveryWizard: View {
         // volume correctly; use it rather than a third private copy of the rule.
         guard let free = JobExecutor.freeSpace(for: dest) else { return "" }
         let freeStr = ByteCountFormatter.string(fromByteCount: Int64(free), countStyle: .file)
-        return r.totalBytes > free ? "only \(freeStr) free — not enough room" : "\(freeStr) free"
+        // the same rule each restore applies before it starts (see RestoreRoom)
+        let short = RestoreRoom.refusal(bytes: r.totalBytes, free: free, volume: "", inPlace: false) != nil
+        return short ? "only \(freeStr) free — not enough room" : "\(freeStr) free"
     }
 
     private var resultsBlock: some View {
@@ -459,7 +493,17 @@ struct RecoveryWizard: View {
                     if let u = o.url {
                         Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([u]) }.buttonStyle(.link).font(.caption)
                     }
+                    if o.clashed != nil {
+                        Button("Restore alongside") { r.restoreAlongside([o]) }.buttonStyle(.link).font(.caption)
+                            .disabled(r.running)
+                            .help("Keep what's there, and restore this library beside it under a new name")
+                    }
                 }
+            }
+            let clashes = r.results.filter { $0.clashed != nil }
+            if clashes.count > 1 {
+                Button("Restore all \(clashes.count) alongside") { r.restoreAlongside(clashes) }
+                    .disabled(r.running)
             }
         }
     }

@@ -28,7 +28,12 @@ final class RestoreModel: ObservableObject {
     @Published var browseRoot: URL?                       // the opened tree to browse, drives the sheet
     private var opened: OpenedArchive?
 
-    struct Outcome: Identifiable { let id = UUID(); let name: String; let ok: Bool; let detail: String; let url: URL? }
+    /// `clashed`: the restore stopped because the name is taken in the destination,
+    /// and can be run again alongside it
+    struct Outcome: Identifiable {
+        let id = UUID(); let name: String; let ok: Bool; let detail: String; let url: URL?
+        var clashed: RestorableArchive? = nil
+    }
 
     /// the live location of a library by display name, if Cryoframe knows it — gates
     /// the restore-in-place option.
@@ -81,7 +86,7 @@ final class RestoreModel: ObservableObject {
             do {
                 // 1. restore + verify into a staging copy FIRST — the live library is
                 //    never touched until we have a good copy in hand.
-                let restored = try RestoreEngine().restore(a, to: staging, verify: true, passphrase: passphrase)
+                let restored = try RestoreEngine().restore(a, to: staging, verify: true, passphrase: passphrase, inPlace: true)
                 // 2. move the current library to the Trash (reversible).
                 if fm.fileExists(atPath: liveURL.path) { try fm.trashItem(at: liveURL, resultingItemURL: nil) }
                 // 3. swap the verified copy into the exact original location (also
@@ -112,14 +117,14 @@ final class RestoreModel: ObservableObject {
 
     /// restore one version as a copy into the chosen destination folder (never over
     /// the live library). The timeline's "Beside" action.
-    func restore(_ a: RestorableArchive) {
+    func restore(_ a: RestorableArchive, onClash: RestoreClash = .refuse) {
         guard let dest = destFolder, !running else { return }
         let pass = passphrase
         running = true; results = []
         Task {
             stage = "\(a.bundleName): starting"
             // always verify before writing — a restore you can't trust isn't a restore.
-            let o = await Self.restoreOne(a, to: dest, verify: true, passphrase: a.encrypted ? pass : nil) { s in
+            let o = await Self.restoreOne(a, to: dest, verify: true, passphrase: a.encrypted ? pass : nil, onClash: onClash) { s in
                 Task { @MainActor in self.stage = "\(a.bundleName): \(s.rawValue)" }
             }
             results = [o]; running = false; stage = ""
@@ -172,14 +177,29 @@ final class RestoreModel: ObservableObject {
         results = []
     }
 
+    /// what stands in the way of restoring `a` to where it would go, said before
+    /// anything starts: a drive too small for even the archive (see RestoreRoom)
+    func roomWarning(for a: RestorableArchive, inPlace: Bool) -> String? {
+        let dest = inPlace ? liveLocation(forLibraryNamed: a.libraryName)?.url.deletingLastPathComponent() : destFolder
+        guard let dest,
+              let refusal = RestoreRoom.refusal(bytes: a.bytes, free: JobExecutor.freeSpace(for: dest),
+                                                volume: RestoreRoom.volumeName(for: dest), inPlace: inPlace) else { return nil }
+        return RestoreFailureText.restoreMessage(refusal, encrypted: false)
+    }
+
     private nonisolated static func restoreOne(_ a: RestorableArchive, to dest: URL, verify: Bool, passphrase: String?,
+                                               onClash: RestoreClash,
                                                onStage: @escaping @Sendable (RestoreStage) -> Void) async -> Outcome {
         await Task.detached {
             do {
-                let url = try RestoreEngine().restore(a, to: dest, verify: verify, passphrase: passphrase, onStage: onStage)
-                return Outcome(name: a.bundleName, ok: true, detail: "copied to \(dest.lastPathComponent)", url: url)
+                let url = try RestoreEngine().restore(a, to: dest, verify: verify, passphrase: passphrase, onClash: onClash, onStage: onStage)
+                let renamed = url.lastPathComponent != a.bundleName ? " as “\(url.lastPathComponent)”" : ""
+                return Outcome(name: a.bundleName, ok: true, detail: "copied to \(dest.lastPathComponent)\(renamed)", url: url)
             } catch {
-                return Outcome(name: a.bundleName, ok: false, detail: RestoreFailureText.restoreMessage(error, encrypted: a.encrypted), url: nil)
+                var clash: RestorableArchive?
+                if case .destinationExists? = error as? RestoreError { clash = a }
+                return Outcome(name: a.bundleName, ok: false, detail: RestoreFailureText.restoreMessage(error, encrypted: a.encrypted),
+                               url: nil, clashed: clash)
             }
         }.value
     }
@@ -520,8 +540,12 @@ struct RestoreView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Restore \(activeLibrary ?? "") from \(relative(v.version))\(v.version.map { " · " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")")
                     .font(.callout)
+                if let warning = r.roomWarning(for: v, inPlace: effectiveMode == .inPlace) {
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2).foregroundStyle(.cryoWarn).lineLimit(3)
+                }
                 if effectiveMode == .inPlace {
-                    Text("Your live library moves to the Trash first, then this version is verified and swapped in.")
+                    Text("This version is verified and copied beside your live library, then swapped in; the live library moves to the Trash.")
                         .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 } else {
                     HStack(spacing: 4) {
@@ -543,6 +567,10 @@ struct RestoreView: View {
         } else if !r.results.isEmpty {
             if let url = r.results.first?.url {
                 Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            }
+            if let clashed = r.results.first?.clashed {
+                Button("Restore Alongside") { r.restore(clashed, onClash: .alongside) }
+                    .help("Keep what's there, and restore this version beside it under a new name, such as “\(clashed.bundleName) (2)”")
             }
             Button("Done") { r.results = [] }.buttonStyle(.borderedProminent)
         } else if let v = activeVersion {
