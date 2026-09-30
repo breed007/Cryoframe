@@ -36,11 +36,15 @@ private final class FakeProvider: @unchecked Sendable {
     }
 }
 
-/// notes, at each attach or extract, whether the archive was local by then
+/// notes, at each attach or extract, whether the archive was local by then. Its
+/// control carries the download's quiet limit (ArchiveReader takes it from there), and
+/// the tools run under `inner`'s own: a tight limit is for the simulated download,
+/// not for a real hdiutil on a slow machine (a CI runner's went quiet for 1.02 s).
 private struct Watching: CommandRunner {
     let inner: ProcessCommandRunner
     let provider: FakeProvider
-    var control: RunControl? { inner.control }
+    let download: RunControl
+    var control: RunControl? { download }
     var forTeardown: CommandRunner { inner.forTeardown }
     func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
         if args.first == "attach" || args.first == "-x" { provider.attaching() }
@@ -66,7 +70,7 @@ private func tempDir(_ tag: String) -> URL {
         try Data("inside".utf8).write(to: src.appendingPathComponent("a.txt"))
         let result = try SealedArchiveEngine(.dmg).archive(ArchiveSource(name: "Lib", root: src), to: out)
         let provider = FakeProvider(seconds: 3)
-        let runner = Watching(inner: ProcessCommandRunner(quietLimit: 1), provider: provider)
+        let runner = Watching(inner: ProcessCommandRunner(quietLimit: 30), provider: provider, download: RunControl(quietLimit: 1))
         let opened = try ArchiveReader(runner: runner, workBase: work, cloud: provider.download).open(result)
         defer { opened.close() }
         #expect(provider.fetchedBeforeAttach == true, "the tool read the archive before it was downloaded")
