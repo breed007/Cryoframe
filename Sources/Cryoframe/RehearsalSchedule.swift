@@ -44,7 +44,7 @@ enum RehearsalSchedule {
         let jobs = CheckRound.jobs(store.load().jobs, due: due, pending: pending)
         guard !jobs.isEmpty else { return [] }
         let (records, busy) = run(store: store, now: now, jobs: Set(jobs.map(\.id)), wait: 30, trigger: "scheduled")
-        UserDefaults.standard.set(busy.map(\.id), forKey: Prefs.rehearsalPending)
+        UserDefaults.standard.set(busy.map(\.job.id), forKey: Prefs.rehearsalPending)
         if due { UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Prefs.lastRehearsal) }
         return records
     }
@@ -53,12 +53,13 @@ enum RehearsalSchedule {
     /// Each job is rehearsed holding its run lock; `busy` are the ones a run held
     /// throughout `wait`, not rehearsed.
     static func run(store: JobStore, now: Date, jobs jobIDs: Set<String>? = nil, wait: TimeInterval = 0,
-                    trigger: String = "manual", locks: RunLocks = .standard()) -> (records: [HealthRecord], busy: [BackupJob]) {
+                    trigger: String = "manual", locks: RunLocks = .standard())
+        -> (records: [HealthRecord], busy: [(job: BackupJob, holder: RunHolder?)]) {
         let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
         let healthStore = HealthStore.standard()
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
         var written: [HealthRecord] = []
-        var busy: [BackupJob] = []
+        var busy: [(job: BackupJob, holder: RunHolder?)] = []
 
         for job in store.load().jobs where jobIDs?.contains(job.id) ?? true {
             let resolved = job.resolvingLibraries(in: registry)
@@ -79,7 +80,10 @@ enum RehearsalSchedule {
                 }
                 return checks
             }
-            guard case .done(let checks) = rehearsed else { busy.append(job); continue }
+            guard case .done(let checks) = rehearsed else {
+                if case .busy(let holder) = rehearsed { busy.append((job, holder)) } else { busy.append((job, nil)) }
+                continue
+            }
             let record = HealthRecord.from(job: resolved, report: HealthReport(checks: checks),
                                            at: now, kind: "rehearsal",
                                            trigger: trigger)

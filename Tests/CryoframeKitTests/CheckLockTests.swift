@@ -69,7 +69,7 @@ private func lockDir() -> URL {
                 Issue.record("a run started during a check")
             } catch RunLockError.alreadyRunning(let holder) {
                 #expect(holder.trigger == .check)
-                #expect(holder.deferralReason == "this job's archives were being checked — it runs at the next check")
+                #expect(holder.deferralReason == "this job's archives were being checked — it runs at the schedule's next hourly pass")
                 #expect(RunLockError.alreadyRunning(holder).localizedDescription.hasPrefix("its archives are being checked"))
             } catch {
                 Issue.record("\(error)")
@@ -87,5 +87,25 @@ private func lockDir() -> URL {
         #expect(CheckRound.jobs(all, due: true, pending: ["b"]).map(\.id) == ["a", "b", "c"])
         #expect(CheckRound.jobs(all, due: false, pending: ["b"]).map(\.id) == ["b"])
         #expect(CheckRound.jobs(all, due: false, pending: []).isEmpty)
+    }
+
+    // A check that can't start says what holds the job, not always "a backup".
+    @Test func aRefusedCheckSaysWhatHoldsTheJob() throws {
+        let locks = RunLocks(directory: lockDir())
+        defer { try? FileManager.default.removeItem(at: locks.directory) }
+        for (trigger, doing) in [(RunHolder.Trigger.manual, "a backup of this job is running"),
+                                 (.scheduled, "a backup of this job is running"),
+                                 (.resume, "an interrupted transfer of this job is finishing"),
+                                 (.cleanup, "this job's leftovers are being tidied"),
+                                 (.check, "this job's archives are already being checked")] {
+            let lease = try locks.acquire(jobID: "job", trigger: trigger)
+            guard case .busy(let holder) = locks.whileChecking(jobID: "job", { () }) else { Issue.record("\(trigger) didn't hold it"); lease.release(); continue }
+            #expect(holder.busyDoing == doing, "\(trigger)")
+            lease.release()
+        }
+        for t in [RunHolder.Trigger.resume, .cleanup, .check] {
+            let reason = RunHolder(pid: 1, trigger: t, runID: "r", startedAt: Date()).deferralReason ?? ""
+            #expect(reason.hasSuffix("it runs at the schedule's next hourly pass") && !reason.contains("next check"), "\(reason)")
+        }
     }
 }

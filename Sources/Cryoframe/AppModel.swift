@@ -203,7 +203,7 @@ final class AppModel: ObservableObject {
             await MainActor.run {
                 self.verifyingJobIDs.remove(job.id)
                 for r in records { self.applyHealth(r) }
-                if !busy.isEmpty { self.log(Self.busyCheckLine(job.name)) }
+                if let b = busy.first { self.log(Self.busyCheckLine(job.name, holder: b.holder)) }
             }
         }
     }
@@ -232,15 +232,15 @@ final class AppModel: ObservableObject {
     private func applyChecked(_ checked: CheckUnderLock<HealthReport>, job: BackupJob, kind: String) {
         switch checked {
         case .done(let report): applyHealth(HealthRecord.from(job: job, report: report, at: Date(), kind: kind))
-        case .busy: log(Self.busyCheckLine(job.name))
+        case .busy(let holder): log(Self.busyCheckLine(job.name, holder: holder))
         case .unavailable(let why): log("⚠︎ \(job.name): its archives weren't checked — \(why)")
         }
     }
 
     /// A check reads the newest version, so it waits for a run writing one: while a
     /// run holds the job, the check isn't made.
-    static func busyCheckLine(_ name: String) -> String {
-        "⏸ \(name): a backup of this job is running, so its archives weren't checked — check again once it's done"
+    static func busyCheckLine(_ name: String, holder: RunHolder?) -> String {
+        "⏸ \(name): \(holder?.busyDoing ?? "it couldn't be told whether a backup of this job is running"), so its archives weren't checked — check again once it's done"
     }
 
     /// run a restore drill: reassemble, mount/extract, and reopen each archive — proves

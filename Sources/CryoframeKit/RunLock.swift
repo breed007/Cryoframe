@@ -48,12 +48,25 @@ public struct RunHolder: Codable, Sendable, Equatable {
     public var isRun: Bool { trigger == .manual || trigger == .scheduled || trigger == .unknown }
 
     /// why a scheduled run waits while this chore holds its job; nil for a run.
+    /// ("The next check" used to mean the agent's hourly look, which read as an
+    /// archive check once checks took the lock too.)
     public var deferralReason: String? {
+        let later = "it runs at the schedule's next hourly pass"
         switch trigger {
-        case .resume:  "an interrupted transfer of this job is still finishing — it runs at the next check"
-        case .cleanup: "this job's leftovers were being tidied — it runs at the next check"
-        case .check:   "this job's archives were being checked — it runs at the next check"
-        case .manual, .scheduled, .unknown: nil
+        case .resume:  return "an interrupted transfer of this job is still finishing — \(later)"
+        case .cleanup: return "this job's leftovers were being tidied — \(later)"
+        case .check:   return "this job's archives were being checked — \(later)"
+        case .manual, .scheduled, .unknown: return nil
+        }
+    }
+
+    /// what the holder is doing, for a message about something that couldn't start
+    public var busyDoing: String {
+        switch trigger {
+        case .manual, .scheduled, .unknown: "a backup of this job is running"
+        case .resume:  "an interrupted transfer of this job is finishing"
+        case .cleanup: "this job's leftovers are being tidied"
+        case .check:   "this job's archives are already being checked"
         }
     }
 
