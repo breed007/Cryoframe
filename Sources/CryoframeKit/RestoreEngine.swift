@@ -96,6 +96,15 @@ public enum RestoreRoom {
         return url.lastPathComponent
     }
 
+    /// What a restore of `archive` needs at the least, known before it is opened: a
+    /// sealed archive's size (compression only shrinks). nil for a mirror, whose
+    /// archive is its disk image, which weighs more than its library (the image's own
+    /// file system, and room a shrunk library left behind): 4 MB of library in a
+    /// 47 MB image was refused with room to spare. A mirror is measured once open.
+    public static func floor(for archive: RestorableArchive) -> UInt64? {
+        archive.format == .liveMirror ? nil : archive.bytes
+    }
+
     /// bytes the items take up on disk, folders walked
     static func bytes(of items: [URL]) -> UInt64 {
         items.reduce(0) { sum, item in
@@ -237,8 +246,8 @@ public struct RestoreEngine: Sendable {
                 throw refusal
             }
         }
-        // before reading anything: the library is at least as big as its archive
-        try checkRoom(archive.bytes)
+        // before reading anything: a sealed archive's library is at least as big as it
+        if let floor = RestoreRoom.floor(for: archive) { try checkRoom(floor) }
 
         if verify {
             onStage(.verifying)

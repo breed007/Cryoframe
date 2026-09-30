@@ -177,14 +177,30 @@ final class RestoreModel: ObservableObject {
         results = []
     }
 
-    /// what stands in the way of restoring `a` to where it would go, said before
-    /// anything starts: a drive too small for even the archive (see RestoreRoom)
-    func roomWarning(for a: RestorableArchive, inPlace: Bool) -> String? {
+    /// the warning for the version and place last looked at (see checkRoom)
+    @Published var roomWarning: (key: String, text: String?)?
+
+    /// the key the view looks the warning up by: the version, where it goes, and how
+    func roomKey(for a: RestorableArchive, inPlace: Bool) -> String {
+        "\(a.id)|\(inPlace)|\(destFolder?.path ?? "")"
+    }
+
+    /// What stands in the way of restoring `a` to where it would go, said before
+    /// anything starts: a drive too small for even a sealed archive (see RestoreRoom).
+    /// Read off the main thread, once per version and place: asking a share that
+    /// doesn't answer for its free space can take a long time, and this used to be
+    /// asked on every redraw of the window.
+    func checkRoom(for a: RestorableArchive, inPlace: Bool) async {
+        let key = roomKey(for: a, inPlace: inPlace)
+        guard roomWarning?.key != key else { return }
         let dest = inPlace ? liveLocation(forLibraryNamed: a.libraryName)?.url.deletingLastPathComponent() : destFolder
-        guard let dest,
-              let refusal = RestoreRoom.refusal(bytes: a.bytes, free: JobExecutor.freeSpace(for: dest),
-                                                volume: RestoreRoom.volumeName(for: dest), inPlace: inPlace) else { return nil }
-        return RestoreFailureText.restoreMessage(refusal, encrypted: false)
+        guard let dest, let floor = RestoreRoom.floor(for: a) else { roomWarning = (key, nil); return }
+        let text = await Task.detached { () -> String? in
+            guard let refusal = RestoreRoom.refusal(bytes: floor, free: JobExecutor.freeSpace(for: dest),
+                                                    volume: RestoreRoom.volumeName(for: dest), inPlace: inPlace) else { return nil }
+            return RestoreFailureText.restoreMessage(refusal, encrypted: false)
+        }.value
+        if roomKey(for: a, inPlace: inPlace) == key { roomWarning = (key, text) }
     }
 
     private nonisolated static func restoreOne(_ a: RestorableArchive, to dest: URL, verify: Bool, passphrase: String?,
@@ -542,7 +558,7 @@ struct RestoreView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Restore \(activeLibrary ?? "") from \(relative(v.version))\(v.version.map { " · " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")")
                     .font(.callout)
-                if let warning = r.roomWarning(for: v, inPlace: effectiveMode == .inPlace) {
+                if let w = r.roomWarning, w.key == r.roomKey(for: v, inPlace: effectiveMode == .inPlace), let warning = w.text {
                     Label(warning, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2).foregroundStyle(.cryoWarn).lineLimit(3)
                 }
@@ -558,6 +574,7 @@ struct RestoreView: View {
                     }
                 }
             }
+            .task(id: r.roomKey(for: v, inPlace: effectiveMode == .inPlace)) { await r.checkRoom(for: v, inPlace: effectiveMode == .inPlace) }
         } else {
             Text("Select a version to restore.").font(.callout).foregroundStyle(.secondary)
         }

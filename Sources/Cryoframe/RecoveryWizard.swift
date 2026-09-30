@@ -253,6 +253,7 @@ struct RecoveryWizard: View {
     @Binding var isPresented: Bool
     @StateObject private var r = RecoveryModel()
     @State private var step = 0
+    @State private var freeSpaceText = ""
 
     private let titles = ["Find backups", "Unlock", "Point in time", "Review"]
 
@@ -497,10 +498,11 @@ struct RecoveryWizard: View {
                 destinationRow
                 Divider()
                 reviewRow("Size", ByteCountFormatter.string(fromByteCount: Int64(r.totalBytes), countStyle: .file),
-                          detail: freeSpaceLine)
+                          detail: freeSpaceText)
             }
             .background(RoundedRectangle(cornerRadius: 11).fill(Color.cryoElevated))
             .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(Color.cryoLine, lineWidth: 1))
+            .task(id: "\(r.toOriginalLocations)|\(r.customFolder?.path ?? "")|\(r.momentIndex)") { freeSpaceText = await freeSpaceLine() }
 
             if !r.lockedOut.isEmpty {
                 noticeBox(icon: "lock.fill", tint: .cryoWarn,
@@ -548,21 +550,27 @@ struct RecoveryWizard: View {
         .padding(.vertical, 10).padding(.horizontal, 13)
     }
 
-    private var freeSpaceLine: String {
+    /// Read off the main thread, once per destination and moment: a folder on a share
+    /// that doesn't answer can take a long time to say how much room it has.
+    private func freeSpaceLine() async -> String {
         let dest = r.toOriginalLocations
             ? FileManager.default.homeDirectoryForCurrentUser
             : (r.customFolder ?? FileManager.default.homeDirectoryForCurrentUser)
-        // "important usage" only means anything on the volume holding the home
-        // directory. An external drive — where someone recovering onto a fresh Mac
-        // is most likely to point this — answers 0, and saying "only Zero KB free,
-        // not enough room" on the worst day is how you talk someone out of a
-        // recovery that would have worked. JobExecutor.freeSpace already reads a
-        // volume correctly; use it rather than a third private copy of the rule.
-        guard let free = JobExecutor.freeSpace(for: dest) else { return "" }
-        let freeStr = ByteCountFormatter.string(fromByteCount: Int64(free), countStyle: .file)
-        // the same rule each restore applies before it starts (see RestoreRoom)
-        let short = RestoreRoom.refusal(bytes: r.totalBytes, free: free, volume: "", inPlace: false) != nil
-        return short ? "only \(freeStr) free — not enough room" : "\(freeStr) free"
+        // the same floor each restore applies before it starts (see RestoreRoom): a
+        // mirror's disk image isn't one
+        let floor = r.selections.reduce(UInt64(0)) { $0 + (RestoreRoom.floor(for: $1.archive) ?? 0) }
+        return await Task.detached { () -> String in
+            // "important usage" only means anything on the volume holding the home
+            // directory. An external drive — where someone recovering onto a fresh Mac
+            // is most likely to point this — answers 0, and saying "only Zero KB free,
+            // not enough room" on the worst day is how you talk someone out of a
+            // recovery that would have worked. JobExecutor.freeSpace already reads a
+            // volume correctly; use it rather than a third private copy of the rule.
+            guard let free = JobExecutor.freeSpace(for: dest) else { return "" }
+            let freeStr = ByteCountFormatter.string(fromByteCount: Int64(free), countStyle: .file)
+            let short = RestoreRoom.refusal(bytes: floor, free: free, volume: "", inPlace: false) != nil
+            return short ? "only \(freeStr) free — not enough room" : "\(freeStr) free"
+        }.value
     }
 
     private var resultsBlock: some View {
