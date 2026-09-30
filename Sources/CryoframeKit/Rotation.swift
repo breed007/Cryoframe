@@ -56,6 +56,30 @@ public extension BackupJob {
 
     /// the drives in rotations
     var rotatingTargets: [Target] { targets.filter { $0.rotation != nil } }
+
+    /// Each destination's name, by target id, told apart from another of the job's
+    /// with the same name by its drive: two drives bought together carry the name
+    /// they came with, so a rotation of them was "Backups on T7" twice, and "hasn't
+    /// had a copy on Backups on T7 in 19 days" couldn't say which to bring home. The
+    /// drive is named by the start of its volume UUID ("Backups on T7 (drive 4F2A)"),
+    /// which Disk Utility shows; one without a UUID on record, by its place in the list.
+    var destinationLabels: [String: String] {
+        var out: [String: String] = [:]
+        let groups = Dictionary(grouping: targets.indices, by: { targets[$0].displayName })
+        for (name, indices) in groups {
+            guard indices.count > 1 else { out[targets[indices[0]].id] = name; continue }
+            let uuids = indices.map { i in targets[i].volume.map { $0.uuid.uppercased().filter { $0.isLetter || $0.isNumber } } }
+            let length = [4, 8, 12].first { n in
+                let tags = uuids.map { $0.map { String($0.prefix(n)) } }
+                return !tags.contains(nil) && Set(tags).count == tags.count
+            }
+            for (k, i) in indices.enumerated() {
+                let tag = length.flatMap { n in uuids[k].map { "drive " + $0.prefix(n) } } ?? "\(k + 1) of \(indices.count)"
+                out[targets[i].id] = "\(name) (\(tag))"
+            }
+        }
+        return out
+    }
 }
 
 public enum RotationRules {
@@ -72,12 +96,13 @@ public enum RotationRules {
     /// destinations (by target id) last got a complete copy of every library.
     public static func awayTooLong(_ job: BackupJob, lastCopies: [String: Date], now: Date) -> [AwayTooLong] {
         var out: [AwayTooLong] = []
+        let labels = job.destinationLabels
         for t in job.rotatingTargets {
             guard let r = t.rotation else { continue }
             let last = lastCopies[t.id]
             let since = last ?? r.addedAt ?? job.createdAt
             if now.timeIntervalSince(since) > TimeInterval(r.maxAwayDays) * 86_400 {
-                out.append(AwayTooLong(name: t.displayName, lastCopy: last, since: since))
+                out.append(AwayTooLong(name: labels[t.id] ?? t.displayName, lastCopy: last, since: since))
             }
         }
         return out.sorted { $0.since < $1.since }

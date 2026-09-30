@@ -179,4 +179,26 @@ private func run(_ job: BackupJob, _ outcome: RunOutcomeKind, at: Date) -> RunRe
         }
         #expect((try FileManager.default.contentsOfDirectory(atPath: dir.path)).isEmpty)
     }
+    // Destinations of one name are told apart by their drives; the rest keep their
+    // names. Drives whose UUIDs start alike get more of it; one with none recorded,
+    // its place.
+    @Test func destinationsOfOneNameAreLabeledByTheirDrive() {
+        func t(_ id: String, _ name: String, _ uuid: String?) -> Target {
+            var t = Target.externalDrive(id: id, name: name, dir: URL(fileURLWithPath: "/Volumes/\(id)/Backups"))
+            t.volume = uuid.map { VolumeIdentity(uuid: $0, name: "T7", relativePath: "Backups") }
+            return t
+        }
+        let a = t("a", "Backups on T7", "4f2a19c0-0000-0000-0000-000000000001")
+        let b = t("b", "Backups on T7", "9C1E0000-0000-0000-0000-000000000002")
+        let nas = t("n", "Backups on NAS", nil)
+        let job = BackupJob(name: "J", libraries: [.photos], targets: [a, b, nas], format: .sealedDMG,
+                            frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+        #expect(job.destinationLabels == ["a": "Backups on T7 (drive 4F2A)", "b": "Backups on T7 (drive 9C1E)", "n": "Backups on NAS"])
+        let alike = BackupJob(name: "J", libraries: [.photos], targets: [a, t("c", "Backups on T7", "4F2A19C1"), t("d", "Backups on T7", nil)],
+                              format: .sealedDMG, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+        #expect(alike.destinationLabels == ["a": "Backups on T7 (1 of 3)", "c": "Backups on T7 (2 of 3)", "d": "Backups on T7 (3 of 3)"])
+        let two = BackupJob(name: "J", libraries: [.photos], targets: [a, t("c", "Backups on T7", "4F2A19C1")],
+                            format: .sealedDMG, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+        #expect(two.destinationLabels == ["a": "Backups on T7 (drive 4F2A19C0)", "c": "Backups on T7 (drive 4F2A19C1)"])
+    }
 }

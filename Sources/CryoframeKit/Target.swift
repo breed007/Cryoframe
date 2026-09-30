@@ -81,6 +81,14 @@ public extension Target {
         return t
     }
 
+    /// the same destination, called `name` (see BackupJob.destinationLabels)
+    func named(_ name: String) -> Target {
+        var t = Target(id: id, displayName: name, kind: kind, destinationDir: destinationDir, constraints: constraints,
+                       networkMount: networkMount, cloudProvider: cloudProvider)
+        t.volume = volume; t.rotation = rotation; t.otherVolumes = otherVolumes
+        return t
+    }
+
     /// local disk — no size cap, incremental fine.
     static func localVolume(id: String, name: String, dir: URL) -> Target {
         Target(id: id, displayName: name, kind: .local, destinationDir: dir,

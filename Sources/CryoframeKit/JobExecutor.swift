@@ -161,8 +161,12 @@ public struct JobExecutor: Sendable {
         // a folder whose drive is another drive of its drive's name, or isn't here: not
         // backed up, and said why (by library id)
         var refused: [String: String] = [:], away = Set<String>()
+        let labels = saved.destinationLabels
         let job: BackupJob = {
             var j = resolved.job
+            // two destinations of one name are told apart in everything the run says,
+            // and in which of them got a copy (see destinationLabels)
+            j.targets = j.targets.map { t in labels[t.id].map { $0 == t.displayName ? t : t.named($0) } ?? t }
             j.libraries = j.libraries.map { lib in
                 switch lib.whereabouts(volumes: self.volumes, home: locator.home) {
                 case .here(let found): return found
@@ -201,7 +205,11 @@ public struct JobExecutor: Sendable {
                 placed.append((t, a.ok, a.reason)); continue
             }
             guard checked.contains(where: { $0.1.ok }) else {
-                let why = "none of \(RotationRules.name(of: place)) is connected"
+                // a drive of the rotation's that is connected but isn't the one it was
+                // set up with (erased, say): say that, not that nothing is connected
+                let other = place.compactMap { t -> String? in if case .otherDrive(let why)? = presence[t.id] { return why }; return nil }
+                let why = other.isEmpty ? "none of \(RotationRules.name(of: place)) is connected"
+                    : "none of \(RotationRules.name(of: place)) can be used: " + other.joined(separator: "; ")
                 if i == 0 { throw TargetError.unavailable(why) }
                 placed.append((place[0], false, why)); continue
             }
