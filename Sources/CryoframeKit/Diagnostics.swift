@@ -122,8 +122,35 @@ public struct Redactor: Sendable {
         s = Self.replace(#"(?<![\w/\[~])[^\s/"'“”(),;:\[\]]+(?:/[^\s/"'“”(),;:\[\]]+)+/?"#, in: s) {
             $0.hasPrefix("/") || ["and/or", "ntfy/webhook"].contains($0) ? $0 : "[path]"
         }
-        // 5. then only words Cryoframe or macOS write, and numbers, are kept
+        // 5. numbers: see keepsNumber
+        s = Self.replace(Self.numberRun, in: s) { Self.keepsNumber($0) ? $0 : "[…]" }
+        // 6. then only words Cryoframe or macOS write, and numbers, are kept
         return keepingKnownWords(s)
+    }
+
+    /// A number with whatever follows it that makes it one number: groups of digits
+    /// joined by a space, dash, slash, dot or comma ("4111 1111 1111 1111",
+    /// "(404) 555-1234"), and a unit. A date, with its time, comes first as a whole.
+    static let numberRun = #"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)?|(?<![\p{L}\p{N}_.,:])\(?[0-9]+(?:\)?[ \-/.,]\(?[0-9]+)*\)?"#
+        + #"(?:\s?(?i:%|[kmgt]i?b|bytes?|b|files?|items?|parts?|blocks?|folders?|versions?|times|ms|s|sec|seconds?|min|minutes?|h|hours?|days?|weeks?)(?![\p{L}\p{N}]))?"#
+
+    /// Whether a number is kept. The ones a fix needs are short, or carry a unit:
+    /// sizes, counts, durations, error and status codes, versions, dates and times.
+    /// A long run of digits, or digits in groups, is how a social security, phone or
+    /// card number is written, and a file named by one names who it is about.
+    static func keepsNumber(_ text: String) -> Bool {
+        if text.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)?$"#, options: .regularExpression) != nil { return true }
+        // the number, without a unit after it
+        guard let m = text.range(of: #"^\(?[0-9][0-9 ()\-/.,]*"#, options: .regularExpression) else { return false }
+        let number = text[m].trimmingCharacters(in: CharacterSet(charactersIn: " ()"))
+        let hasUnit = !text[m.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty
+        let digits = number.filter { ("0"..."9").contains($0) }.count
+        if !number.contains(where: { !("0"..."9").contains($0) }) { return digits <= 6 || hasUnit }   // 72000, 1234567 bytes
+        if number.range(of: #"^[0-9]+(?:\.[0-9]+)+$"#, options: .regularExpression) != nil { return digits <= 8 }    // 1.6.0, 3.5, 26.7
+        if number.range(of: #"^[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?$"#, options: .regularExpression) != nil {         // 72,000
+            return digits <= 6 || hasUnit
+        }
+        return digits <= 6                                                                                    // 3/5, 12-34
     }
 
     /// every word that isn't Cryoframe's own, macOS's, a stand-in's, or a number,
@@ -146,8 +173,11 @@ public struct Redactor: Sendable {
         var t = token
         while let last = t.last, ".'’-_".contains(last) { t.removeLast() }
         if t.isEmpty { return true }
-        // numbers, sizes, dates and times, counts
-        if t.range(of: #"^\d[\d.,:\-]*(?:%|[KMGT]i?B|[KMGT]|s|ms|h|x)?$"#, options: .regularExpression) != nil { return true }
+        // numbers, sizes, dates and times, counts (see keepsNumber), a unit joined on
+        if let n = t.range(of: #"^[0-9][0-9.,\-]*"#, options: .regularExpression),
+           t[n.upperBound...].range(of: #"^(?:%|[KMGT]i?B|[KMGT]|s|ms|h|x)?$"#, options: .regularExpression) != nil {
+            return Self.keepsNumber(String(t[n]) + (n.upperBound < t.endIndex ? " B" : ""))
+        }
         // A letter outside ASCII: a name with an accent or in another script. The
         // words are looked up by their ASCII letters only, so its pieces could be
         // Cryoframe's words ("Noël": "no", "l") while the name as a whole is someone's.

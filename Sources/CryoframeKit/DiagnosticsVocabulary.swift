@@ -633,6 +633,7 @@ scheduled
 scratch
 scratchbase
 sealed
+sec
 seconds
 sectors
 see
@@ -774,6 +775,7 @@ verified
 verify
 version
 version's
+versions
 versionstamp
 volname
 volume
@@ -788,6 +790,7 @@ wasn't
 way
 webhook
 weekly
+weeks
 well
 were
 weren't
