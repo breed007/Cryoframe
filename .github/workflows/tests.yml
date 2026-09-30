@@ -27,7 +27,7 @@ jobs:
       matrix:
         os: [macos-15, macos-26]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -54,10 +54,11 @@ jobs:
           xcodebuild test -scheme Cryoframe-Core -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" > test.log 2>&1 &
           pid=$!
-          # The suite takes about three minutes on a Mac. If it is still going after
-          # fifteen, something is wedged: record what every process under the test
-          # runner is doing before giving up, so the log says why.
-          for _ in $(seq 1 180); do kill -0 $pid 2>/dev/null || break; sleep 5; done
+          # The suite takes about fifteen minutes on a runner (600+ tests, many of them
+          # building real disk images). If it is still going after forty-five, something
+          # is wedged: record what every process under the test runner is doing before
+          # giving up, so the log says why.
+          for _ in $(seq 1 540); do kill -0 $pid 2>/dev/null || break; sleep 5; done
           if kill -0 $pid 2>/dev/null; then
             echo "::error::the test suite stalled; process state follows"
             ps -axo pid,ppid,etime,stat,command | grep -Ei 'xctest|CryoframeKitTests|hdiutil|diskimages|ditto|rsync|tmutil|sqlite3|split' | grep -v grep
