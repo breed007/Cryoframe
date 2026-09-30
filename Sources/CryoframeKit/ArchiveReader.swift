@@ -152,8 +152,10 @@ public struct ArchiveReader: Sendable {
                 let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
                 // a zip is unpacked whole into the work folder (on the startup disk)
                 // before anything is copied out of it
-                try checkRoom(Self.unpackedSize(of: zip, runner: runner.forTeardown) ?? Checksum.byteSize(of: zip),
-                              in: work, doing: "unpacked")
+                guard let unpacked = Self.unpackedSize(of: zip, runner: runner.forTeardown) else {
+                    throw RestoreError.unpackedSizeUnknown(zip.lastPathComponent)
+                }
+                try checkRoom(unpacked, in: work, doing: "unpacked")
                 let ex = work.appendingPathComponent("extract"); try fm.createDirectory(at: ex, withIntermediateDirectories: true)
                 try exec(Command("/usr/bin/ditto", ["-x", "-k", zip.path, ex.path]))
                 return OpenedArchive(root: ex, work: work) {}
@@ -207,13 +209,24 @@ public struct ArchiveReader: Sendable {
         }
     }
 
-    /// what a zip holds once unpacked, from its own directory (zipinfo); nil if that
-    /// can't be read
+    /// What a zip takes on disk once unpacked, from its own directory (zipinfo): its
+    /// bytes, and a whole block for every entry. A file takes at least one 4 KB block
+    /// however few bytes it holds, so a zip of many small files takes many times its
+    /// byte count: 72,000 files of 16 bytes are 12.9 MB in the zip's total and took
+    /// 295 MB unpacked. Rounding every entry up to a block is at most a block too many
+    /// each. nil if the listing can't be read: a zip can unpack to any size, and its
+    /// own size says nothing about that.
     static func unpackedSize(of zip: URL, runner: CommandRunner) -> UInt64? {
         guard let r = try? runner.run("/usr/bin/zipinfo", ["-t", zip.path], stdin: nil), r.ok,
-              let m = r.stdout.range(of: #"([0-9]+) bytes uncompressed"#, options: .regularExpression) else { return nil }
-        return UInt64(r.stdout[m].split(separator: " ").first ?? "")
+              let b = r.stdout.range(of: #"[0-9]+ bytes uncompressed"#, options: .regularExpression),
+              let bytes = UInt64(r.stdout[b].split(separator: " ").first ?? ""),
+              let n = r.stdout.range(of: #"^[0-9]+ files?"#, options: .regularExpression),
+              let entries = UInt64(r.stdout[n].split(separator: " ").first ?? "") else { return nil }
+        return bytes + entries * blockSize
     }
+
+    /// the file system block every unpacked file takes at least one of (APFS)
+    static let blockSize: UInt64 = 4096
 
     /// Parts in the order they were split: by the number after ".part." ("…part.1000"
     /// comes after "…part.999", which sorting the names put before "…part.101"), or

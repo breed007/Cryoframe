@@ -44,6 +44,37 @@ private final class Calls: @unchecked Sendable {
 
 @Suite(.serialized) struct RecoveryCloseoutTests {
 
+    // MARK: a zip whose listing can't be read
+
+    // A zip can unpack to any size; its own size is no bound. When zipinfo can't read
+    // the listing it isn't unpacked on a guess.
+    @Test func aZipWhoseListingCantBeReadIsRefusedPlainly() throws {
+        let base = folder("zipinfo")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let zip = base.appendingPathComponent("Notes.zip")
+        try Data("PK not really".utf8).write(to: zip)
+        let calls = Calls()
+        let runner = ScriptedCommandRunner { tool, args in
+            calls.add(([tool] + args).joined(separator: " "))
+            return tool.hasSuffix("zipinfo") ? CommandResult(status: 9, stdout: "", stderr: "cannot find zipfile directory")
+                                             : CommandResult(status: 0, stdout: "", stderr: "")
+        }
+        let reader = ArchiveReader(runner: runner, workBase: base, freeSpace: { _ in 1 << 40 })
+        #expect(throws: RestoreError.unpackedSizeUnknown("Notes.zip")) {
+            let opened = try reader.open(ArchiveResult(artifacts: [zip], format: .sealedZip))
+            opened.close()
+        }
+        #expect(!calls.all.contains { $0.hasPrefix("/usr/bin/ditto") }, "unpacked anyway: \(calls.all)")
+        #expect(RestoreFailureText.restoreMessage(RestoreError.unpackedSizeUnknown("Notes.zip"), encrypted: false).contains("Notes.zip"))
+    }
+
+    @Test func theUnpackBudgetCountsABlockForEveryEntry() {
+        let runner = ScriptedCommandRunner { _, _ in
+            CommandResult(status: 0, stdout: "144100 files, 12900000 bytes uncompressed, 3000000 bytes compressed:  76.7%\n", stderr: "")
+        }
+        #expect(ArchiveReader.unpackedSize(of: URL(fileURLWithPath: "/x.zip"), runner: runner) == 12_900_000 + 144_100 * 4096)
+    }
+
     // MARK: the word list
 
     // One letter isn't a word of the vocabulary: every letter was in it.

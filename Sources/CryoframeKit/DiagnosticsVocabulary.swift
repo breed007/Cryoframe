@@ -375,6 +375,7 @@ key
 kind
 kmdlabel
 kmgt
+known
 large
 last
 lastalerted
@@ -449,6 +450,7 @@ mountpoint
 move
 movies
 ms
+much
 music
 musicdb
 musiclibrary
@@ -699,6 +701,7 @@ sync
 system
 tags
 taken
+takes
 target
 temp
 temporarily
@@ -752,6 +755,7 @@ unfinished
 unmount
 unpack
 unpacked
+unpacking
 unpacks
 unreadable
 until
