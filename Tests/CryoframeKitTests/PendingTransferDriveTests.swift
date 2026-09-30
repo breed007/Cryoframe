@@ -87,19 +87,8 @@ private func pending(in base: URL, dest: URL, uuid: String?) throws -> (PendingT
     // the run records the drive the transfer goes to
     @Test func aRunRecordsTheDriveItsTransferGoesTo() async throws {
         let base = folder("run")
-        let mnt = base.appendingPathComponent("vol")
-        try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        let dmg = base.appendingPathComponent("src.dmg")
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src", dmg.path])
-        try #require(made.ok, "\(made.stderr)")
-        let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", dmg.path, "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
-        }
-        try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
+        let (mnt, papers) = try sourceVolume(in: base)
         defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
-        let papers = mnt.appendingPathComponent("Papers")
-        try FileManager.default.createDirectory(at: papers, withIntermediateDirectories: true)
-        try Data(repeating: 1, count: 4096).write(to: papers.appendingPathComponent("a.bin"))
 
         let t7 = base.appendingPathComponent("T7"), dest = t7.appendingPathComponent("Backups")
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
@@ -118,6 +107,64 @@ private func pending(in base: URL, dest: URL, uuid: String?) throws -> (PendingT
         #expect(seen.values.contains("DRIVE-A"), "\(seen.values)")
         #expect(!seen.values.contains { $0 != "DRIVE-A" })
     }
+}
+
+extension PendingTransferDriveTests {
+    // An earlier run's upload, interrupted, waits for its drive. A run in between
+    // that doesn't rebuild that library (its folder is missing today, the scratch disk
+    // is full) still prunes its folder, and swept the upload's folder as a failed
+    // run's leftover (no manifest yet), its parts with it.
+    @Test func aRunLeavesAnEarlierRunsInterruptedUploadAlone() async throws {
+        let base = folder("sweep")
+        let (mnt, papers) = try sourceVolume(in: base)
+        defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
+        let dest = base.appendingPathComponent("Backups")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let lib = ContentType.genericFolder(id: "papers", displayName: "Papers", path: .absolute(papers.path))
+        let gone = ContentType.genericFolder(id: "notes", displayName: "Notes", path: .absolute(mnt.appendingPathComponent("Notes").path))
+        let job = BackupJob(name: "Papers", libraries: [lib, gone], target: .localVolume(id: "d", name: "Backups", dir: dest),
+                            format: .sealedZip, frequency: .manual, retention: .keepLast(3), createdAt: start)
+        let folder = try LibraryFolders.prepare(job: job, library: gone, in: dest, jobs: [job], isOpen: { _ in false }).folder
+        let partial = folder.appendingPathComponent("2026-09-29-020000")
+        try FileManager.default.createDirectory(at: partial, withIntermediateDirectories: true)
+        try Data(repeating: 9, count: 64).write(to: partial.appendingPathComponent("Notes.zip.part.000"))
+        let staged = base.appendingPathComponent("scratch/\(job.id)/build/notes/Notes.zip")
+        try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 9, count: 128).write(to: staged)
+        let store = PendingTransferStore(url: base.appendingPathComponent("pending.json"))
+        store.save(PendingTransfer(jobID: "\(job.id):d:notes", sourceFile: staged.path, baseName: "Notes.zip", totalBytes: 128,
+                                   chunkSize: 64, targetDir: partial.path, format: .sealedZip,
+                                   completed: [ArtifactDigest(name: "Notes.zip.part.000", size: 64, sha256: "")]))
+        let husk = folder.appendingPathComponent("2026-09-28-020000")          // a failed run's leftover
+        try FileManager.default.createDirectory(at: husk, withIntermediateDirectories: true)
+
+        let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(),
+                               scratchBase: base.appendingPathComponent("scratch"), pendingStore: store,
+                               volumes: FixedVolumeTable([]))
+        let outcome = try await exec.run(job, ownerUID: getuid(), now: start)
+        guard case .finished = outcome else { Issue.record("\(outcome)"); return }
+        #expect(FileManager.default.fileExists(atPath: partial.appendingPathComponent("Notes.zip.part.000").path))
+        #expect(!FileManager.default.fileExists(atPath: husk.path))
+        #expect(store.all().count == 1)
+    }
+}
+
+/// A small HFS+ volume attached at `<base>/vol`, holding a folder "Papers": a source
+/// the run reads as it is (HFS+ can't be frozen), so no snapshot is needed.
+private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
+    let mnt = base.appendingPathComponent("vol")
+    try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
+    let dmg = base.appendingPathComponent("src.dmg")
+    let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src", dmg.path])
+    try #require(made.ok, "\(made.stderr)")
+    let attached = try DiskImageGate.serialized {
+        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", dmg.path, "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+    }
+    try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
+    let papers = mnt.appendingPathComponent("Papers")
+    try FileManager.default.createDirectory(at: papers, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 4096).write(to: papers.appendingPathComponent("a.bin"))
+    return (mnt, papers)
 }
 
 private final class Seen: @unchecked Sendable {

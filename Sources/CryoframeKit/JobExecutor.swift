@@ -411,10 +411,17 @@ public struct JobExecutor: Sendable {
             return SnapshotPass(results: results, builds: builds, cancelled: cancelled, notes: notes)
         }
 
+        // a version folder an interrupted transfer (this run's or an earlier one's) is
+        // still to finish into isn't a leftover; asked when retention runs
+        let pendingStore = self.pendingStore
+        let stillTransferring: (URL) -> Bool = { dir in
+            (pendingStore?.all() ?? []).contains { DestinationRules.samePath(URL(fileURLWithPath: $0.targetDir, isDirectory: true), dir) }
+        }
         if pass.cancelled {
             pass.builds.forEach(cleanupBuild)
             if sealed != nil {
-                Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords())
+                Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords(),
+                                   transferring: stillTransferring)
             }
             return .cancelled
         }
@@ -505,7 +512,8 @@ public struct JobExecutor: Sendable {
 
         var pruneFailures: [String] = []
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
-            pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords())
+            pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords(),
+                                               transferring: stillTransferring)
         }
         // the note on how to restore without Cryoframe, brought up to date in each
         // destination this run reached; a note that can't be written is logged, never
@@ -555,12 +563,45 @@ public struct JobExecutor: Sendable {
     }
 
     /// the same, for each library's own folder (see LibraryFolders): only a folder a
-    /// run writes to is pruned, never a 1.5 folder left for reading
+    /// run writes to is pruned, never a 1.5 folder left for reading. `transferring`:
+    /// whether an interrupted transfer is still to finish into a folder (see prunePlan).
     @discardableResult
     static func pruneVersions(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
-                              checks: [HealthRecord] = []) -> [String] {
+                              checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false }) -> [String] {
+        let plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring)
         let fm = FileManager.default
+        for husk in plan.husks { try? fm.removeItem(at: husk) }        // junk from a failed/cancelled run
         var failures: [String] = []
+        for v in plan.versions {
+            do { try fm.removeItem(at: v.url) }
+            catch { failures.append("\(v.library) \(VersionStamp.string(v.date)): \((error as NSError).localizedDescription)") }
+        }
+        return failures
+    }
+
+    /// What retention deletes, without deleting anything.
+    public struct PrunePlan: Sendable, Equatable {
+        public struct Version: Sendable, Equatable {
+            public var library: String
+            public var url: URL
+            public var date: Date
+        }
+        /// version folders with no manifest: a failed or stopped run's leftovers
+        public var husks: [URL] = []
+        /// complete versions the policy doesn't keep
+        public var versions: [Version] = []
+    }
+
+    /// The one rule for what retention deletes, for a run and for showing it before a
+    /// save. Only version folders with a manifest are versions; one without is a
+    /// failed run's leftover, unless an interrupted transfer is still to finish into
+    /// it (`transferring`): the manifest is its last part. Held versions are never
+    /// touched (see LibraryIdentity.heldVersions), nor the version of each library
+    /// last known to restore (see KnownGood).
+    static func prunePlan(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
+                          checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false }) -> PrunePlan {
+        let fm = FileManager.default
+        var plan = PrunePlan()
         for (library, libDir) in folders {
             let entries = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
             let identity = LibraryIdentity.read(in: libDir)
@@ -571,8 +612,8 @@ public struct JobExecutor: Sendable {
                       let d = VersionStamp.date(e.lastPathComponent), identity?.holds(e.lastPathComponent) != true else { continue }
                 if fm.fileExists(atPath: e.appendingPathComponent(ArchiveManifest.sidecarName).path) {
                     complete.append((e, d))
-                } else {
-                    try? fm.removeItem(at: e)        // junk from a failed/cancelled run
+                } else if !transferring(e) {
+                    plan.husks.append(e)
                 }
             }
             guard policy != .keepAll else { continue }
@@ -580,11 +621,10 @@ public struct JobExecutor: Sendable {
                                           among: complete.map(\.date), records: checks)
             let prune = retentionPrune(complete.map(\.date), policy: policy, keeping: Set([known].compactMap { $0 }))
             for v in complete where prune.contains(v.date) {
-                do { try fm.removeItem(at: v.url) }
-                catch { failures.append("\(library.displayName) \(VersionStamp.string(v.date)): \((error as NSError).localizedDescription)") }
+                plan.versions.append(.init(library: library.displayName, url: v.url, date: v.date))
             }
         }
-        return failures
+        return plan
     }
 
     /// every library's folder at every destination `targets` names, ready to write to;
