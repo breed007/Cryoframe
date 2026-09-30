@@ -80,6 +80,13 @@ public enum LibraryFolders {
         return out
     }
 
+    /// Whether `destination` holds `job`'s backups: a folder with the identity of one of
+    /// its libraries, or a 1.5 folder of one of their names with its archives in it.
+    public static func holdsBackups(of job: BackupJob, in destination: URL) -> Bool {
+        listing(destination).contains { $0.identity?.jobID == job.id }
+            || job.libraries.contains { lib in holdings(job: job, library: lib, in: destination).contains { !$0.archives.isEmpty } }
+    }
+
     /// the names of a library's folders on disk: what its archives' bundles are named
     static func rootNames(of library: ContentType) -> Set<String> {
         Set(library.paths.map { $0.liveURL(home: NSHomeDirectory()).lastPathComponent })

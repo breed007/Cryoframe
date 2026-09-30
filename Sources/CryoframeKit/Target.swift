@@ -58,6 +58,10 @@ public struct Target: Sendable, Identifiable, Equatable, Codable {
     /// its place in a rotation of drives that take turns (see Rotation); nil if it
     /// doesn't rotate
     public var rotation: Rotation? = nil
+    /// Other drives this destination is on, taking turns with `volume`'s drive at the
+    /// same path: how 1.5 rotated two drives of one name, the only way it could. A
+    /// run of a job set up before 1.6 records them (see JobExecutor).
+    public var otherVolumes: [VolumeIdentity]? = nil
 
     public init(id: String, displayName: String, kind: TargetKind, destinationDir: URL,
                 constraints: TargetConstraints, networkMount: NetworkMountSpec? = nil,
@@ -73,7 +77,7 @@ public extension Target {
     func at(_ dir: URL) -> Target {
         var t = Target(id: id, displayName: displayName, kind: kind, destinationDir: dir, constraints: constraints,
                        networkMount: networkMount, cloudProvider: cloudProvider)
-        t.volume = volume; t.rotation = rotation
+        t.volume = volume; t.rotation = rotation; t.otherVolumes = otherVolumes
         return t
     }
 

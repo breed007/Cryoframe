@@ -41,9 +41,13 @@ public struct VolumeIdentity: Codable, Sendable, Equatable, Hashable {
     public var relativePath: String
     /// a network share: found by address rather than by UUID
     public var isShare: Bool
+    /// when a run recorded it for a destination set up before 1.6 (nil: chosen when
+    /// the destination was set up). 1.5 knew a destination only by its path, so a
+    /// learned drive may have been one of two of its name taking turns there.
+    public var learnedAt: Date?
 
-    public init(uuid: String, name: String, relativePath: String, isShare: Bool = false) {
-        self.uuid = uuid; self.name = name; self.relativePath = relativePath; self.isShare = isShare
+    public init(uuid: String, name: String, relativePath: String, isShare: Bool = false, learnedAt: Date? = nil) {
+        self.uuid = uuid; self.name = name; self.relativePath = relativePath; self.isShare = isShare; self.learnedAt = learnedAt
     }
 }
 
@@ -176,17 +180,22 @@ public struct DestinationResolver: Sendable {
             if fm.fileExists(atPath: dir.path) || fm.fileExists(atPath: dir.deletingLastPathComponent().path) { return .present(dir) }
             return .away("\(target.displayName) isn't connected")
         }
+        // the drives it may be on: the one it was set up on, and any it takes turns with
+        // (see Target.otherVolumes)
+        let ids = [id] + (id.isShare ? [] : target.otherVolumes ?? [])
         // still where it was: the recorded path is on the recorded volume (the usual
         // case, and the only sane spelling for the startup disk, reached through
         // firmlinks)
         if let here = volumes.volume(containing: target.destinationDir),
-           id.isShare ? here.shareKey == id.uuid.lowercased() : here.uuid == id.uuid {
+           id.isShare ? here.shareKey == id.uuid.lowercased() : ids.contains(where: { here.uuid == $0.uuid }) {
             return .present(target.destinationDir)
         }
         let all = volumes.mounted()
-        let match = id.isShare ? all.first { $0.shareKey == id.uuid.lowercased() } : all.first { $0.uuid == id.uuid }
-        if let v = match {
-            return .present(id.relativePath.isEmpty ? v.mountPoint : v.mountPoint.appendingPathComponent(id.relativePath, isDirectory: true))
+        for i in ids {
+            let match = i.isShare ? all.first { $0.shareKey == i.uuid.lowercased() } : all.first { $0.uuid == i.uuid }
+            if let v = match {
+                return .present(i.relativePath.isEmpty ? v.mountPoint : v.mountPoint.appendingPathComponent(i.relativePath, isDirectory: true))
+            }
         }
         if !id.isShare, all.contains(where: { LibraryNames.same($0.name, id.name) }) {
             return .otherDrive("a different drive named “\(id.name)” is connected, not the one \(target.displayName) was set up on")

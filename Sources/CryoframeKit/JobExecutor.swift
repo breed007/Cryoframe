@@ -139,7 +139,25 @@ public struct JobExecutor: Sendable {
         // never written to (see DestinationResolver). A folder on a renamed drive is
         // found the same way (see ContentType.located).
         let resolved = DestinationResolver(volumes: self.volumes).resolve(saved)
-        let presence = resolved.presence
+        var presence = resolved.presence
+        // A destination whose drive a run learned (set up before 1.6) meets another drive
+        // of that name at its path. 1.5 knew a destination by its path alone, and the
+        // only way to take turns between two drives was two drives of one name, as the
+        // README suggests for an off-site copy; after the first 1.6 run recorded one of
+        // them, the other was "a different drive" every week it was the one at home.
+        // One that holds this job's backups is the other drive of the pair: it is
+        // recorded, and used. A drive with nothing of the job's is still refused.
+        var turns: [(targetID: String, volume: VolumeIdentity)] = []
+        for t in saved.targets {
+            guard case .otherDrive = presence[t.id], let id = t.volume, id.learnedAt != nil, !id.isShare,
+                  let here = self.volumes.volume(containing: t.destinationDir), let uuid = here.uuid, uuid != id.uuid,
+                  LibraryNames.same(here.name, id.name), LibraryFolders.holdsBackups(of: saved, in: t.destinationDir),
+                  var other = DestinationResolver(volumes: self.volumes).identity(for: t.destinationDir) else { continue }
+            other.learnedAt = now
+            turns.append((t.id, other))
+            presence[t.id] = .present(t.destinationDir)
+        }
+        for turn in turns { jobStore?.recordOtherVolume(jobID: saved.id, targetID: turn.targetID, turn.volume) }
         // a folder whose drive is another drive of its drive's name, or isn't here: not
         // backed up, and said why (by library id)
         var refused: [String: String] = [:], away = Set<String>()
@@ -484,7 +502,8 @@ public struct JobExecutor: Sendable {
         jobStore?.recordCopies(jobID: job.id, targetIDs: copied, at: now)
         let reached = Set(results.compactMap { r -> String? in if case .completed(_, let dest, _, _, _) = r { return dest }; return nil })
         for d in dests where knownPlaces.contains(d.target.id) && reached.contains(d.target.displayName) {
-            if let identity = DestinationResolver(volumes: self.volumes).identity(for: d.target.destinationDir) {
+            if var identity = DestinationResolver(volumes: self.volumes).identity(for: d.target.destinationDir) {
+                identity.learnedAt = now
                 jobStore?.recordVolume(jobID: job.id, targetID: d.target.id, identity)
             }
         }

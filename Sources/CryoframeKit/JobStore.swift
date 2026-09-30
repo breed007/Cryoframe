@@ -61,4 +61,13 @@ public final class JobStore: @unchecked Sendable {
         s.jobs[j].targets[t].volume = volume
         save(s)
     }
+    /// record another drive a destination takes turns on (see Target.otherVolumes)
+    public func recordOtherVolume(jobID: String, targetID: String, _ volume: VolumeIdentity) {
+        var s = load()
+        guard let j = s.jobs.firstIndex(where: { $0.id == jobID }),
+              let t = s.jobs[j].targets.firstIndex(where: { $0.id == targetID }),
+              !(s.jobs[j].targets[t].otherVolumes ?? []).contains(where: { $0.uuid == volume.uuid }) else { return }
+        s.jobs[j].targets[t].otherVolumes = (s.jobs[j].targets[t].otherVolumes ?? []) + [volume]
+        save(s)
+    }
 }

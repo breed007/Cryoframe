@@ -263,4 +263,42 @@ private let boot = vol("/System/Volumes/Data", "DATA-UUID", "Macintosh HD", onMa
             Issue.record("a folder on the startup disk was taken for the drive's"); return
         }
     }
+    // A destination that takes turns between two drives of one name (how 1.5 rotated)
+    // is found on either, and another drive of that name is still not it.
+    @Test func aDestinationIsFoundOnEitherOfTheDrivesItTakesTurnsOn() {
+        var t = Target.externalDrive(id: "t7", name: "T7", dir: URL(fileURLWithPath: "/Volumes/T7/Backups"))
+        t.volume = VolumeIdentity(uuid: "A", name: "T7", relativePath: "Backups", learnedAt: Date(timeIntervalSince1970: 0))
+        t.otherVolumes = [VolumeIdentity(uuid: "B", name: "T7", relativePath: "Backups", learnedAt: Date(timeIntervalSince1970: 0))]
+        func on(_ uuid: String, at mount: String = "/Volumes/T7") -> DestinationPresence {
+            DestinationResolver(volumes: FixedVolumeTable([boot, vol(mount, uuid, "T7")])).locate(t)
+        }
+        #expect(on("A").url?.path == "/Volumes/T7/Backups")
+        #expect(on("B").url?.path == "/Volumes/T7/Backups")
+        #expect(on("B", at: "/Volumes/T7 1").url?.path == "/Volumes/T7 1/Backups")
+        guard case .otherDrive = on("C") else { Issue.record("a third drive of the name was taken for it"); return }
+    }
+
+    // A destination whose drive a run learned meets another drive of its name that
+    // holds nothing of the job's: refused, and nothing is written to it.
+    @Test func aLearnedDestinationStillRefusesASameNamedDriveWithoutTheJobsBackups() async throws {
+        let base = folder("learned")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let dest = base.appendingPathComponent("T7/Backups"), src = base.appendingPathComponent("Papers")
+        for d in [dest, src] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        try Data("x".utf8).write(to: src.appendingPathComponent("a.txt"))
+        var t = Target.externalDrive(id: "t7", name: "T7", dir: dest)
+        t.volume = VolumeIdentity(uuid: "A", name: "T7", relativePath: "Backups", learnedAt: Date(timeIntervalSince1970: 0))
+        let job = BackupJob(name: "Papers", libraries: [.genericFolder(id: "p", displayName: "Papers", path: .absolute(src.path))],
+                            target: t, format: .sealedZip, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+        let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(),
+                               scratchBase: base.appendingPathComponent("scratch"),
+                               volumes: FixedVolumeTable([vol(base.appendingPathComponent("T7").path, "B", "T7")]))
+        do {
+            _ = try await exec.run(job, ownerUID: getuid(), now: Date())
+            Issue.record("wrote to a drive of its name with nothing of the job's on it")
+        } catch let TargetError.unavailable(why) {
+            #expect(why.contains("different drive"), "\(why)")
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dest.path).isEmpty)
+    }
 }
