@@ -570,7 +570,7 @@ public struct JobExecutor: Sendable {
                               checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false }) -> [String] {
         let plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring)
         let fm = FileManager.default
-        for husk in plan.husks { try? fm.removeItem(at: husk) }        // junk from a failed/cancelled run
+        for husk in plan.husks { try? fm.removeItem(at: husk) }        // junk from a failed/canceled run
         var failures: [String] = []
         for v in plan.versions {
             do { try fm.removeItem(at: v.url) }
