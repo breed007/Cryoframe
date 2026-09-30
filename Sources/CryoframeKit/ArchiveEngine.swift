@@ -67,8 +67,11 @@ public struct Command: Sendable, Equatable {
 public enum ArchivePlan {
     /// read-only compressed dmg. (hdiutil -segmentSize is deprecated and ignored
     /// for -srcfolder, so splitting is done post-hoc with split(1) — see ArchivePlan.split.)
-    public static func dmg(root: URL, output: URL, encrypted: Bool = false) -> Command {
+    /// `sizeMB`, when given, sets the size of the file system the folder is copied
+    /// into, instead of hdiutil's own guess (see DMGSizing).
+    public static func dmg(root: URL, output: URL, encrypted: Bool = false, sizeMB: UInt64? = nil) -> Command {
         var args = ["create", "-srcfolder", root.path, "-format", "UDZO"]
+        if let sizeMB { args += ["-size", "\(sizeMB)m"] }
         if encrypted { args += ["-encryption", "AES-256", "-stdinpass"] }   // passphrase via stdin
         args += ["-ov", output.path]
         return Command("/usr/bin/hdiutil", args)
@@ -133,5 +136,33 @@ public enum ArchivePlan {
     /// mirror quietly discarded Finder tags and every resource fork on every run.
     public static func rsync(root: URL, into destination: URL, extra: [String] = []) -> Command {
         Command("/usr/bin/rsync", ["-aE", "--delete", "--partial"] + extra + [root.path + "/", destination.path + "/"])
+    }
+}
+
+/// How big a disk image a folder needs.
+///
+/// `hdiutil create -srcfolder` sizes the image by what the folder takes on disk,
+/// then copies each file out in full. A sparse file (a virtual machine's disk,
+/// Docker's, a database's preallocated file) takes little room on disk and a lot
+/// once written out: a library holding a 1 GiB sparse file failed "No space left on
+/// device" with plenty free, measured on macOS 26.7, and so did every run of its
+/// job, blaming the drive. When the folder's files add up to much more than they
+/// take, the size is given: what they hold (each rounded up to a 4 KB block), a
+/// tenth more, and 64 MB for the file system itself. The image is compressed
+/// either way, so the size costs nothing in the archive.
+public enum DMGSizing {
+    public static func sizeMB(for root: URL) -> UInt64? {
+        guard let walker = FileManager.default.enumerator(atPath: root.path) else { return nil }
+        var logical: UInt64 = 0, onDisk: UInt64 = 0, items: UInt64 = 0
+        while let rel = walker.nextObject() as? String {
+            var st = stat()
+            guard lstat(root.appendingPathComponent(rel).path, &st) == 0 else { continue }
+            items += 1
+            onDisk += UInt64(st.st_blocks) * 512
+            if st.st_mode & S_IFMT == S_IFREG { logical += (UInt64(st.st_size) + 4095) / 4096 * 4096 }
+        }
+        guard logical > onDisk + max(64 << 20, onDisk / 10) else { return nil }
+        let bytes = logical + logical / 10 + items * 4096 + (64 << 20)
+        return (bytes + (1 << 20) - 1) >> 20
     }
 }

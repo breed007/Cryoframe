@@ -196,3 +196,21 @@ private func tempOutDir() -> URL {
     #expect(result?.stderr.count == 300_000)
     #expect(result?.stdout == "out\n")
 }
+
+// A folder whose files hold much more than they take on disk (a sparse file) gets
+// an explicit image size; an ordinary one is left to hdiutil.
+@Test func aSparseFolderGetsAnExplicitImageSize() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("cf-dmgsize-\(UUID().uuidString.prefix(8))")
+    defer { try? FileManager.default.removeItem(at: base) }
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    try Data(repeating: 7, count: 100_000).write(to: base.appendingPathComponent("plain.bin"))
+    #expect(DMGSizing.sizeMB(for: base) == nil)
+    let disk = base.appendingPathComponent("disk.img")
+    try #require(FileManager.default.createFile(atPath: disk.path, contents: Data("boot".utf8)))
+    let fh = try FileHandle(forWritingTo: disk)
+    try fh.truncate(atOffset: 2 << 30)
+    try fh.close()
+    let size = try #require(DMGSizing.sizeMB(for: base))
+    #expect(size >= 2048 + 2048 / 10 && size < 2600, "\(size) MB")
+    #expect(ArchivePlan.dmg(root: base, output: base.appendingPathComponent("o.dmg"), sizeMB: size).args.contains("\(size)m"))
+}

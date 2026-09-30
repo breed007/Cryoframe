@@ -37,7 +37,8 @@ public struct SealedArchiveEngine: ArchiveEngine {
             output = dir.appendingPathComponent(source.name + ".dmg"); format = .sealedDMG
             try? fm.removeItem(at: output)
             let encrypted = passphrase != nil
-            try execute(ArchivePlan.dmg(root: source.root, output: output, encrypted: encrypted),
+            try execute(ArchivePlan.dmg(root: source.root, output: output, encrypted: encrypted,
+                                        sizeMB: DMGSizing.sizeMB(for: source.root)),
                         stdin: passphrase.map { Data($0.utf8) })
         case .zip:
             output = dir.appendingPathComponent(source.name + ".zip"); format = .sealedZip
