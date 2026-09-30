@@ -160,9 +160,12 @@ public enum LibraryFolders {
         // Its sealed versions in any other folder of its name move in: a 1.5 folder it
         // shared with a mirror job, whichever of the two took it over first, or a
         // folder 1.5.6 wrote them into after a return to it (another job's included).
-        // Only versions that can be no other library's, and not one being read.
+        // Only versions that can be no other library's, and not one being read. (Not
+        // from another library of this job: 1.5.6 doesn't run a job with two
+        // libraries of one name, so nothing of this one's is there.)
         let others = listing(destination).filter {
-            $0.url.path != folder.path && $0.identity?.key != key && LibraryNames.same($0.url.lastPathComponent, library.displayName)
+            $0.url.path != folder.path && $0.identity?.key != key && $0.identity?.jobID != job.id
+                && LibraryNames.same($0.url.lastPathComponent, library.displayName)
         }
         for other in others where job.format.isSealed {
             let r = moveVersions(from: other.url, to: folder, key: key, in: destination, jobs: jobs + [job], isOpen: isOpen)
