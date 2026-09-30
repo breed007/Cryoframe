@@ -72,10 +72,11 @@ public struct ArchiveReader: Sendable {
     let runner: CommandRunner
     let workBase: URL
     let transientSettle: TimeInterval
+    let cloud: CloudDownload
     public init(runner: CommandRunner = ProcessCommandRunner(),
                 workBase: URL = FileManager.default.temporaryDirectory,
-                transientSettle: TimeInterval = 5) {
-        self.runner = runner; self.workBase = workBase; self.transientSettle = transientSettle
+                transientSettle: TimeInterval = 5, cloud: CloudDownload = .system) {
+        self.runner = runner; self.workBase = workBase; self.transientSettle = transientSettle; self.cloud = cloud
     }
 
     /// open `result` into a fresh temp work dir. A non-nil `passphrase` mounts an
@@ -90,7 +91,12 @@ public struct ArchiveReader: Sendable {
     /// archive as unopenable whenever Time Machine or another job held the disk-image
     /// system for a few seconds too long, and a scheduled check turned that into an
     /// alert. A second failure is reported as before: busy, not broken.
+    ///
+    /// An archive evicted to a cloud placeholder is downloaded first (see
+    /// CloudDownload), before any tool reads it.
     public func open(_ result: ArchiveResult, passphrase: String? = nil) throws -> OpenedArchive {
+        let quiet = (runner as? ProcessCommandRunner)?.quietLimit ?? runner.control?.quietLimit ?? ToolWatchdog.defaultQuietLimit
+        try cloud.bringDown(result.artifacts, quietLimit: quiet, control: runner.control)
         do {
             return try openOnce(result, passphrase: passphrase)
         } catch let error as ArchiveError where Self.isTransient(error) {

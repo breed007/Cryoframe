@@ -86,3 +86,80 @@ public enum CloudFile {
         return logical > 1_000_000 && onDisk < logical / 10
     }
 }
+
+/// Bringing an evicted archive down from its cloud provider before a tool reads it.
+///
+/// A dataless file is fetched when something first reads it, and until then the
+/// reader waits. When that reader was hdiutil or ditto, the wait happened inside the
+/// tool, which shows no CPU, disk activity or output while the provider downloads,
+/// so the tool watchdog stopped a restore of a large archive part-way (about 11 GB
+/// fits in 15 minutes at 100 Mbps). The drill and the checks already download first;
+/// opening an archive (restore, verification, rehearsal) now does too, here, where
+/// the download itself is watched: the bytes on disk growing, or the provider
+/// saying it is downloading, is progress.
+public struct CloudDownload: Sendable {
+    /// whether the archive (a file, or a folder of parts or bands) is evicted
+    public let isEvicted: @Sendable (URL) -> Bool
+    /// fetch it; returns when it is local
+    public let fetch: @Sendable (URL) -> Void
+    /// a figure that moves while it downloads (bytes on disk, the provider's word)
+    public let progress: @Sendable (URL) -> UInt64
+
+    public init(isEvicted: @escaping @Sendable (URL) -> Bool, fetch: @escaping @Sendable (URL) -> Void,
+                progress: @escaping @Sendable (URL) -> UInt64) {
+        self.isEvicted = isEvicted; self.fetch = fetch; self.progress = progress
+    }
+
+    public static let system = CloudDownload(
+        isEvicted: { CloudFile.anyDataless(in: $0) },
+        fetch: { CloudFile.materialize($0) },
+        progress: { url in
+            var total: UInt64 = 0
+            let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .ubiquitousItemIsDownloadingKey]
+            func add(_ u: URL) {
+                let v = try? u.resourceValues(forKeys: keys)
+                total &+= UInt64(v?.totalFileAllocatedSize ?? 0)
+                if v?.ubiquitousItemIsDownloading == true { total &+= UInt64(Date().timeIntervalSince1970 * 1000) }   // alive
+            }
+            add(url)
+            if let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) {
+                for case let f as URL in e { add(f) }
+            }
+            return total
+        })
+
+    /// Fetch each evicted artifact, stopping if the download shows no progress for
+    /// `quietLimit` seconds, or at once on Stop. The fetch runs on its own thread: a
+    /// read of a dataless file can't be interrupted, so a stopped or stalled one is
+    /// left to finish (or fail) on its own.
+    public func bringDown(_ artifacts: [URL], quietLimit: TimeInterval, control: RunControl?) throws {
+        for url in artifacts where isEvicted(url) {
+            let done = DispatchSemaphore(value: 0)
+            let fetch = self.fetch
+            Thread.detachNewThread { fetch(url); done.signal() }
+            let clock = { ProcessInfo.processInfo.systemUptime }
+            var quietSince = clock(), last = progress(url)
+            let tick = min(1, max(0.02, quietLimit / 10))
+            while done.wait(timeout: .now() + tick) == .timedOut {
+                if control?.isCancelled == true { throw CancelledError() }
+                let now = progress(url)
+                if now != last { last = now; quietSince = clock(); continue }
+                if clock() - quietSince >= quietLimit { throw CloudDownloadStalled(path: url.path, quiet: clock() - quietSince) }
+            }
+        }
+    }
+}
+
+/// An evicted archive whose download made no progress.
+public struct CloudDownloadStalled: Error, Equatable {
+    public let path: String
+    public let quiet: TimeInterval
+}
+
+extension CloudDownloadStalled: LocalizedError {
+    public var errorDescription: String? {
+        let minutes = Int((quiet / 60).rounded())
+        return "this archive is in a cloud folder and isn't on this Mac, and downloading it made no progress for \(quiet >= 90 ? "\(minutes) minutes" : "\(Int(quiet.rounded())) seconds"). Check the internet connection and that the cloud service is running, then try again."
+    }
+}
+
