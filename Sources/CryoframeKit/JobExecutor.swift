@@ -191,21 +191,10 @@ public struct JobExecutor: Sendable {
             var builds: [SealedBuild] = []
             var cancelled = false
             var notes: [String] = []
-            // A job saved before 1.5.6 can hold two libraries whose archives share a
-            // folder (see LibraryNames). Running it silently overwrote one with the
-            // other; refuse both, per destination, so the run fails where it can be seen.
-            let clashingIDs = Set(LibraryNames.clashing(job.libraries).map(\.id))
             libraryLoop: for (offset, library) in job.libraries.enumerated() {
                 let idx = offset + 1
                 if control.isCancelled { cancelled = true; break }
                 onLibrary(library.displayName)
-                if clashingIDs.contains(library.id) {
-                    for d in dests {
-                        results.append(.failed(library: library.displayName, destination: d.target.displayName,
-                                               error: LibraryNames.clashMessage(library.displayName)))
-                    }
-                    continue
-                }
                 guard let placement = placements.first(where: { $0.library.id == library.id }),
                       let root = placement.root(in: mounts) else {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations

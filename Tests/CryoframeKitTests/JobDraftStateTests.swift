@@ -232,11 +232,14 @@ private func job(_ id: String = "existing", name: String = "Existing", libraries
     #expect(d.isValid(existing: [me]))
 }
 
-@Test func twoLibrariesSharingAnArchiveFolderAreRefused() {
+// 1.5.6 refused this: the two shared one archive folder. Folders found by identity
+// (1.6) keep them apart, so it's allowed, with a note to rename one.
+@Test func twoLibrariesOfOneNameAreAllowedWithANote() {
     var d = draft()
     d.selectedLibraryIDs = [projects.id, otherProjects.id]
     #expect(d.libraryNameClashes == [LibraryNames.clashMessage("Projects")])
-    #expect(!d.isValid(existing: []))
+    #expect(LibraryNames.clashMessage("Projects").contains("separate folders"))
+    #expect(d.isValid(existing: []))
 }
 
 @Test func aDraftNeedsALibraryAndADestination() {

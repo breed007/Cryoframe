@@ -172,13 +172,12 @@ public struct JobDraftState: Sendable, Equatable {
         return out.sorted()
     }
 
-    /// libraries in THIS job that would share an archive folder (see LibraryNames).
+    /// libraries in THIS job with one name: allowed, with a note (see LibraryNames)
     public var libraryNameClashes: [String] { LibraryNames.clashMessages(selectedLibraries) }
 
     public func isValid(existing: [BackupJob]) -> Bool {
         !selectedLibraries.isEmpty && !dedupedTargets.isEmpty && encryptionValid
             && destinationConflicts(existing: existing).isEmpty
-            && libraryNameClashes.isEmpty
     }
 
     public var defaultName: String {

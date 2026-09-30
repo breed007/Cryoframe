@@ -435,7 +435,7 @@ struct NewJobWizard: View {
 
     private var canContinue: Bool {
         switch step {
-        case 0: return !draft.selectedLibraries.isEmpty && draft.libraryNameClashes.isEmpty
+        case 0: return !draft.selectedLibraries.isEmpty
         case 1: return !draft.dedupedTargets.isEmpty && draft.destinationConflicts.isEmpty
         case 3: return draft.isValid
         default: return true
