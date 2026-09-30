@@ -178,9 +178,20 @@ public enum RestoreDiscovery {
         // listing a symlink lists nothing: follow it (depth still bounds a loop)
         let dir = (try? dir.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
             ? dir.resolvingSymlinksInPath() : dir
-        if let a = archive(at: dir) { out.append(a); return }      // a manifest dir is a leaf
-        guard depth < maxDepth else { return }
         let fm = FileManager.default
+        if let a = archive(at: dir) {
+            out.append(a)
+            // A manifest dir is a leaf, but for the versions a sealed job kept beside
+            // a mirror in a folder the two shared (1.5 named folders by library): the
+            // mirror's manifest hid every one of them from Restore.
+            guard a.format == .liveMirror, a.version == nil, depth < maxDepth else { return }
+            for entry in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            where VersionStamp.date(entry.lastPathComponent) != nil {
+                if let v = archive(at: entry) { out.append(v) }
+            }
+            return
+        }
+        guard depth < maxDepth else { return }
         for entry in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey])) ?? [] {
             // fileExists follows a symlink: a destination can be one, or be reached
             // through one (a folder in the home folder pointing at a drive)
