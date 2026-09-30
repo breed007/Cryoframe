@@ -118,6 +118,7 @@ certificate
 cf
 change
 changed
+changes
 chat
 check
 checked
@@ -304,6 +305,7 @@ folder
 folder's
 folders
 follow
+follows
 for
 force
 forever
@@ -325,6 +327,7 @@ garageband
 gb
 generic
 get
+gets
 gfs
 gib
 go
@@ -470,6 +473,7 @@ manifest
 manual
 map
 mark
+marked
 master
 match
 may
@@ -660,6 +664,7 @@ remove
 removed
 removes
 rename
+renamed
 reopened
 repeats
 replaced
@@ -825,6 +830,7 @@ trusted
 try
 turn
 turned
+turns
 txt
 type
 ubf
@@ -851,6 +857,7 @@ unzip
 up
 update
 updated
+upload
 url
 us
 use
