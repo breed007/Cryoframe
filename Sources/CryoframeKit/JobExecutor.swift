@@ -414,9 +414,7 @@ public struct JobExecutor: Sendable {
         // a version folder an interrupted transfer (this run's or an earlier one's) is
         // still to finish into isn't a leftover; asked when retention runs
         let pendingStore = self.pendingStore
-        let stillTransferring: (URL) -> Bool = { dir in
-            (pendingStore?.all() ?? []).contains { DestinationRules.samePath(URL(fileURLWithPath: $0.targetDir, isDirectory: true), dir) }
-        }
+        let stillTransferring = Self.transferring(job, folderOf, records: { pendingStore?.all() ?? [] }, volumes: self.volumes)
         if pass.cancelled {
             pass.builds.forEach(cleanupBuild)
             if sealed != nil {
@@ -652,6 +650,22 @@ public struct JobExecutor: Sendable {
     }
 
     /// the folders retention prunes: the ones this run wrote to
+    /// Whether an interrupted transfer is still to finish into a version folder of
+    /// `job`'s library folders (`folderOf`: destination id → library id → folder),
+    /// by what each transfer is for (see PendingTransfer.writesInto).
+    static func transferring(_ job: BackupJob, _ folderOf: [String: [String: URL]], records: @escaping () -> [PendingTransfer],
+                             volumes: VolumeTable) -> (URL) -> Bool {
+        let owners = folderOf.flatMap { dest, libs in libs.map { (folder: $0.value, key: "\(job.id):\(safe(dest)):\($0.key)") } }
+        return { dir in
+            let records = records()
+            guard !records.isEmpty else { return false }
+            let parent = dir.deletingLastPathComponent()
+            let key = owners.first { DestinationRules.samePath($0.folder, parent) }?.key
+            let volume = volumes.volume(containing: dir)
+            return records.contains { $0.writesInto(dir, key: key, volume: volume) }
+        }
+    }
+
     static func prunable(_ job: BackupJob, _ folderOf: [String: [String: URL]]) -> [(library: ContentType, folder: URL)] {
         job.targets.flatMap { t in job.libraries.compactMap { lib in folderOf[t.id]?[lib.id].map { (lib, $0) } } }
     }

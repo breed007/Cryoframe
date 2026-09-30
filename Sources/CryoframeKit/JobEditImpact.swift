@@ -125,11 +125,12 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
                 }
                 // a Keep rule that keeps fewer
                 guard draft.format.isSealed, draft.retention != base.retention else { continue }
+                let transferring = JobExecutor.transferring(draft, [t.id: [lib.id: folder]], records: { pending }, volumes: volumes)
                 let plan = JobExecutor.prunePlan(folders: [(lib, folder)], policy: draft.retention, checks: checks,
-                                                 transferring: { d in pendingDirs.contains { DestinationRules.samePath($0, d) } },
+                                                 transferring: transferring,
                                                  upcoming: now)
                 let was = JobExecutor.prunePlan(folders: [(lib, folder)], policy: base.retention, checks: checks,
-                                                transferring: { d in pendingDirs.contains { DestinationRules.samePath($0, d) } },
+                                                transferring: transferring,
                                                 upcoming: now)
                 if plan.versions.count > was.versions.count {
                     deletes += plan.versions.count

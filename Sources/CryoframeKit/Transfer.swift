@@ -66,6 +66,19 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
         guard let volume else { return false }
         return volume.uuid == id || volume.shareKey == id.lowercased()
     }
+
+    /// Whether this transfer is still to finish into `versionDir`, a version folder
+    /// of the library and destination `key` (`<job>:<dest>:<lib>`) names, on `volume`.
+    /// By what the record is for and the version's name, on the drive it began on:
+    /// not by the absolute path it recorded, which moves with the drive's name and
+    /// where it's mounted ("T7 1" while its twin is connected, a share remounted as
+    /// "Backups-1"). The path it recorded still counts.
+    public func writesInto(_ versionDir: URL, key: String?, volume: MountedVolume?) -> Bool {
+        let recorded = URL(fileURLWithPath: targetDir, isDirectory: true)
+        if DestinationRules.samePath(recorded, versionDir) { return true }
+        guard let key, jobID == key, recorded.lastPathComponent == versionDir.lastPathComponent else { return false }
+        return volume == nil || isOnItsDrive(volume)
+    }
 }
 
 public final class PendingTransferStore: @unchecked Sendable {
