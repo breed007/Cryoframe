@@ -104,8 +104,9 @@ enum MirrorCopy {
     ///   - every path in the library is in the new copy with the same type, size,
     ///     date and link target, and nothing else is;
     ///   - every file this run wrote (its size or date differs from the previous copy,
-    ///     or it is new, which is exactly what rsync copies) matches the library byte
-    ///     for byte. Files carried over from the previous copy share its blocks.
+    ///     or it is new, which is exactly what rsync copies, or it is a sparse file
+    ///     copySparse wrote again) matches the library byte for byte. Files carried
+    ///     over from the previous copy share its blocks.
     ///   - every file and folder carries the library's extended attributes (a resource
     ///     fork, Finder tags) and access list. rsync -E writes those for every item on
     ///     every run, changed or not, and copyAttributes rewrites them on read-only
@@ -177,8 +178,12 @@ enum MirrorCopy {
                 found.note(rel, "has the wrong size or date"); continue
             }
             found.present.append(rel)
+            // a sparse file copySparse wrote again (a dense copy made sparse, a date
+            // off by less than a second) has the previous copy's size and date, in
+            // new blocks: it is carried only if copySparse left it
             let carried = previous.map { lstat($0.appendingPathComponent(rel).path, &c) == 0 } == true
                 && c.st_size == a.st_size && c.st_mtimespec.tv_sec == a.st_mtimespec.tv_sec
+                && (!isSparse(source.appendingPathComponent(rel).path, a) || sparseCopyIsCurrent(c, of: a))
             if !carried { found.written.append(rel) }
         }
         if let extra = fm.enumerator(atPath: copy.path) {
@@ -441,11 +446,19 @@ enum MirrorCopy {
             let from = source.appendingPathComponent(rel).path, to = next.appendingPathComponent(rel).path
             var a = stat(), b = stat()
             guard lstat(from, &a) == 0, a.st_mode & S_IFMT == S_IFREG else { continue }
-            if lstat(to, &b) == 0, b.st_mode & S_IFMT == S_IFREG, b.st_size == a.st_size,
-               b.st_mtimespec.tv_sec == a.st_mtimespec.tv_sec, b.st_mtimespec.tv_nsec == a.st_mtimespec.tv_nsec,
-               b.st_blocks <= a.st_blocks + 2048 { continue }
+            if lstat(to, &b) == 0, sparseCopyIsCurrent(b, of: a) { continue }
             try copyWithHoles(from, to, a)
         }
+    }
+
+    /// Whether a copy (`copy`) of a sparse library file (`library`) is left as it is by
+    /// copySparse: a file of its size and date, to the nanosecond, and not more than
+    /// 1 MiB more on disk. The read-back asks the same of the previous copy, the one
+    /// the new copy was cloned from, to tell which sparse files this run wrote.
+    static func sparseCopyIsCurrent(_ copy: stat, of library: stat) -> Bool {
+        copy.st_mode & S_IFMT == S_IFREG && copy.st_size == library.st_size
+            && copy.st_mtimespec.tv_sec == library.st_mtimespec.tv_sec && copy.st_mtimespec.tv_nsec == library.st_mtimespec.tv_nsec
+            && copy.st_blocks <= library.st_blocks + 2048
     }
 
     /// `from` copied to `to` as its data and holes: the copy is made its full length
