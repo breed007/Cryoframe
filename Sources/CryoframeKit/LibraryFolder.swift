@@ -40,11 +40,18 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
     /// versions)
     public var mirror: Bool?
     /// The version folders that were here when the library's job changed between a
-    /// mirror and sealed versions. Whose they are can't be told: a mirror job's folder
-    /// holds other jobs' versions (a 1.5 folder it shared, or what 1.5.6 wrote into it),
-    /// and a sealed job's holds its own. They stay where they are, never pruned and
-    /// never moved.
+    /// mirror and sealed versions: never pruned by it, whatever it is later changed
+    /// to. A mirror job's folder holds other jobs' versions (a 1.5 folder it shared, or
+    /// what 1.5.6 wrote into it), and a sealed job's holds its own; once held, which of
+    /// the two a version is stays recorded (`ownHeldVersions`), however often the job
+    /// is changed again.
     public var heldVersions: [String]?
+    /// Of `heldVersions`, those the library's job made itself: held when it was
+    /// changed from sealed versions to a mirror. The rest are other jobs', held when it
+    /// was changed from a mirror. Written whenever versions are held; missing from a
+    /// file written before it was recorded, where a held version is the job's own when
+    /// the folder is a mirror job's now.
+    public var ownHeldVersions: [String]?
 
     public init(jobID: String, libraryID: String, name: String, jobName: String) {
         self.key = Self.key(jobID: jobID, libraryID: libraryID)
@@ -83,12 +90,24 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
         var out = self
         out.formerNames = names.isEmpty ? nil : Array(names.suffix(20))
         out.heldVersions = previous.heldVersions
+        out.ownHeldVersions = previous.ownHeldVersions
         return out
     }
 
     /// whether `version`, a version folder's name, is one of those held (see
     /// `heldVersions`)
     public func holds(_ version: String) -> Bool { heldVersions?.contains(version) == true }
+
+    /// Whether `version`, a version folder here, is the library's own: one its job
+    /// made as a sealed job. A version that isn't held came while the folder was what
+    /// it is now, so it is the job's own in a sealed job's folder and another job's in
+    /// a mirror job's (a mirror job makes no versions). A held one is what it was
+    /// recorded as when it was held.
+    public func owns(_ version: String) -> Bool {
+        guard holds(version) else { return mirror != true }
+        guard let own = ownHeldVersions else { return mirror == true }
+        return own.contains(version)
+    }
 
     /// write it into `folder`, all at once (a crash leaves the old file or the new one)
     public func write(in folder: URL) throws {
