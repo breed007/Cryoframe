@@ -410,6 +410,10 @@ public struct JobExecutor: Sendable {
                                                     checks: checks)
             }
         }
+        // the note on how to restore without Cryoframe, brought up to date in each
+        // destination this run reached; a note that can't be written is logged, never
+        // a failure (see RecoveryNote)
+        for d in dests where d.available { RecoveryNote.write(in: d.target.destinationDir) }
         onStage(.completed)
         jobStore?.recordRun(id: job.id, at: now)
         // a run that backed up fine but could not prune still succeeded — say so in the
