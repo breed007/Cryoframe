@@ -163,6 +163,9 @@ public struct ProcessCommandRunner: CommandRunner {
     /// on a dead drive is as stuck as anything else
     public var forTeardown: CommandRunner { ProcessCommandRunner(quietLimit: quietLimit) }
 
+    /// the quality of service every tool is launched at
+    static let toolQuality: QualityOfService = .utility
+
     public func run(_ launchPath: String, _ args: [String], stdin: Data? = nil) throws -> CommandResult {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: launchPath)
@@ -170,6 +173,12 @@ public struct ProcessCommandRunner: CommandRunner {
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
+        // Never at background priority, whatever launched the run: a tool there gets
+        // almost no CPU while the Mac is busy (about 10 ms in five minutes, measured),
+        // which looks like no progress to the watchdog. Utility is the class for long
+        // work no one is waiting on; a tool's priority comes from this, not from the
+        // thread that launches it (measured).
+        p.qualityOfService = Self.toolQuality
         let inPipe: Pipe? = stdin != nil ? Pipe() : nil
         if let inPipe { p.standardInput = inPipe }
         control?.waitWhilePaused()                  // don't launch the next command while paused
