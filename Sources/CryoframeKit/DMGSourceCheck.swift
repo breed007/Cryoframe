@@ -22,6 +22,13 @@
 //  Those don't fail the run: a sealed build of such a folder reads a copy of it
 //  without them (see FilteredCopy), and the run says what was left out.
 //
+//  And it finds locked items (Finder's Locked, the uchg and uappnd flags). A zip
+//  can't keep the lock, and macOS 15's disk image tool can't build from a folder
+//  holding one at all ("could not access <file> - Operation not permitted", direct
+//  builds included). Neither fails the run: a disk image built where the tool can't
+//  take them reads an unlocked copy (see SealedReadPlan), and the run says which
+//  items lost their lock.
+//
 
 import Foundation
 
@@ -32,8 +39,10 @@ public struct DMGBlockers: Sendable, Equatable {
     /// supported on socket"). Devices can't be made without root to measure; neither
     /// tool can recreate one as the user. These are left out of a sealed build (see
     /// FilteredCopy), not refused; the other kinds refuse it. `accessList`: an access
-    /// list hdiutil fails on (see `accessListStopsDiskImage`).
-    public enum Kind: Sendable, CaseIterable { case unreadable, foreign, setgid, special, accessList }
+    /// list hdiutil fails on (see `accessListStopsDiskImage`). `locked`: an item
+    /// carrying a lock (see MirrorCopy.lockingFlags), which a zip drops and macOS 15's
+    /// disk image tool can't build from; it never refuses a build.
+    public enum Kind: Sendable, CaseIterable { case unreadable, foreign, setgid, special, accessList, locked }
 
     /// how many examples of each kind are kept to name
     public static let examplesKept = 5
@@ -46,12 +55,16 @@ public struct DMGBlockers: Sendable, Equatable {
     public var isEmpty: Bool { counts.isEmpty }
     public var total: Int { counts.values.reduce(0, +) }
 
-    /// what stops a sealed build: everything but the items it leaves out
+    /// what stops a sealed build: everything but the items it leaves out and the
+    /// locks it can't keep
     public var refusing: DMGBlockers {
         var out = self
-        out.counts[.special] = nil; out.examples[.special] = nil
+        for kind in [Kind.special, .locked] { out.counts[kind] = nil; out.examples[kind] = nil }
         return out
     }
+
+    /// how many of `kind` were found
+    public func count(_ kind: Kind) -> Int { counts[kind] ?? 0 }
 
     mutating func note(_ kind: Kind, _ rel: String) {
         counts[kind, default: 0] += 1
@@ -61,13 +74,14 @@ public struct DMGBlockers: Sendable, Equatable {
     /// Look at one item of the library. A symbolic link is copied as a link, so only
     /// its owner matters; a folder must be listable as well as readable. `forDMG`
     /// adds what makes hdiutil ask for a password to what neither sealed format can
-    /// hold (`special`).
+    /// hold (`special`). `locks`: note locked items too (a sealed walk's).
     mutating func inspect(_ path: String, relative rel: String, groups: inout Membership,
-                          uid: uid_t = geteuid(), forDMG: Bool = true) {
+                          uid: uid_t = geteuid(), forDMG: Bool = true, locks: Bool = false) {
         var st = stat()
         guard lstat(path, &st) == 0 else { if forDMG { note(.unreadable, rel) }; return }
         let type = st.st_mode & S_IFMT
         if type == S_IFIFO || type == S_IFSOCK || type == S_IFBLK || type == S_IFCHR { note(.special, rel); return }
+        if locks, st.st_flags & MirrorCopy.lockingFlags != 0 { note(.locked, rel) }
         guard forDMG else { return }
         if st.st_uid != uid { note(.foreign, rel); return }
         switch type {
@@ -177,6 +191,18 @@ public struct DMGBlockers: Sendable, Equatable {
     /// FilteredCopy).
     public func leftOutOfSealed(library: String, zip: Bool) -> String? {
         leftOut(library: library, of: zip ? "the zip" : "the disk image")
+    }
+
+    /// What a sealed run says about the locked items whose lock the archive doesn't
+    /// keep, or nil if there were none: a zip never keeps one, and a disk image built
+    /// from an unlocked copy (see SealedReadPlan) doesn't. Not a failure: what they
+    /// hold is all there.
+    public func unlockedInSealed(library: String, zip: Bool) -> String? {
+        guard let n = counts[.locked], n > 0 else { return nil }
+        let shown = examples[.locked] ?? []
+        let why = zip ? "A zip can't keep an item's lock."
+                      : "macOS's disk image tool on this Mac can't build from locked items, so the disk image was built from a copy with the locks taken off."
+        return "\(library): left the lock off \(n) locked item\(n == 1 ? "" : "s") in \(zip ? "the zip" : "the disk image") (\(shown.joined(separator: ", "))\(n > shown.count ? ", …" : "")). \(why) What they hold is all there; lock them again after a restore if you need to."
     }
 
     private func leftOut(library: String, of what: String) -> String? {

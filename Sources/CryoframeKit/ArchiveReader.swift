@@ -36,6 +36,16 @@ public struct OpenedArchive: Sendable {
         }
     }
 
+    /// Whether `url` is a work folder Cryoframe made: `cf-open-<UUID>` (an open
+    /// archive) or `cf-mirror-<UUID>` (a mirror run's attach), a folder and not a link.
+    /// The temp folder they live in is shared with every other program the user runs.
+    static func isWorkFolder(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        guard let prefix = [workPrefix, MirrorMounts.prefix].first(where: { name.hasPrefix($0) }),
+              UUID(uuidString: String(name.dropFirst(prefix.count))) != nil else { return false }
+        return ScratchLayout.isRealFolder(url)
+    }
+
     static func recordOwner(in work: URL) {
         guard let me = ProcessIdentity.current, let data = try? JSONEncoder().encode(me) else { return }
         try? data.write(to: work.appendingPathComponent(ownerFileName), options: .atomic)
@@ -174,6 +184,8 @@ public struct ArchiveReader: Sendable {
                 try checkRoom(unpacked, in: work, doing: "unpacked")
                 let ex = work.appendingPathComponent("extract"); try fm.createDirectory(at: ex, withIntermediateDirectories: true)
                 try exec(Command("/usr/bin/ditto", ["-x", "-k", zip.path, ex.path]))
+                // ditto dates some folders at the unpack (see ZipFolderDates)
+                ZipFolderDates.restore(from: zip, into: ex)
                 return OpenedArchive(root: ex, work: work) {}
             }
         } catch {
@@ -386,14 +398,16 @@ public struct ArchiveReader: Sendable {
     /// on launch, force-detach and remove any archive a crashed process left open,
     /// and any mirror a crashed run left attached. Only those: an archive a live
     /// process has open (the agent verifying a run, a drill, a rehearsal, another
-    /// window browsing, a mirror run) is still in use.
+    /// window browsing, a mirror run) is still in use. And only Cryoframe's own work
+    /// folders: named with its prefix and a UUID, and folders, not links (see
+    /// OpenedArchive.isWorkFolder).
     public static func sweepStaleOpens(in directory: URL = FileManager.default.temporaryDirectory,
                                        runner: CommandRunner = ProcessCommandRunner(), now: Date = Date(),
                                        isAlive: (ProcessIdentity) -> Bool = { $0.isAlive }) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
         // a mirror run's attach (MirrorMounts) follows the same rules as an open archive
-        for e in entries where e.lastPathComponent.hasPrefix(OpenedArchive.workPrefix) || e.lastPathComponent.hasPrefix(MirrorMounts.prefix) {
+        for e in entries where OpenedArchive.isWorkFolder(e) {
             guard OpenedArchive.isAbandoned(e, now: now, isAlive: isAlive) else { continue }
             let mnt = e.appendingPathComponent("mnt")
             if MountPoint.isMounted(mnt) { OpenedArchive.release(mnt, runner: runner) }

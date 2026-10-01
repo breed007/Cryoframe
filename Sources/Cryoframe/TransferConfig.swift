@@ -18,9 +18,12 @@ enum TransferConfig {
         return n * (unit == "TB" ? 1_000_000_000_000 : 1_000_000_000)
     }
 
+    /// where sealed builds are made: Cryoframe's own folder inside the scratch location
+    /// chosen in Settings, which is the user's folder and may hold anything (see
+    /// ScratchLayout), or the system cache
     static func scratchBase() -> URL {
         if let path = UserDefaults.standard.string(forKey: Prefs.scratchDir), !path.isEmpty {
-            return URL(fileURLWithPath: path, isDirectory: true)
+            return ScratchLayout.root(inChosen: URL(fileURLWithPath: path, isDirectory: true))
         }
         return defaultScratchBase()
     }

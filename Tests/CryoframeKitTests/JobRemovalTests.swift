@@ -66,9 +66,12 @@ private func setup(_ tag: String) throws -> Setup {
 
     let scratchBase = base.appendingPathComponent("scratch")
     let staged = scratchBase.appendingPathComponent("job-1/build/papers/Papers.dmg")
+    // each staged by a run, which marks its job's folder as Cryoframe's (see ScratchLayout)
+    try ScratchLayout.claim(libraryDir: staged.deletingLastPathComponent())
     try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data(repeating: 3, count: 300).write(to: staged)
     let otherStaged = scratchBase.appendingPathComponent("job-2/build/papers/Papers.zip")
+    try ScratchLayout.claim(libraryDir: otherStaged.deletingLastPathComponent())
     try FileManager.default.createDirectory(at: otherStaged.deletingLastPathComponent(), withIntermediateDirectories: true)
     try Data(repeating: 4, count: 10).write(to: otherStaged)
 

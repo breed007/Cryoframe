@@ -139,8 +139,7 @@ public enum MirrorMounts {
         for mp in mountPoints(of: image, runner: runner) {
             let mnt = URL(fileURLWithPath: mp, isDirectory: true)
             let work = mnt.deletingLastPathComponent()
-            let name = work.lastPathComponent
-            guard mnt.lastPathComponent == "mnt", name.hasPrefix(prefix) || name.hasPrefix(OpenedArchive.workPrefix),
+            guard mnt.lastPathComponent == "mnt", OpenedArchive.isWorkFolder(work),
                   OpenedArchive.isAbandoned(work, now: now, isAlive: isAlive) else { continue }
             if OpenedArchive.isBorrowed(work) { MountPoint.unmount(mnt, runner: runner) } else { MountPoint.detach(mnt, runner: runner) }
             OpenedArchive.removeWork(work)

@@ -270,10 +270,8 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
                                          locks: RunLocks(directory: base.appendingPathComponent("locks")))
         let fm = FileManager.default
         #expect(fm.fileExists(atPath: chosen.appendingPathComponent("MyApp/main.c").path))
-        withKnownIssue("since 1.1.0: the launch sweep takes every <scratch>/*/build/* as Cryoframe's, and a scratch location chosen in Settings is the user's own folder") {
-            #expect(fm.fileExists(atPath: chosen.appendingPathComponent("MyApp/build/Release/MyApp.txt").path), "a project's build output was deleted")
-            #expect(fm.fileExists(atPath: chosen.appendingPathComponent("Site/build/filtered/index.html").path), "a folder named filtered was deleted")
-        }
+        #expect(fm.fileExists(atPath: chosen.appendingPathComponent("MyApp/build/Release/MyApp.txt").path), "a project's build output was deleted")
+        #expect(fm.fileExists(atPath: chosen.appendingPathComponent("Site/build/filtered/index.html").path), "a folder named filtered was deleted")
     }
 
     // MARK: room
@@ -512,9 +510,7 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         }
         #expect(date("OnlyFiles") == 1_600_000_000, "\(date("OnlyFiles"))")
         #expect(date("Both/Inner") == 1_600_000_000, "\(date("Both/Inner"))")
-        withKnownIssue("ditto -x dates a folder holding a folder and a file at the unpack") {
-            #expect(date("Both") == 1_600_000_000, "unpacked dated \(date("Both"))")
-        }
+        #expect(date("Both") == 1_600_000_000, "unpacked dated \(date("Both"))")
     }
 
     // MARK: Stop on a check

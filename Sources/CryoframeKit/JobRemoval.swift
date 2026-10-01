@@ -95,7 +95,7 @@ public enum JobRemoval {
             return Plan.Unfinished(destination: target.map { labels[$0.id] ?? $0.displayName } ?? dir.deletingLastPathComponent().lastPathComponent,
                                    dir: dir, bytesReached: reached, totalBytes: p.totalBytes)
         }.sorted { $0.dir.path < $1.dir.path }
-        let staged = stagedFolder(job.id, scratchBase: scratchBase).flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        let staged = stagedFolder(job.id, scratchBase: scratchBase).flatMap { ScratchLayout.isOurs($0, jobID: job.id) ? $0 : nil }
         return Plan(jobID: job.id, jobName: job.name, places: places, unfinished: unfinished,
                     staged: staged, encrypted: job.encrypted)
     }
@@ -122,7 +122,11 @@ public enum JobRemoval {
         let now = plan(for: job, pending: pending, scratchBase: scratchBase, volumes: volumes)
         guard now == expected else { throw Refusal.changed(now) }
         for p in pending.all() where p.owningJobID == job.id { pending.remove(jobID: p.jobID) }
-        if let staged = stagedFolder(job.id, scratchBase: scratchBase) { try? FileManager.default.removeItem(at: staged) }
+        // only a folder provably Cryoframe's (see ScratchLayout): a 1.5 build in a
+        // scratch location chosen in Settings carries no mark, and stays
+        if let staged = stagedFolder(job.id, scratchBase: scratchBase), ScratchLayout.isOurs(staged, jobID: job.id) {
+            try? FileManager.default.removeItem(at: staged)
+        }
         store.update { s in
             s.jobs.removeAll { $0.id == job.id }
             s.lastRun[job.id] = nil

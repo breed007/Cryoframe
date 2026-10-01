@@ -15,6 +15,10 @@
 //    <buildDir>/filtered/<name>     the library, less what was left out
 //    <buildDir>/<name>.dmg|.zip     the archive, built from it as from the library
 //
+//  The same copy, with its locks taken off, is what a disk image is built from where
+//  macOS's disk image tool can't build from locked items (macOS 15; see
+//  SealedReadPlan), and the run says which items lost their lock.
+//
 //  The copy has the library's name, and its own extended attributes (a package's
 //  bundle bit among them), so a disk image built from it has the layout a direct
 //  build has: a package as one item on the volume root, a plain folder's contents
@@ -86,6 +90,58 @@ enum FilteredCopy {
         return free < nearlyFull
     }
 
+    /// Whether this Mac's disk image tool builds from locked items (and keeps their
+    /// locks). Measured: macOS 26 and 27 do; macOS 15 refuses any folder holding one
+    /// ("could not access /Volumes/<library>/locked.txt - Operation not permitted"), a
+    /// direct build included (CI's runner, 2026-10-01). macOS 26 reports itself as 16
+    /// to a program built with an older SDK, so anything from 16 on counts as 26.
+    static var diskImageKeepsLocks: Bool {
+        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 16
+    }
+
+    /// Build `source`'s sealed archive in `buildDir`, reading it the way `plan` says:
+    /// directly, or from a copy made in `copyDir` (removed however the build ends,
+    /// Stop included). `found` is what the run's walk of the library found. A disk
+    /// image the tool refuses to build directly from a library holding locked items
+    /// is built from an unlocked copy instead, whatever this macOS. Returns the
+    /// archive and what the run says about how it was built.
+    static func sealedArchive(_ engine: SealedArchiveEngine, source: ArchiveSource, found: DMGBlockers, plan: SealedReadPlan,
+                              buildDir: URL, copyDir: URL, library: String,
+                              runner: CommandRunner) throws -> (archive: ArchiveResult, notes: [String]) {
+        let zip = engine.sealed == .zip
+        var plan = plan
+        if !plan.fromCopy {
+            do {
+                let archive = try engine.archive(source, to: buildDir)
+                return (archive, zip ? [found.unlockedInSealed(library: library, zip: true)].compactMap { $0 } : [])
+            } catch let ArchiveError.toolFailed(tool, _, stderr)
+                        where tool == "hdiutil" && refusedOutright(stderr) && found.count(.locked) > 0 {
+                if runner.control?.isCancelled == true { throw CancelledError() }
+                plan = SealedReadPlan(fromCopy: true, unlocked: true)
+            }
+        }
+        // removed however the build ends, Stop included, before anything reads the archive
+        defer {
+            remove(in: copyDir, runner: runner.forTeardown)
+            if copyDir.path != buildDir.path { removeEmpty(copyDir) }
+        }
+        try ScratchLayout.claim(libraryDir: copyDir)
+        let copy: URL
+        do {
+            copy = try make(of: source.root, name: source.name, in: copyDir, runner: runner).copy
+        } catch FilteredCopyError.scratchFilled(let volume, let library, _) where engine.passphrase != nil {
+            throw FilteredCopyError.scratchFilled(volume: volume, library: library, encrypted: true)
+        }
+        if plan.unlocked { MirrorCopy.unlock(copy) }
+        let built = try build(engine, from: ArchiveSource(name: source.name, root: copy, sizeHint: source.sizeHint),
+                              to: buildDir, library: library)
+        var notes: [String] = []
+        if let note = found.leftOutOfSealed(library: library, zip: zip) { notes.append(note) }
+        if zip || plan.unlocked || built.note != nil,
+           let note = found.unlockedInSealed(library: library, zip: zip) ?? built.note { notes.append(note) }
+        return (built.archive, notes)
+    }
+
     /// Build the archive from the copy (`from`). A disk image hdiutil refuses outright
     /// (see `refusedOutright`) is tried once more with nothing in the copy locked, and
     /// says so in `note`; refused again, the build fails saying why.
@@ -139,28 +195,30 @@ enum FilteredCopy {
     }
 
     /// Remove every copy a run of `jobID` left in each of `bases` (`<base>/<job>/build/<library>/filtered`),
-    /// and the folders that held only that. Only for a job whose run lock is held.
+    /// and the folders that held only that. Only in a job folder that is provably
+    /// Cryoframe's (see ScratchLayout), and only for a job whose run lock is held.
     static func removeLeftovers(jobID: String, under bases: [URL]) {
         let fm = FileManager.default
         var seen = Set<String>()
         for base in bases where seen.insert(base.standardizedFileURL.path).inserted {
-            let build = base.appendingPathComponent(jobID, isDirectory: true).appendingPathComponent("build", isDirectory: true)
+            let jobDir = base.appendingPathComponent(jobID, isDirectory: true)
+            guard ScratchLayout.isOurs(jobDir, jobID: jobID) else { continue }
+            let build = jobDir.appendingPathComponent("build", isDirectory: true)
+            guard ScratchLayout.isRealFolder(build) else { continue }
             for lib in (try? fm.contentsOfDirectory(at: build, includingPropertiesForKeys: nil)) ?? [] {
                 var st = stat()
-                guard lstat(lib.appendingPathComponent(folderName).path, &st) == 0 else { continue }
+                guard ScratchLayout.isRealFolder(lib), lstat(lib.appendingPathComponent(folderName).path, &st) == 0 else { continue }
                 remove(in: lib, runner: ProcessCommandRunner())
                 removeEmpty(lib)
             }
         }
     }
 
-    /// `<base>/<job>/build/<library>`, then its two parents, each only if empty
+    /// `<base>/<job>/build/<library>` and `build`, each only if empty, then the job's
+    /// folder if it holds nothing but its mark (see ScratchLayout.tidy)
     static func removeEmpty(_ libDir: URL) {
-        var dir = libDir
-        for _ in 0..<3 {
-            guard rmdir(dir.path) == 0 else { return }
-            dir = dir.deletingLastPathComponent()
-        }
+        guard rmdir(libDir.path) == 0 else { return }
+        ScratchLayout.tidy(jobDir: libDir.deletingLastPathComponent().deletingLastPathComponent())
     }
 
     /// Remove the filtered copy in `buildDir`, if there is one. A locked file, a
@@ -273,19 +331,45 @@ enum FilteredCopy {
     }
 }
 
+/// How a sealed build reads its library: directly, or from a copy (see FilteredCopy),
+/// and whether that copy has its locks taken off.
+struct SealedReadPlan: Equatable, Sendable {
+    var fromCopy: Bool
+    var unlocked: Bool
+
+    static let direct = SealedReadPlan(fromCopy: false, unlocked: false)
+
+    /// A copy when the library holds what neither format can (named pipes, sockets,
+    /// devices), or locked items a disk image can't be built from on this Mac (see
+    /// FilteredCopy.diskImageKeepsLocks), taken off in the copy. Where the tool keeps
+    /// locks a direct build keeps them, so the copy would cost room and lose them for
+    /// nothing; a zip drops them either way.
+    static func of(_ found: DMGBlockers, _ kind: SealedArchiveEngine.Sealed,
+                   diskImageKeepsLocks: Bool = FilteredCopy.diskImageKeepsLocks) -> SealedReadPlan {
+        let unlock = kind == .dmg && found.count(.locked) > 0 && !diskImageKeepsLocks
+        return SealedReadPlan(fromCopy: found.count(.special) > 0 || unlock, unlocked: unlock)
+    }
+}
+
 /// What goes wrong making the copy (MirrorCopyError is the mirror's).
 public enum FilteredCopyError: Error, Equatable, LocalizedError {
-    /// the scratch volume filled while the copy was made
-    case scratchFilled(volume: String, library: String)
+    /// the scratch volume filled while the copy was made; `encrypted`: an encrypted
+    /// job's, which is always made on the startup disk (see JobExecutor.plaintextScratch)
+    case scratchFilled(volume: String, library: String, encrypted: Bool = false)
     /// hdiutil refused to build from the copy, even with nothing in it locked
     case diskImageRefused(library: String, detail: String)
 
     public var errorDescription: String? {
         switch self {
-        case .scratchFilled(let volume, let library):
-            return "\(volume) ran out of space while a copy of \(library) without its named pipes and sockets was being made to build the archive from. Nothing was backed up, and the copy was removed. Free up space on \(volume), or choose a scratch location with more room in Settings, and run again."
+        case .scratchFilled(let volume, let library, let encrypted):
+            let said = "\(volume) ran out of space while a copy of \(library) was being made to build the archive from. Nothing was backed up, and the copy was removed."
+            guard encrypted else {
+                return said + " Free up space on \(volume), or choose a scratch location with more room in Settings, and run again."
+            }
+            // the scratch location in Settings has no say in where this copy goes
+            return said + " An encrypted job's copy is always made on the startup disk, whatever scratch location Settings names, so choosing another one won't help. Free up at least as much space on \(volume) as \(library) takes, and run again."
         case .diskImageRefused(let library, let detail):
-            return "\(library) holds named pipes or sockets, so its disk image is built from a copy without them, and macOS's disk image tool refused to build from that copy (\(detail)). Nothing was backed up, and the copy was removed. The sealed zip format archives this folder."
+            return "\(library)'s disk image is built from a copy of it (without its named pipes and sockets, or with its locks taken off), and macOS's disk image tool refused to build from that copy (\(detail)). Nothing was backed up, and the copy was removed. The sealed zip format archives this folder."
         }
     }
 }

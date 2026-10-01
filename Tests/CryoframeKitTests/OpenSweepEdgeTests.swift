@@ -19,7 +19,8 @@ private func sweepDir() -> URL {
 }
 
 private func work(_ base: URL, _ name: String, made: Date? = nil) throws -> URL {
-    let w = base.appendingPathComponent("cf-open-\(name)")
+    // named as the reader names it: the sweep takes nothing else (see OpenedArchive.isWorkFolder)
+    let w = base.appendingPathComponent(OpenedArchive.workPrefix + UUID().uuidString)
     try FileManager.default.createDirectory(at: w.appendingPathComponent("extract"), withIntermediateDirectories: true)
     try Data("x".utf8).write(to: w.appendingPathComponent("extract/file"))
     if let made { try FileManager.default.setAttributes([.creationDate: made], ofItemAtPath: w.path) }

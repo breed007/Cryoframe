@@ -31,7 +31,8 @@ private func zipArchive(in base: URL) throws -> ArchiveResult {
 }
 
 private func workDir(_ base: URL, _ name: String, owner: ProcessIdentity?) throws -> URL {
-    let work = base.appendingPathComponent("cf-open-\(name)")
+    // named as the reader names it: the sweep takes nothing else (see OpenedArchive.isWorkFolder)
+    let work = base.appendingPathComponent(OpenedArchive.workPrefix + UUID().uuidString)
     try FileManager.default.createDirectory(at: work.appendingPathComponent("extract"), withIntermediateDirectories: true)
     try Data("x".utf8).write(to: work.appendingPathComponent("extract/file"))
     if let owner {

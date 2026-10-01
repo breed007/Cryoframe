@@ -106,6 +106,7 @@ borrowed
 both
 box
 build
+builds
 built
 business
 busy
@@ -141,6 +142,7 @@ checksums
 chflags
 chmod
 choose
+choosing
 chose
 chosen
 circle
@@ -386,6 +388,7 @@ hdid
 hdiutil
 health
 healthy
+help
 helper
 helperversion
 here
@@ -444,6 +447,7 @@ issealed
 it
 it's
 item
+item's
 items
 its
 itself
@@ -514,6 +518,7 @@ machine's
 macl
 macos
 macos's
+macosx
 made
 mail
 main
@@ -571,6 +576,7 @@ musicdb
 musiclibrary
 name
 named
+names
 nearly
 need
 needed
@@ -917,6 +923,7 @@ unchanged
 uncompressed
 undone
 unfinished
+unlock
 unlocked
 unmount
 unmounted
@@ -976,6 +983,7 @@ were
 weren't
 what
 what's
+whatever
 when
 where
 whether

@@ -175,8 +175,14 @@ private func differences(_ a: [String: String], _ b: [String: String]) -> [Strin
         let lib = base.appendingPathComponent(name)
         try makeLibrary(lib)
         let passphrase = encrypted ? "pw" : nil
-        let direct = try SealedArchiveEngine(kind, passphrase: passphrase)
-            .archive(ArchiveSource(name: name, root: lib), to: base.appendingPathComponent("direct"))
+        // as the run builds it: macOS 15's disk image tool can't build from the
+        // library's locked items, so there it reads an unlocked copy (see SealedReadPlan)
+        let found = JobExecutor.directoryStats(lib, forDMG: kind == .dmg, forZip: kind == .zip).dmgBlockers
+        let directDir = base.appendingPathComponent("direct")
+        let direct = try FilteredCopy.sealedArchive(SealedArchiveEngine(kind, passphrase: passphrase),
+                                                    source: ArchiveSource(name: name, root: lib), found: found,
+                                                    plan: .of(found, kind), buildDir: directDir, copyDir: directDir,
+                                                    library: name, runner: ProcessCommandRunner()).archive
 
         // the pipe and the socket go in after the direct build; their folders' dates
         // are put back, so the library is what the direct build read, plus them
@@ -358,6 +364,7 @@ private func differences(_ a: [String: String], _ b: [String: String]) -> [Strin
         let scratch = base.appendingPathComponent("scratch")
         let libDir = scratch.appendingPathComponent("job/build/lib")
         let copy = libDir.appendingPathComponent("filtered/Lib")
+        try ScratchLayout.claim(libraryDir: libDir)
         try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
         try sh("echo x > locked && chflags uchg locked && chmod 555 .", in: copy)
         let artifact = libDir.appendingPathComponent("Lib.dmg")

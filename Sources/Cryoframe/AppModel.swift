@@ -106,10 +106,10 @@ final class AppModel: ObservableObject {
             await cleanUpLeftovers()            // then snapshots and mounts a crashed run left behind
         }
         Task.detached { ArchiveReader.sweepStaleOpens() }   // clean any browse mounts a crash left attached
-        let locks = runLocks
+        let locks = runLocks, known = Set(store.load().jobs.map(\.id))
         Task.detached {                         // clean leftover build artifacts, and copies a crash left
             for base in TransferConfig.scratchBases() {
-                JobExecutor.sweepOrphanedScratch(scratchBase: base, pendingStore: .standard(), locks: locks)
+                JobExecutor.sweepOrphanedScratch(scratchBase: base, pendingStore: .standard(), locks: locks, knownJobIDs: known)
             }
         }
         watchOtherRuns()

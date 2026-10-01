@@ -197,11 +197,13 @@ private final class Flag: @unchecked Sendable {
         var left: [URL] = []
         for root in [picked, startup] {
             let copy = root.appendingPathComponent("\(job.id)/build/projects/filtered/Projects")
+            try ScratchLayout.claim(libraryDir: copy.deletingLastPathComponent().deletingLastPathComponent())
             try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
             try sh("echo secret > plans.txt && chflags uchg plans.txt", in: copy)
             left.append(copy.deletingLastPathComponent())
         }
         let other = picked.appendingPathComponent("other-job/build/lib/filtered/Lib")
+        try ScratchLayout.claim(libraryDir: other.deletingLastPathComponent().deletingLastPathComponent())
         try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
         let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(), scratchBase: picked,
                                plaintextScratch: startup)

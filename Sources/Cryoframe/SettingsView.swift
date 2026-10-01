@@ -61,7 +61,7 @@ private struct TransferSettings: View {
             } header: {
                 Text("Resumable transfers")
             } footer: {
-                Text("Sealed archives sent to a network share or external drive are built locally in the scratch location, then shipped in parts of this size. A dropped transfer resumes from the last completed part. The scratch location needs room for about one archive, and for a sealed backup of a folder holding named pipes or sockets, room for a copy of that folder as well. An encrypted job's copy is always made in the system cache on the startup disk, never in a scratch location chosen here.")
+                Text("Sealed archives sent to a network share or external drive are built locally in the scratch location, then shipped in parts of this size. A dropped transfer resumes from the last completed part. Cryoframe works in a folder of its own inside the scratch location, named Cryoframe Scratch. It needs room for about one archive, and for a sealed backup of a folder holding named pipes or sockets (or, for a disk image on macOS 15, locked items), room for a copy of that folder as well. An encrypted job's copy is always made in the system cache on the startup disk, never in a scratch location chosen here.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

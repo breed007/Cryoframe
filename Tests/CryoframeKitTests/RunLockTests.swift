@@ -238,6 +238,7 @@ private final class OtherProcessHolding {
     let running = scratch.appendingPathComponent("running-job/build/lib", isDirectory: true)
     let crashed = scratch.appendingPathComponent("crashed-job/build/lib", isDirectory: true)
     for d in [running, crashed] {
+        try ScratchLayout.claim(libraryDir: d)              // as a run marks its job's folder
         try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         try Data("half-built".utf8).write(to: d.appendingPathComponent("Lib.dmg"))
     }
@@ -246,12 +247,13 @@ private final class OtherProcessHolding {
 
     // the agent is mid-build on one job when the app launches and tidies up
     let run = try locks.acquire(jobID: "running-job", trigger: .scheduled)
-    JobExecutor.sweepOrphanedScratch(scratchBase: scratch, pendingStore: store, locks: locks)
+    let known: Set<String> = ["running-job", "crashed-job"]
+    JobExecutor.sweepOrphanedScratch(scratchBase: scratch, pendingStore: store, locks: locks, knownJobIDs: known)
     #expect(FileManager.default.fileExists(atPath: running.appendingPathComponent("Lib.dmg").path))
     #expect(!FileManager.default.fileExists(atPath: crashed.path))
     run.release()
 
-    JobExecutor.sweepOrphanedScratch(scratchBase: scratch, pendingStore: store, locks: locks)
+    JobExecutor.sweepOrphanedScratch(scratchBase: scratch, pendingStore: store, locks: locks, knownJobIDs: known)
     #expect(!FileManager.default.fileExists(atPath: running.path))
 }
 

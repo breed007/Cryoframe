@@ -290,7 +290,7 @@ private struct DiesMidRsync: CommandRunner {
 
         // the crashed run: marked open, attached at its own directory, half-written
         try MirrorSeal.markOpen(out)
-        let work = base.appendingPathComponent(MirrorMounts.prefix + "crashed")
+        let work = base.appendingPathComponent(MirrorMounts.prefix + UUID().uuidString)
         let mnt = work.appendingPathComponent("mnt")
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
         let me = ProcessIdentity.current!

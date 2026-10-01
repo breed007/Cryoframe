@@ -45,6 +45,15 @@ extension ArchiveError: LocalizedError {
                     + (which.map { " — \($0)" } ?? "")
                     + ". A permission or ACL on it blocks hdiutil; the sealed zip format can archive it."
             }
+            // macOS 15's hdiutil can't build from a folder holding a locked item, and
+            // names it inside the temporary volume it builds on ("could not access
+            // /Volumes/<library>/locked.txt - Operation not permitted"), a path that
+            // exists nowhere once the run is over. Builds of such folders read an
+            // unlocked copy (see SealedReadPlan); this says what to do if one is
+            // refused anyway.
+            if tool == "hdiutil", let item = Self.itemRefusedAsLocked(lines) {
+                return "macOS's disk image tool couldn't copy \(item) into the disk image (Operation not permitted). That is what it does with a locked item (Finder's Get Info, Locked). Unlock it, or switch this job to the sealed zip format, which archives it."
+            }
             let line = lines.last ?? ""
             return line.isEmpty ? "\(tool) failed" : "\(tool) failed — \(line)"
         case .noArtifactProduced:
@@ -66,6 +75,23 @@ extension ArchiveError {
     /// failed - Permission denied" is NOT this: it is also what a live mirror's
     /// sparsebundle create says when the destination folder refuses the write. An
     /// attach refusal says "attach failed" and must not match either.
+    /// The item a `create -srcfolder` couldn't copy for "Operation not permitted",
+    /// named within the library: hdiutil names it on the volume it builds, at
+    /// /Volumes/<volume>/…, which is gone once it fails. nil for any other failure.
+    static func itemRefusedAsLocked(_ lines: [String]) -> String? {
+        guard let line = lines.first(where: { l in
+            let lc = l.lowercased()
+            return lc.contains("could not access") && lc.contains("operation not permitted")
+        }), let start = line.range(of: "could not access ", options: .caseInsensitive) else { return nil }
+        var path = String(line[start.upperBound...])
+        // printed with no newline before hdiutil's own "hdiutil: create failed"
+        if let glued = path.range(of: "hdiutil:") { path = String(path[..<glued.lowerBound]) }
+        if let end = path.range(of: " - ", options: .backwards) { path = String(path[..<end.lowerBound]) }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true)
+        if path.hasPrefix("/Volumes/"), parts.count > 2 { return parts.dropFirst(2).joined(separator: "/") }
+        return parts.last.map(String.init) ?? "a file"
+    }
+
     static func isCreateRefusedByACL(_ lines: [String]) -> Bool {
         lines.contains { l in
             let lc = l.lowercased()

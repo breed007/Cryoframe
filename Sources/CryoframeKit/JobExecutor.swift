@@ -35,6 +35,9 @@ public struct JobExecutor: Sendable {
     /// made (see FilteredCopy): the system cache on the startup disk, whatever
     /// scratch location Settings names
     let plaintextScratch: URL
+    /// whether this Mac's disk image tool builds from locked items (see
+    /// FilteredCopy.diskImageKeepsLocks); tests set it
+    let diskImageKeepsLocks: Bool
     let chunkSize: UInt64
     let pendingStore: PendingTransferStore?
     let jobStore: JobStore?
@@ -55,6 +58,7 @@ public struct JobExecutor: Sendable {
                 scratchBase: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("app.cryoframe/scratch", isDirectory: true),
                 plaintextScratch: URL? = nil,
+                diskImageKeepsLocks: Bool? = nil,
                 chunkSize: UInt64 = 2 * 1_000_000_000,
                 pendingStore: PendingTransferStore? = nil,
                 jobStore: JobStore? = nil,
@@ -67,6 +71,7 @@ public struct JobExecutor: Sendable {
         self.volumes = volumes
         self.scratchBase = scratchBase; self.chunkSize = chunkSize
         self.plaintextScratch = plaintextScratch ?? scratchBase
+        self.diskImageKeepsLocks = diskImageKeepsLocks ?? FilteredCopy.diskImageKeepsLocks
         self.pendingStore = pendingStore; self.jobStore = jobStore; self.dataVolume = dataVolume
         self.passphraseProvider = passphraseProvider; self.healthRecords = healthRecords; self.runHistory = runHistory
     }
@@ -89,7 +94,7 @@ public struct JobExecutor: Sendable {
         let encrypted: Bool
         let buildDir: URL           // scratch dir to clean once distribution is done
         let dests: [Target]         // the available destinations to copy/ship it to
-        var note: String? = nil     // what the run says about how it was built
+        var notes: [String] = []    // what the run says about how it was built
     }
 
     /// where one library lives, and how to reach it once its disk is frozen.
@@ -382,8 +387,10 @@ public struct JobExecutor: Sendable {
                     continue
                 }
                 // What's left are named pipes, sockets and devices, on which hdiutil and
-                // ditto both hang or fail: the build reads a copy without them.
-                let filtered = sealed != nil && !stats.dmgBlockers.isEmpty
+                // ditto both hang or fail, and locks: the build may read a copy without
+                // them (see SealedReadPlan).
+                let plan = sealed.map { SealedReadPlan.of(stats.dmgBlockers, $0, diskImageKeepsLocks: self.diskImageKeepsLocks) } ?? .direct
+                let filtered = plan.fromCopy
                 onStage(.archiving)
 
                 if let sealed {
@@ -414,13 +421,11 @@ public struct JobExecutor: Sendable {
                                                     onProgress: onProgress)
                     do {
                         builds.append(try self.buildSealed(job: job, library: library, index: idx, source: source,
-                                                           sealed: sealed, filtered: filtered, buildDir: buildDir, copyDir: copyDir,
+                                                           sealed: sealed, plan: plan, found: stats.dmgBlockers,
+                                                           buildDir: buildDir, copyDir: copyDir,
                                                            dests: live, runner: runner, passphrase: passphrase, onStage: onStage))
                         poller.cancel()
-                        if let note = builds.last?.note { notes.append(note) }
-                        if filtered, let note = stats.dmgBlockers.leftOutOfSealed(library: library.displayName, zip: sealed == .zip) {
-                            notes.append(note)
-                        }
+                        notes.append(contentsOf: builds.last?.notes ?? [])
                     } catch is CancelledError { poller.cancel(); cancelled = true; break }
                     catch {
                         poller.cancel()
@@ -891,32 +896,45 @@ public struct JobExecutor: Sendable {
         return total == expectedBytes
     }
 
-    /// remove sealed build artifacts left in scratch by a crash or a one-time job —
+    /// Remove sealed build artifacts left in scratch by a crash or a one-time job:
     /// any `scratchBase/<job>/build/<lib>` whose artifact no pending transfer still
-    /// references. With `locks`, a job that is running (in this process or the
-    /// scheduled agent) is skipped: its build folder is a half-written archive, not
-    /// a leftover. Without them, only safe when nothing can be running.
-    public static func sweepOrphanedScratch(scratchBase: URL, pendingStore: PendingTransferStore, locks: RunLocks? = nil) {
+    /// references, in a job folder that is provably Cryoframe's (see ScratchLayout).
+    /// Nothing else in `scratchBase` is touched or looked into: a scratch location
+    /// chosen in Settings is the user's folder, and a 1.5 build in one carries no
+    /// mark. `knownJobIDs`: the jobs Cryoframe knows, whose folders count as a job's
+    /// whatever their names (every job's ID is a UUID). With `locks`, a job that is
+    /// running (in this process or the scheduled agent) is skipped: its build folder
+    /// is a half-written archive, not a leftover. Without them, only safe when
+    /// nothing can be running.
+    public static func sweepOrphanedScratch(scratchBase: URL, pendingStore: PendingTransferStore, locks: RunLocks? = nil,
+                                            knownJobIDs: Set<String> = []) {
         let fm = FileManager.default
-        let referenced = Set(pendingStore.all().map(\.sourceFile))
-        guard let jobDirs = try? fm.contentsOfDirectory(at: scratchBase, includingPropertiesForKeys: nil) else { return }
-        for jobDir in jobDirs {
-            let buildRoot = jobDir.appendingPathComponent("build", isDirectory: true)
-            guard let libDirs = try? fm.contentsOfDirectory(at: buildRoot, includingPropertiesForKeys: nil) else { continue }
+        let pending = pendingStore.all()
+        let referenced = Set(pending.map(\.sourceFile))
+        let known = knownJobIDs.union(pending.map(\.owningJobID))
+        guard let names = try? fm.contentsOfDirectory(atPath: scratchBase.path) else { return }
+        for name in names where ScratchLayout.isJobID(name, known: known) {
+            let jobDir = scratchBase.appendingPathComponent(name, isDirectory: true)
+            guard ScratchLayout.isOurs(jobDir, jobID: name) else { continue }
             var lease: RunLease?
             if let locks {
-                guard let held = try? locks.acquire(jobID: jobDir.lastPathComponent, trigger: .cleanup) else { continue }
+                guard let held = try? locks.acquire(jobID: name, trigger: .cleanup) else { continue }
                 lease = held
             }
             defer { lease?.release() }
-            for libDir in libDirs {
-                // a filtered copy (see FilteredCopy) is never referenced: a crash
-                // mid-build left it, and it holds a whole copy of the library
-                FilteredCopy.remove(in: libDir, runner: ProcessCommandRunner())
-                let artifacts = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: nil)) ?? []
-                if !artifacts.contains(where: { referenced.contains($0.path) }) { try? fm.removeItem(at: libDir) }
+            let buildRoot = jobDir.appendingPathComponent("build", isDirectory: true)
+            if ScratchLayout.isRealFolder(buildRoot) {
+                for lib in (try? fm.contentsOfDirectory(atPath: buildRoot.path)) ?? [] {
+                    let libDir = buildRoot.appendingPathComponent(lib, isDirectory: true)
+                    guard ScratchLayout.isRealFolder(libDir) else { continue }
+                    // a filtered copy (see FilteredCopy) is never referenced: a crash
+                    // mid-build left it, and it holds a whole copy of the library
+                    FilteredCopy.remove(in: libDir, runner: ProcessCommandRunner())
+                    let artifacts = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: nil)) ?? []
+                    if !artifacts.contains(where: { referenced.contains($0.path) }) { try? fm.removeItem(at: libDir) }
+                }
             }
-            if (try? fm.contentsOfDirectory(atPath: buildRoot.path))?.isEmpty == true { try? fm.removeItem(at: buildRoot) }
+            ScratchLayout.tidy(jobDir: jobDir)
         }
     }
 
@@ -1066,9 +1084,13 @@ public struct JobExecutor: Sendable {
         }
         var groups = DMGBlockers.Membership()
         let sealed = forDMG || forZip || forMirror
-        if sealed { out.dmgBlockers.inspect(url.path, relative: url.lastPathComponent, groups: &groups, forDMG: forDMG) }   // copied too
+        // a mirror keeps locks (MirrorCopy.copyFlags); a sealed build may not
+        let locks = forDMG || forZip
+        if sealed { out.dmgBlockers.inspect(url.path, relative: url.lastPathComponent, groups: &groups, forDMG: forDMG, locks: locks) }   // copied too
         for case let u as URL in e {
-            if sealed { out.dmgBlockers.inspect(u.path, relative: DMGBlockers.relative(u.path, to: root), groups: &groups, forDMG: forDMG) }
+            if sealed {
+                out.dmgBlockers.inspect(u.path, relative: DMGBlockers.relative(u.path, to: root), groups: &groups, forDMG: forDMG, locks: locks)
+            }
             guard let v = try? u.resourceValues(forKeys: keys) else { continue }
             if v.isSymbolicLink == true { out.entries += 1; continue }
             guard v.isRegularFile == true else { continue }
@@ -1171,34 +1193,24 @@ public struct JobExecutor: Sendable {
 
     /// compress a library into one sealed artifact in scratch (unsplit), verifying it
     /// once. The distribution step copies/ships it to each destination afterward.
-    /// `filtered`: the library holds named pipes, sockets or devices, so the build
-    /// reads a copy of it without them (see FilteredCopy), removed once it is built.
+    /// `plan`: whether the build reads a copy of the library (see SealedReadPlan),
+    /// made in `copyDir` and removed once it is built; `found`: what the run's walk of
+    /// the library found.
     private func buildSealed(job: BackupJob, library: ContentType, index: Int, source: ArchiveSource,
-                             sealed: SealedArchiveEngine.Sealed, filtered: Bool, buildDir: URL, copyDir: URL, dests: [Target],
+                             sealed: SealedArchiveEngine.Sealed, plan: SealedReadPlan, found: DMGBlockers,
+                             buildDir: URL, copyDir: URL, dests: [Target],
                              runner: CommandRunner, passphrase: String?,
                              onStage: @escaping @Sendable (BackupStage) -> Void) throws -> SealedBuild {
         let fm = FileManager.default
+        // marked as this job's before anything goes in (see ScratchLayout)
+        try ScratchLayout.claim(libraryDir: buildDir)
         FilteredCopy.remove(in: buildDir, runner: runner.forTeardown)
         FilteredCopy.remove(in: copyDir, runner: runner.forTeardown)
         try? fm.removeItem(at: buildDir)
         try fm.createDirectory(at: buildDir, withIntermediateDirectories: true)
-        var note: String?
-        let archive: ArchiveResult = try {
-            guard filtered else {
-                return try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase).archive(source, to: buildDir)
-            }
-            // removed however the build ends, Stop included, before anything reads the archive
-            defer {
-                FilteredCopy.remove(in: copyDir, runner: runner.forTeardown)
-                if copyDir.path != buildDir.path { FilteredCopy.removeEmpty(copyDir) }
-            }
-            let copy = try FilteredCopy.make(of: source.root, name: source.name, in: copyDir, runner: runner).copy
-            let built = try FilteredCopy.build(SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase),
-                                               from: ArchiveSource(name: source.name, root: copy, sizeHint: source.sizeHint),
-                                               to: buildDir, library: library.displayName)
-            note = built.note
-            return built.archive
-        }()
+        let (archive, notes) = try FilteredCopy.sealedArchive(
+            SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase), source: source, found: found,
+            plan: plan, buildDir: buildDir, copyDir: copyDir, library: library.displayName, runner: runner)
         guard let file = archive.artifacts.first,
               let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? UInt64 else {
             throw ArchiveError.noArtifactProduced(buildDir)
@@ -1211,7 +1223,7 @@ public struct JobExecutor: Sendable {
         let digest = (try? Checksum.sha256(of: file)) ?? ""
         return SealedBuild(library: library, jobID: job.id, index: index, builtFile: file, format: archive.format,
                            byteSize: size, contentDigest: digest, verified: verified, encrypted: passphrase != nil,
-                           buildDir: buildDir, dests: dests, note: note)
+                           buildDir: buildDir, dests: dests, notes: notes)
     }
 
     private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL, target: Target,
@@ -1241,6 +1253,7 @@ public struct JobExecutor: Sendable {
     private func cleanupBuild(_ b: SealedBuild) {
         FilteredCopy.remove(in: b.buildDir, runner: ProcessCommandRunner())
         try? FileManager.default.removeItem(at: b.buildDir)
+        ScratchLayout.tidy(jobDir: b.buildDir.deletingLastPathComponent().deletingLastPathComponent())
         for d in b.dests { pendingStore?.remove(jobID: "\(b.jobID):\(Self.safe(d.id)):\(b.library.id)") }
     }
 
