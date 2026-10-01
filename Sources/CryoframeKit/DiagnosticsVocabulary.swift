@@ -51,6 +51,7 @@ apfs
 apfsvolumeuuid
 app
 appeared
+append
 apple
 applications
 applies

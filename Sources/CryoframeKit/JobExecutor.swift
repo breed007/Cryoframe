@@ -412,6 +412,9 @@ public struct JobExecutor: Sendable {
                     // encrypted job's copy is made on the startup disk (see plaintextScratch)
                     let copyBase = passphrase != nil ? self.plaintextScratch : self.scratchBase
                     let copyDir = copyBase.appendingPathComponent("\(job.id)/build/\(Self.safe(library.id))", isDirectory: true)
+                    // the same check, copy included, before a refused direct build falls back to a copy
+                    let scratchBase = self.scratchBase, copyBytes = stats.copyBytes
+                    let copyRoomRefusal = { Self.scratchRefusal(archive: sourceSize, copy: copyBytes, scratch: scratchBase, copyScratch: copyBase) }
                     if let refusal = Self.scratchRefusal(archive: sourceSize, copy: filtered ? stats.copyBytes : nil,
                                                          scratch: self.scratchBase, copyScratch: copyBase) {
                         for t in live { results.append(.failed(library: library.displayName, destination: t.displayName, error: refusal)) }
@@ -422,7 +425,7 @@ public struct JobExecutor: Sendable {
                     do {
                         builds.append(try self.buildSealed(job: job, library: library, index: idx, source: source,
                                                            sealed: sealed, plan: plan, found: stats.dmgBlockers,
-                                                           buildDir: buildDir, copyDir: copyDir,
+                                                           buildDir: buildDir, copyDir: copyDir, copyRoomRefusal: copyRoomRefusal,
                                                            dests: live, runner: runner, passphrase: passphrase, onStage: onStage))
                         poller.cancel()
                         notes.append(contentsOf: builds.last?.notes ?? [])
@@ -1195,10 +1198,11 @@ public struct JobExecutor: Sendable {
     /// once. The distribution step copies/ships it to each destination afterward.
     /// `plan`: whether the build reads a copy of the library (see SealedReadPlan),
     /// made in `copyDir` and removed once it is built; `found`: what the run's walk of
-    /// the library found.
+    /// the library found; `copyRoomRefusal`: the room check for a copy a refused
+    /// direct build falls back to.
     private func buildSealed(job: BackupJob, library: ContentType, index: Int, source: ArchiveSource,
                              sealed: SealedArchiveEngine.Sealed, plan: SealedReadPlan, found: DMGBlockers,
-                             buildDir: URL, copyDir: URL, dests: [Target],
+                             buildDir: URL, copyDir: URL, copyRoomRefusal: () -> String?, dests: [Target],
                              runner: CommandRunner, passphrase: String?,
                              onStage: @escaping @Sendable (BackupStage) -> Void) throws -> SealedBuild {
         let fm = FileManager.default
@@ -1210,7 +1214,8 @@ public struct JobExecutor: Sendable {
         try fm.createDirectory(at: buildDir, withIntermediateDirectories: true)
         let (archive, notes) = try FilteredCopy.sealedArchive(
             SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase), source: source, found: found,
-            plan: plan, buildDir: buildDir, copyDir: copyDir, library: library.displayName, runner: runner)
+            plan: plan, buildDir: buildDir, copyDir: copyDir, library: library.displayName, runner: runner,
+            copyRoomRefusal: copyRoomRefusal)
         guard let file = archive.artifacts.first,
               let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? UInt64 else {
             throw ArchiveError.noArtifactProduced(buildDir)

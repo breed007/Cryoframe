@@ -49,6 +49,9 @@ public struct DMGBlockers: Sendable, Equatable {
 
     public private(set) var counts: [Kind: Int] = [:]
     public private(set) var examples: [Kind: [String]] = [:]
+    /// how many of the `locked` items are append-only (uappnd), which no macOS's disk
+    /// image tool builds from (see SealedReadPlan)
+    public private(set) var appendOnly = 0
 
     public init() {}
 
@@ -60,6 +63,7 @@ public struct DMGBlockers: Sendable, Equatable {
     public var refusing: DMGBlockers {
         var out = self
         for kind in [Kind.special, .locked] { out.counts[kind] = nil; out.examples[kind] = nil }
+        out.appendOnly = 0
         return out
     }
 
@@ -81,7 +85,10 @@ public struct DMGBlockers: Sendable, Equatable {
         guard lstat(path, &st) == 0 else { if forDMG { note(.unreadable, rel) }; return }
         let type = st.st_mode & S_IFMT
         if type == S_IFIFO || type == S_IFSOCK || type == S_IFBLK || type == S_IFCHR { note(.special, rel); return }
-        if locks, st.st_flags & MirrorCopy.lockingFlags != 0 { note(.locked, rel) }
+        if locks, st.st_flags & MirrorCopy.lockingFlags != 0 {
+            note(.locked, rel)
+            if st.st_flags & UInt32(UF_APPEND) != 0 { appendOnly += 1 }
+        }
         guard forDMG else { return }
         if st.st_uid != uid { note(.foreign, rel); return }
         switch type {
@@ -201,6 +208,8 @@ public struct DMGBlockers: Sendable, Equatable {
         guard let n = counts[.locked], n > 0 else { return nil }
         let shown = examples[.locked] ?? []
         let why = zip ? "A zip can't keep an item's lock."
+                      : appendOnly > 0
+                      ? "macOS's disk image tool can't build from append-only items, so the disk image was built from a copy with the locks taken off."
                       : "macOS's disk image tool on this Mac can't build from locked items, so the disk image was built from a copy with the locks taken off."
         return "\(library): left the lock off \(n) locked item\(n == 1 ? "" : "s") in \(zip ? "the zip" : "the disk image") (\(shown.joined(separator: ", "))\(n > shown.count ? ", …" : "")). \(why) What they hold is all there; lock them again after a restore if you need to."
     }

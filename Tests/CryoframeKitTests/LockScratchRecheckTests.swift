@@ -154,7 +154,8 @@ private func archiveIn(_ dest: URL) throws -> RestorableArchive {
             Issue.record("expected a completed library, got \(outcome)"); return
         }
         let said = warning?.contains("Projects: left the lock off 3 locked items in the disk image") == true
-        #expect(said == refused, "tool refused: \(refused), warning: \(warning ?? "nil")")
+        // copied unlocked up front on every macOS, refused or not (see SealedReadPlan)
+        #expect(said, "tool refused: \(refused), warning: \(warning ?? "nil")")
         #expect(!exists(scratch.appendingPathComponent(job.id)), "the job's scratch folder was left")
         #expect(flags(lib.appendingPathComponent("app.log")) & UInt32(UF_APPEND) != 0, "the library's own flag was taken off")
 

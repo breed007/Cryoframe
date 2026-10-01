@@ -222,12 +222,50 @@ private struct FillsScratch: CommandRunner {
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let runner = RefusesLocks()
         let built = try FilteredCopy.sealedArchive(SealedArchiveEngine(.dmg, runner: runner), source: ArchiveSource(name: "Projects", root: lib),
-                                                   found: found, plan: .of(found, .dmg, diskImageKeepsLocks: true), buildDir: out,
+                                                   found: found, plan: .direct, buildDir: out,
                                                    copyDir: out, library: "Projects", runner: runner)
         #expect(runner.refused == 1)
         #expect(built.notes.first?.contains("left the lock off 3 locked items in the disk image") == true, "\(built.notes)")
         #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent(FilteredCopy.folderName).path))
         #expect(FileManager.default.fileExists(atPath: out.appendingPathComponent("Projects.dmg").path))
+    }
+
+    // An append-only item is refused by every macOS's tool measured, 27 included, so
+    // a disk image of a library holding one is planned from an unlocked copy up
+    // front, where the run's room check covers the copy. A zip drops locks anyway.
+    @Test func anAppendOnlyItemIsCopiedUpFrontOnEveryMacOS() throws {
+        let base = folder("append")
+        defer { unlock(base); try? FileManager.default.removeItem(at: base) }
+        let lib = base.appendingPathComponent("Logs")
+        try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
+        try sh("echo a > app.log && echo u > locked.txt && chflags uappnd app.log && chflags uchg locked.txt", in: lib)
+        let found = JobExecutor.directoryStats(lib, forDMG: true).dmgBlockers
+        #expect(found.count(.locked) == 2 && found.appendOnly == 1, "\(found.counts)")
+        let unlocked = SealedReadPlan(fromCopy: true, unlocked: true)
+        #expect(SealedReadPlan.of(found, .dmg, diskImageKeepsLocks: true) == unlocked)
+        #expect(SealedReadPlan.of(found, .dmg, diskImageKeepsLocks: false) == unlocked)
+        #expect(SealedReadPlan.of(found, .zip, diskImageKeepsLocks: true) == .direct)
+        #expect(found.unlockedInSealed(library: "Logs", zip: false)?.contains("append-only") == true)
+    }
+
+    // A direct build refused for its locks falls back to a copy only once the run's
+    // room check, copy included, passes: the run checked room for a direct build.
+    @Test func aRefusedDirectBuildChecksRoomForTheCopyFirst() throws {
+        let base = folder("noroom")
+        defer { unlock(base); try? FileManager.default.removeItem(at: base) }
+        let lib = try lockedLibrary(base)
+        let found = JobExecutor.directoryStats(lib, forDMG: true).dmgBlockers
+        let out = buildDir(base.appendingPathComponent("scratch"))
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let runner = RefusesLocks()
+        var asked = 0
+        #expect(throws: FilteredCopyError.noRoomForCopy(library: "Projects", detail: "no room here")) {
+            _ = try FilteredCopy.sealedArchive(SealedArchiveEngine(.dmg, runner: runner), source: ArchiveSource(name: "Projects", root: lib),
+                                               found: found, plan: .direct, buildDir: out, copyDir: out, library: "Projects",
+                                               runner: runner, copyRoomRefusal: { asked += 1; return "no room here" })
+        }
+        #expect(asked == 1 && runner.refused == 1)
+        #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent(FilteredCopy.folderName).path), "the copy was made anyway")
     }
 
     // Refused even unlocked: the run fails in words, naming the item within the

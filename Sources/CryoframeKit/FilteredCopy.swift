@@ -103,11 +103,12 @@ enum FilteredCopy {
     /// directly, or from a copy made in `copyDir` (removed however the build ends,
     /// Stop included). `found` is what the run's walk of the library found. A disk
     /// image the tool refuses to build directly from a library holding locked items
-    /// is built from an unlocked copy instead, whatever this macOS. Returns the
-    /// archive and what the run says about how it was built.
+    /// is built from an unlocked copy instead, whatever this macOS, once
+    /// `copyRoomRefusal` (the run's own room check for a copy) finds room for it.
+    /// Returns the archive and what the run says about how it was built.
     static func sealedArchive(_ engine: SealedArchiveEngine, source: ArchiveSource, found: DMGBlockers, plan: SealedReadPlan,
-                              buildDir: URL, copyDir: URL, library: String,
-                              runner: CommandRunner) throws -> (archive: ArchiveResult, notes: [String]) {
+                              buildDir: URL, copyDir: URL, library: String, runner: CommandRunner,
+                              copyRoomRefusal: () -> String? = { nil }) throws -> (archive: ArchiveResult, notes: [String]) {
         let zip = engine.sealed == .zip
         var plan = plan
         if !plan.fromCopy {
@@ -117,6 +118,8 @@ enum FilteredCopy {
             } catch let ArchiveError.toolFailed(tool, _, stderr)
                         where tool == "hdiutil" && refusedOutright(stderr) && found.count(.locked) > 0 {
                 if runner.control?.isCancelled == true { throw CancelledError() }
+                // the run checked room for a direct build only
+                if let refusal = copyRoomRefusal() { throw FilteredCopyError.noRoomForCopy(library: library, detail: refusal) }
                 plan = SealedReadPlan(fromCopy: true, unlocked: true)
             }
         }
@@ -343,10 +346,13 @@ struct SealedReadPlan: Equatable, Sendable {
     /// devices), or locked items a disk image can't be built from on this Mac (see
     /// FilteredCopy.diskImageKeepsLocks), taken off in the copy. Where the tool keeps
     /// locks a direct build keeps them, so the copy would cost room and lose them for
-    /// nothing; a zip drops them either way.
+    /// nothing; a zip drops them either way. An append-only item is refused by every
+    /// macOS measured, 27 included ("could not access … - Operation not permitted"),
+    /// so a library holding one is copied up front, where the run's room check covers
+    /// the copy, rather than after a direct build has failed.
     static func of(_ found: DMGBlockers, _ kind: SealedArchiveEngine.Sealed,
                    diskImageKeepsLocks: Bool = FilteredCopy.diskImageKeepsLocks) -> SealedReadPlan {
-        let unlock = kind == .dmg && found.count(.locked) > 0 && !diskImageKeepsLocks
+        let unlock = kind == .dmg && found.count(.locked) > 0 && (!diskImageKeepsLocks || found.appendOnly > 0)
         return SealedReadPlan(fromCopy: found.count(.special) > 0 || unlock, unlocked: unlock)
     }
 }
@@ -358,6 +364,8 @@ public enum FilteredCopyError: Error, Equatable, LocalizedError {
     case scratchFilled(volume: String, library: String, encrypted: Bool = false)
     /// hdiutil refused to build from the copy, even with nothing in it locked
     case diskImageRefused(library: String, detail: String)
+    /// a direct build was refused, and scratch hasn't room for the copy it falls back to
+    case noRoomForCopy(library: String, detail: String)
 
     public var errorDescription: String? {
         switch self {
@@ -368,6 +376,8 @@ public enum FilteredCopyError: Error, Equatable, LocalizedError {
             }
             // the scratch location in Settings has no say in where this copy goes
             return said + " An encrypted job's copy is always made on the startup disk, whatever scratch location Settings names, so choosing another one won't help. Free up at least as much space on \(volume) as \(library) takes, and run again."
+        case .noRoomForCopy(let library, let detail):
+            return "macOS's disk image tool wouldn't build \(library)'s disk image from its locked items, and there isn't room for a copy with the locks taken off to build it from (\(detail)). Nothing was backed up. Free up that space, and run again."
         case .diskImageRefused(let library, let detail):
             return "\(library)'s disk image is built from a copy of it (without its named pipes and sockets, or with its locks taken off), and macOS's disk image tool refused to build from that copy (\(detail)). Nothing was backed up, and the copy was removed. The sealed zip format archives this folder."
         }
