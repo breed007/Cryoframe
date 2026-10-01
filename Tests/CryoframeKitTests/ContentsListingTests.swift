@@ -149,7 +149,7 @@ private func rerecord(_ a: inout RestorableArchive) throws {
         let hit = try #require(search("one", a))
         #expect(hit.hits.count == 1 && hit.summary.contains("incomplete"))
         let miss = try #require(search("three", a))
-        #expect(!miss.isNotInVersion && miss.summary.contains("no complete list"), "\(miss.summary)")
+        #expect(!miss.isNotInVersion && miss.summary.contains("incomplete"), "\(miss.summary)")
         #expect(!ContentsSearch.summary([miss], of: 1).contains("Not in"), "\(ContentsSearch.summary([miss], of: 1))")
     }
 

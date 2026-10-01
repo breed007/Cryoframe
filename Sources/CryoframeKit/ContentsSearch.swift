@@ -23,14 +23,30 @@ public struct ContentsQuery: Sendable, Equatable {
     let folded: [UInt8]
     /// a query with a "/" in it is looked for in whole paths; otherwise in names
     public let matchesPaths: Bool
+    /// a path query as a path: folded, without empty or "." parts. An item whose
+    /// path from the library's top is the end of it matches too, so a path pasted
+    /// whole ("Copy as Pathname" in Finder) finds the item it names.
+    let wholePath: [UInt8]
 
-    /// nil for a query of nothing but spaces
+    /// nil for a query of nothing but spaces, or a path that names nothing (only
+    /// slashes, "." and ".."): it couldn't be told apart from a miss
     public init?(_ text: String) {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // a file's URL pasted ("file:///Users/…/W-2%20form.pdf"): the path it names
+        if t.lowercased().hasPrefix("file://"), let url = URL(string: t), url.isFileURL { t = url.path }
         guard !t.isEmpty else { return nil }
+        let parts = t.split(separator: "/").filter { $0 != "." }
+        if t.contains("/"), !parts.contains(where: { $0 != ".." && $0 != "~" }) { return nil }
         self.text = t
         folded = Array(Self.fold(t).utf8)
         matchesPaths = t.contains("/")
+        wholePath = matchesPaths ? Array(Self.fold(parts.joined(separator: "/")).utf8) : []
+    }
+
+    /// what was looked for, for saying beside the answer
+    public var searched: String {
+        matchesPaths ? "Searched each file list for paths that contain “\(text)”, or that it ends with."
+                     : "Searched each file list for names containing “\(text)”."
     }
 
     /// one form for comparing: canonical composition, then case folding, then
@@ -50,9 +66,26 @@ public struct ContentsQuery: Sendable, Equatable {
             let hay = UnsafeBufferPointer(rebasing: all[from...])
             guard !hay.contains(where: { $0 >= 0x80 }) else { return nil }
             return Self.containsIgnoringASCIICase(hay, folded)
+                || (matchesPaths && Self.endsAtPart(wholePath, hay, ignoringASCIICase: true))
         }
         if let ascii { return ascii }
-        return Self.contains(Array(Self.fold(matchesPaths ? entry.path : entry.name).utf8), folded)
+        let hay = Array(Self.fold(matchesPaths ? entry.path : entry.name).utf8)
+        return Self.contains(hay, folded) || (matchesPaths && Self.endsAtPart(wholePath, hay, ignoringASCIICase: false))
+    }
+
+    /// whether `path` is the whole of `query` or its end, starting at a part
+    /// ("Taxes/W-2.pdf" ends "/Users/b/Taxes/W-2.pdf"; "xes/W-2.pdf" doesn't)
+    static func endsAtPart<P: RandomAccessCollection<UInt8>>(_ query: [UInt8], _ path: P, ignoringASCIICase: Bool) -> Bool
+        where P.Index == Int {
+        guard !path.isEmpty, path.count <= query.count else { return false }
+        let start = query.count - path.count
+        guard start == 0 || query[start - 1] == 0x2F else { return false }
+        for k in 0..<path.count {
+            var c = path[path.startIndex + k]
+            if ignoringASCIICase, c >= 0x41 && c <= 0x5A { c += 0x20 }
+            if c != query[start + k] { return false }
+        }
+        return true
     }
 
     static func containsIgnoringASCIICase(_ hay: UnsafeBufferPointer<UInt8>, _ needle: [UInt8]) -> Bool {
@@ -110,7 +143,7 @@ public struct VersionSearchResult: Sendable, Identifiable {
         switch answer {
         case .listed(let hits, let more, let partial):
             if hits.isEmpty {
-                return partial ? "No match in its file list, but the list is incomplete (no complete list), so it may still be in this version"
+                return partial ? "No match in its file list, but the list is incomplete, so it may still be in this version"
                                : "Not in this version"
             }
             let n = more ? "More than \(hits.count) matches" : "\(hits.count) match\(hits.count == 1 ? "" : "es")"

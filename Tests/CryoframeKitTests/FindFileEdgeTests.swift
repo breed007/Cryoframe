@@ -293,18 +293,37 @@ private func projectsJob(_ lib: URL, dest: URL, format: FormatChoice, encrypted:
 
     // "Copy as Pathname" in Finder, pasted: the whole path of a file that IS in the
     // version. A whole list read must not answer "Not in this version".
-    // KNOWN ISSUE (2026-10-01, de2982a): a query with a "/" is matched as a substring
-    // of the path from the library's top, so the whole path never matches, and the
-    // file that is there is called "Not in this version". Fixed: this fails; drop
-    // the withKnownIssue.
+    // A query with a "/" also matches an item whose path from the library's top is
+    // the end of the query, starting at a part.
     @Test func aPastedWholePathIsntCalledNotThere() throws {
         let base = edgeFolder("paste")
         defer { try? FileManager.default.removeItem(at: base) }
         let a = try edgeVersion(base, entries: ["Taxes/2024/W-2 form.pdf"])
         let res = try #require(edgeSearch("/Users/brian/Projects/Taxes/2024/W-2 form.pdf", a))
-        withKnownIssue("a pasted whole path is called not there") {
-            #expect(!res.isNotInVersion, "\(res.summary)")
-            #expect(ContentsSearch.summary([res], of: 1) != "Not in the one version searched.")
+        #expect(!res.isNotInVersion, "\(res.summary)")
+        #expect(ContentsSearch.summary([res], of: 1) != "Not in the one version searched.")
+    }
+
+    // The same, pasted the other ways a path comes: as a file URL, from a Mac that
+    // writes it decomposed and in other case, with a "~", a "./", a doubled or a
+    // trailing slash. A path that only shares the end of a name doesn't match, and
+    // one that names nothing isn't searched at all.
+    @Test func aPathPastedAnyWayFindsWhatItNames() throws {
+        let base = edgeFolder("paste2")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let a = try edgeVersion(base, entries: ["Taxes", "Taxes/2024", "Taxes/2024/Résumé.pdf"])
+        for q in ["file:///Users/brian/Projects/Taxes/2024/R%C3%A9sume%CC%81.pdf",
+                  "/USERS/brian/taxes/2024/Re\u{301}sume\u{301}.PDF",
+                  "~/Projects/Taxes/2024/Résumé.pdf", "./Taxes/2024/Résumé.pdf", "/Users/b//Taxes/2024/Résumé.pdf"] {
+            let res = try #require(edgeSearch(q, a))
+            #expect(res.hits.map(\.path).contains("Taxes/2024/Résumé.pdf"), "\(q): \(res.summary)")
         }
+        let folder = try #require(edgeSearch("/Users/brian/Projects/Taxes/2024/", a))
+        #expect(folder.hits.map(\.path).contains("Taxes/2024"), "\(folder.summary)")
+        let near = try #require(edgeSearch("/Users/brian/OldTaxes", a))
+        #expect(near.isNotInVersion, "\(near.hits.map(\.path))")
+        for q in ["/", "//", "~/", "./..", "file:///"] { #expect(ContentsQuery(q) == nil, "\(q)") }
+        #expect(ContentsQuery("/Users/b/Taxes")?.searched.contains("“/Users/b/Taxes”") == true)
+        #expect(ContentsQuery("Taxes")?.searched.contains("names") == true)
     }
 }
