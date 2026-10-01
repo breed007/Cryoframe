@@ -14,12 +14,15 @@
 //  in the save summary, when pairing a drive, when renaming one, or on the
 //  dashboard. The go-ahead is kept on the job, version by version: it names the
 //  versions the person was shown and, of them, exactly those they were told the
-//  next backup deletes, under the Keep rule they were counted with. A run deletes
-//  an adopted version only when a go-ahead names it as deleted and the Keep rule
-//  wants it gone, so it never deletes more than the person was told, whatever the
-//  date it runs. Once the job's Keep rule changes, a go-ahead given under the old
-//  one no longer holds, and the person is asked again. A version adopted without
-//  one is left as it is, and every run says so, whichever path led there.
+//  Keep rule deletes, under the Keep rule they were counted with. That is what the
+//  next backup deletes and, under a rule that keeps the last so many, also those
+//  later backups delete one at a time: all of them, as new versions push them out,
+//  so one yes covers them all rather than asking again at every backup. A run
+//  deletes an adopted version only when a go-ahead names it as deleted and the Keep
+//  rule wants it gone, so it never deletes more than the person was told, whatever
+//  the date it runs. Once the job's Keep rule changes, a go-ahead given under the
+//  old one no longer holds, and the person is asked again. A version adopted
+//  without one is left as it is, and every run says so, whichever path led there.
 //
 
 import Foundation
@@ -32,15 +35,15 @@ public struct AdoptionConsent: Codable, Sendable, Equatable {
     /// the version folders' names the person was shown: under `rule`, they take
     /// their places among the versions the Keep rule keeps
     public var versions: [String]
-    /// of them, those the person was told the next backup deletes (finished or
-    /// not): the only ones the Keep rule may delete
+    /// of them, those the person was told the Keep rule deletes (finished or not, at
+    /// the next backup or, one at a time, at later ones): the only ones it may delete
     public var allows: [String]
     /// the Keep rule they were counted under: once the job's is another, this
     /// go-ahead no longer holds
     public var rule: RetentionPolicy
     public var confirmedAt: Date
 
-    /// how many of them the person was told the next backup deletes
+    /// how many of them the person was told the Keep rule deletes
     public var deletes: Int { allows.count }
 
     public init(targetID: String, libraryID: String, versions: [String], allows: [String], rule: RetentionPolicy, confirmedAt: Date) {
@@ -53,17 +56,40 @@ public struct AdoptionConsent: Codable, Sendable, Equatable {
 }
 
 /// What to ask about the versions one library folder adopted: every one of them
-/// there, and of them those the next backup deletes once the Keep rule applies.
+/// there, and of them those the Keep rule deletes once it applies.
 public struct AdoptionQuestion: Sendable, Equatable {
     public var versions: [String]
-    /// finished versions the Keep rule deletes
+    /// finished versions the next backup deletes
     public var deletes: [String]
     /// dated folders that never finished, deleted then too
     public var unfinished: [String]
+    /// finished versions later backups delete, one at a time as new ones push them
+    /// out: only under a rule that keeps the last so many, where that order is known
+    /// (under one that keeps so many a day, week and month, which go depends on when
+    /// the backups are made, so each is asked about when the next backup deletes it)
+    public var later: [String] = []
+
+    /// every one of them the Keep rule deletes: what saying yes lets it delete
+    public var allows: [String] { deletes + unfinished + later }
 
     /// the go-ahead saying yes gives, for `library` at `target` under `rule`
     func consent(target: String, library: String, rule: RetentionPolicy, at date: Date) -> AdoptionConsent {
-        AdoptionConsent(targetID: target, libraryID: library, versions: versions, allows: deletes + unfinished, rule: rule, confirmedAt: date)
+        AdoptionConsent(targetID: target, libraryID: library, versions: versions, allows: allows, rule: rule, confirmedAt: date)
+    }
+
+    /// what saying yes does, said the same way wherever it is asked: "none of them
+    /// are deleted at the next backup; 2 more are deleted one at a time …"
+    public static func effect(deletes: Int, unfinished: Int, later: Int, total: Int) -> [String] {
+        var parts: [String] = []
+        parts.append(deletes == 0 ? "none of them are deleted at the next backup"
+                     : "\(deletes) \(deletes == 1 ? "is" : "are") deleted at the next backup")
+        if later > 0 {
+            let who = deletes == 0 && later == total ? (later == 1 ? "it is" : "all \(later) are")
+                : deletes == 0 ? "\(later) \(later == 1 ? "is" : "are")" : "\(later) more \(later == 1 ? "is" : "are")"
+            parts.append("\(who) deleted one at a time as new backups are made")
+        }
+        if unfinished > 0 { parts.append("\(unfinished) that never finished \(unfinished == 1 ? "is" : "are") deleted too") }
+        return parts
     }
 }
 
@@ -83,7 +109,8 @@ public struct AdoptionReview: Codable, Sendable, Equatable, Identifiable {
     public var deletes: Int
     /// of them, dated folders that never finished, deleted then too
     public var unfinished: Int
-    /// the names of those counted in `deletes` and `unfinished`: all saying yes lets
+    /// the names of those counted in `deletes` and `unfinished`, and of those later
+    /// backups delete one at a time (see AdoptionQuestion.later): all saying yes lets
     /// the Keep rule delete
     public var allows: [String]
     /// the Keep rule they were counted under
@@ -95,8 +122,11 @@ public struct AdoptionReview: Codable, Sendable, Equatable, Identifiable {
         self.jobID = jobID; self.targetID = targetID; self.libraryID = libraryID
         self.destination = destination; self.library = library; self.versions = question.versions
         self.deletes = question.deletes.count; self.unfinished = question.unfinished.count
-        self.allows = question.deletes + question.unfinished; self.rule = rule; self.foundAt = foundAt
+        self.allows = question.allows; self.rule = rule; self.foundAt = foundAt
     }
+
+    /// of them, how many later backups delete one at a time (see AdoptionQuestion.later)
+    public var later: Int { max(0, allows.count - deletes - unfinished) }
 
     /// the go-ahead saying yes records
     public func consent(at date: Date) -> AdoptionConsent {
@@ -116,12 +146,12 @@ public struct AdoptionReview: Codable, Sendable, Equatable, Identifiable {
         return "\(n) earlier backup\(n == 1 ? "" : "s") of \(library) at \(destination) \(n == 1 ? "is" : "are") kept for now: this job didn't make \(n == 1 ? "it" : "them"). Review \(n == 1 ? "it" : "them") on the dashboard to let the Keep rule apply."
     }
 
-    /// what saying yes does at the next backup
+    /// what saying yes does, at the next backup and after it
     public var effect: String {
-        var parts: [String] = []
-        parts.append(deletes == 0 ? "none of them are deleted at the next backup" : "\(deletes) \(deletes == 1 ? "is" : "are") deleted at the next backup")
-        if unfinished > 0 { parts.append("\(unfinished) that never finished \(unfinished == 1 ? "is" : "are") deleted too") }
-        return "The Keep rule then applies to them: " + parts.joined(separator: "; ") + "."
+        let parts = AdoptionQuestion.effect(deletes: deletes, unfinished: unfinished, later: later, total: versions.count)
+        var rule = "The Keep rule"
+        if case .keepLast(let n) = self.rule { rule = "Keep last \(n)" }
+        return "\(rule) then applies to them: " + parts.joined(separator: "; ") + "."
     }
 }
 

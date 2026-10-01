@@ -161,10 +161,12 @@ struct RenameDriveSheet: View {
         let versions = look.libraries.reduce(0) { $0 + $1.deletes }
         let unfinished = look.libraries.reduce(0) { $0 + $1.unfinished }
         let copies = look.libraries.filter(\.replacesCopy).count
+        let later = look.libraries.reduce(0) { $0 + $1.later }
         var parts: [String] = []
         if versions > 0 { parts.append("delete \(versions) version\(versions == 1 ? "" : "s")") }
         if unfinished > 0 { parts.append("delete \(unfinished) unfinished folder\(unfinished == 1 ? "" : "s")") }
         if copies > 0 { parts.append("replace \(copies == 1 ? "a copy" : "\(copies) copies")") }
+        if parts.isEmpty { return "Rename, and let Keep apply to \(later) older version\(later == 1 ? "" : "s")" }
         return "Rename, and " + parts.joined(separator: " and ") + " at the next backup"
     }
 

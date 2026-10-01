@@ -139,7 +139,10 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
         let impact = JobEditImpact.of(draft: draft, base: nil, volumes: FixedVolumeTable([]), now: now)
         #expect(impact.deletes == 3)
         let consent = try #require(impact.consents.first)
-        #expect(consent.versions.count == 4 && consent.deletes == 3)
+        // three go at the next backup; under keepLast(2) the fourth is pushed out by
+        // the one after, and the same yes names it, so no one is asked again then
+        #expect(consent.versions.count == 4 && consent.deletes == 4)
+        #expect(impact.lines.contains { $0.text.contains("3 are deleted at the next backup; 1 more is deleted one at a time") })
 
         let saved = draft.adding(impact.consents)
         let t = saved.targets[0]
@@ -280,5 +283,33 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
         #expect(!store.confirm(fresh), "a yes to a count under another Keep rule was taken")
         #expect(store.load().jobs.first?.adoptionConsents == nil)
         #expect(store.load().adoptionReviews[saved.id]?.isEmpty == false)
+    }
+
+    // Keeping the last so many, the order adopted versions leave in is known, so one
+    // yes names every one the rule pushes out as backups arrive. Keeping so many a
+    // day, week and month, which go depends on when the backups are made: the yes
+    // names only what the next backup deletes, and each later one is asked about.
+    @Test func aKeepLastYesNamesWhatLaterBackupsPushOutAndAGFSYesDoesNot() throws {
+        let dest = scratch("later")
+        let legacy = try legacyFolder(in: dest, versions: 6)
+        let lib = papers
+        let next = start.addingTimeInterval(10 * day)
+        func question(_ rule: RetentionPolicy) throws -> AdoptionQuestion {
+            let j = job([dest], retention: rule)
+            let (shelf, _) = JobExecutor.nextShelf(job: j, library: lib, in: dest, jobs: [j])
+            return try #require(JobExecutor.adoptionQuestion(shelf, policy: rule, upcoming: next, shown: { _ in false }, confirmed: { _ in false }))
+        }
+        let all = LibraryFolders.versionNames(in: legacy)
+        let last = try question(.keepLast(4))
+        #expect(last.deletes.count == 3 && last.later.count == 3, "\(last)")
+        #expect(Set(last.allows) == all)
+        let gfs = try question(.gfs(daily: 3, weekly: 0, monthly: 0))
+        #expect(gfs.later.isEmpty && Set(gfs.allows) == Set(gfs.deletes))
+        #expect(!gfs.deletes.isEmpty && gfs.deletes.count < all.count)
+        // a card says both parts
+        let review = AdoptionReview(jobID: "job-1", targetID: dest.path, libraryID: lib.id, destination: "dest", library: "Papers",
+                                    question: last, rule: .keepLast(4), foundAt: next)
+        #expect(review.later == 3)
+        #expect(review.effect == "Keep last 4 then applies to them: 3 are deleted at the next backup; 3 more are deleted one at a time as new backups are made.")
     }
 }

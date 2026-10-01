@@ -61,7 +61,7 @@ struct AdoptionReviewCard: View {
     }
 
     private func buttonTitle(_ r: AdoptionReview) -> String {
-        let n = r.deletes + r.unfinished
+        let n = r.allows.count       // at the next backup and, one at a time, after it
         return n == 0 ? "Let Keep apply" : "Let Keep apply, and delete \(n)"
     }
 }

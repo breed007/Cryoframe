@@ -43,9 +43,12 @@ public struct DrivePairing: Sendable, Equatable {
         /// not yet let follow the Keep rule), counted in `deletes`: saying yes lets
         /// the Keep rule apply to them (see AdoptedVersions.swift)
         public var adopted: [String] = []
-        /// of them, those the next backup deletes (finished or not): all saying yes
-        /// lets it delete
+        /// of them, those the Keep rule deletes (finished or not, at the next backup or
+        /// one at a time after it): all saying yes lets it delete
         public var allows: [String] = []
+        /// of them, how many backups after the next delete one at a time (see
+        /// AdoptionQuestion.later)
+        public var later: Int = 0
 
         public struct Copy: Sendable, Equatable {
             public var date: Date?
@@ -100,7 +103,7 @@ public struct DrivePairing: Sendable, Equatable {
 
     /// Whether saying yes costs anything the drive has now: a dated version or an
     /// unfinished one deleted, or an up-to-date copy replaced. What DriveRename needs confirmed.
-    public var changesBackups: Bool { libraries.contains { $0.deletes > 0 || $0.replacesCopy || $0.unfinished > 0 } }
+    public var changesBackups: Bool { libraries.contains { $0.deletes > 0 || $0.replacesCopy || $0.unfinished > 0 || $0.later > 0 } }
 
     /// the go-ahead saying yes gives, for the destination `targetID` (see AdoptedVersions.swift)
     public func consents(targetID: String, at date: Date = Date()) -> [AdoptionConsent] {
@@ -174,6 +177,7 @@ public struct DrivePairing: Sendable, Equatable {
             var unfinished = 0
             var asked: [String] = []
             var allows: [String] = []
+            var later = 0
             if !adopted && legacy != nil {
                 effects.append("The folder there isn't only this job's to take, so it stays as it is and the next backup makes a new one beside it.")
             }
@@ -191,7 +195,8 @@ public struct DrivePairing: Sendable, Equatable {
                                                         shown: { job.hasShownAdoption(of: $0, target: target.id, library: lib.id) },
                                                         confirmed: { job.confirmsAdoption(of: $0, target: target.id, library: lib.id) }) {
                     asked = q.versions
-                    allows = q.deletes + q.unfinished
+                    allows = q.allows
+                    later = q.later.count
                 }
                 if adopted || n > 0 {
                     deletes = plan.versions.count
@@ -199,6 +204,9 @@ public struct DrivePairing: Sendable, Equatable {
                     if counted > 0 || deletes > 0 {
                         effects.append("\(counted) dated version\(counted == 1 ? "" : "s") now follow this job's Keep rule"
                                        + (deletes > 0 ? "; \(deletes) \(deletes == 1 ? "is" : "are") deleted at the next backup." : "; none are deleted."))
+                    }
+                    if later > 0 {
+                        effects.append("\(later) more of them \(later == 1 ? "is" : "are") deleted one at a time as new backups are made.")
                     }
                     unfinished = plan.husks.count
                     if unfinished > 0 {
@@ -218,7 +226,7 @@ public struct DrivePairing: Sendable, Equatable {
             }
             return Library(name: lib.displayName, copy: copy, versions: versions, versionBytes: versionBytes,
                            deletes: deletes, replacesCopy: replacesCopy, unfinished: unfinished, effects: effects,
-                           libraryID: lib.id, adopted: asked, allows: allows)
+                           libraryID: lib.id, adopted: asked, allows: allows, later: later)
         }
         return DrivePairing(drive: drive, libraries: libraries, refusal: nil, rule: job.retention)
     }

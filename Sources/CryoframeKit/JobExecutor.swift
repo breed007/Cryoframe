@@ -750,10 +750,10 @@ public struct JobExecutor: Sendable {
 
     /// What to ask about the versions `shelf` adopted, under `policy` with the next
     /// backup at `upcoming`: every one of them there, and of them what saying yes lets
-    /// that backup delete, counted with every one of them in its place. nil when
+    /// that backup delete, counted with every one of them in its place, and (under a
+    /// rule that keeps the last so many) what later backups delete after it. nil when
     /// there's nothing to ask: each was shown to the person under this rule (`shown`,
-    /// by name), and the next backup deletes none they weren't told it would
-    /// (`confirmed`).
+    /// by name), and the rule deletes none they weren't told it would (`confirmed`).
     static func adoptionQuestion(_ shelf: Shelf, policy: RetentionPolicy, checks: [HealthRecord] = [],
                                  transferring: (URL) -> Bool = { _ in false }, upcoming: Date,
                                  shown: (String) -> Bool, confirmed: (String) -> Bool) -> AdoptionQuestion? {
@@ -762,8 +762,22 @@ public struct JobExecutor: Sendable {
         let yes = prunePlan(shelves: [shelf], policy: policy, checks: checks, transferring: transferring, upcoming: upcoming)
         let gone = Set(yes.versions.map(\.url.lastPathComponent)).intersection(waiting)
         let unfinished = Set(yes.husks.map(\.lastPathComponent)).intersection(waiting)
-        if waiting.allSatisfy(shown), gone.union(unfinished).allSatisfy(confirmed) { return nil }
-        return AdoptionQuestion(versions: waiting.sorted(), deletes: gone.sorted(), unfinished: unfinished.sorted())
+        // Keeping the last so many, every finished one older than the next backup is
+        // pushed out in turn as new versions arrive, the oldest first (one known to
+        // restore stays until a newer one is; see KnownGood): nothing about which goes
+        // when is unknown now, so one yes names them all.
+        var later = Set<String>()
+        if case .keepLast = policy {
+            for e in shelf.entries {
+                let name = e.lastPathComponent
+                guard waiting.contains(name), !gone.contains(name), !unfinished.contains(name),
+                      let d = VersionStamp.date(name), d < upcoming,
+                      FileManager.default.fileExists(atPath: e.appendingPathComponent(ArchiveManifest.sidecarName).path) else { continue }
+                later.insert(name)
+            }
+        }
+        if waiting.allSatisfy(shown), gone.union(unfinished).union(later).allSatisfy(confirmed) { return nil }
+        return AdoptionQuestion(versions: waiting.sorted(), deletes: gone.sorted(), unfinished: unfinished.sorted(), later: later.sorted())
     }
 
     /// What there is to ask about the versions `job`'s folders (`folderOf`) adopted

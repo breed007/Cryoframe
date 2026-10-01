@@ -155,14 +155,12 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
                                                         shown: { given.hasShownAdoption(of: $0, target: t.id, library: lib.id) },
                                                         confirmed: { given.confirmsAdoption(of: $0, target: t.id, library: lib.id) }) {
                     let n = q.versions.count
-                    let gone = q.deletes.count
-                    let unfinished = q.unfinished.count
-                    deletes += gone
-                    var text = "At \(name(t)), \(n) earlier backup\(n == 1 ? "" : "s") of \(lib.displayName) that this job didn't make "
+                    deletes += q.deletes.count
+                    let text = "At \(name(t)), \(n) earlier backup\(n == 1 ? "" : "s") of \(lib.displayName) that this job didn't make "
                         + "(in “\(shelf.folder.lastPathComponent)”) now follow\(n == 1 ? "s" : "") its Keep rule: "
-                        + (gone == 0 ? "none are deleted at the next backup" : "\(gone) \(gone == 1 ? "is" : "are") deleted at the next backup")
-                    if unfinished > 0 { text += "; \(unfinished) that never finished \(unfinished == 1 ? "is" : "are") deleted too" }
-                    say(gone > 0 || unfinished > 0 ? .deletes : .keeps, text + ".")
+                        + AdoptionQuestion.effect(deletes: q.deletes.count, unfinished: q.unfinished.count, later: q.later.count, total: n)
+                            .joined(separator: "; ")
+                    say(q.allows.isEmpty ? .keeps : .deletes, text + ".")
                     consents.append(q.consent(target: t.id, library: lib.id, rule: draft.retention, at: now))
                 }
                 // a Keep rule that keeps fewer, over the job's own versions
