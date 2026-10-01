@@ -136,10 +136,7 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
 
         // the walk sees only the pipe, which a sealed build leaves out
         let blockers = JobExecutor.directoryStats(lib, forDMG: true).dmgBlockers
-        #expect(blockers.refusing.isEmpty, "\(blockers.counts)")
-        withKnownIssue("pre-existing: a file with a deny-delete access list stops hdiutil create, and DMGBlockers doesn't flag it") {
-            #expect(!blockers.refusing.isEmpty, "the walk before the build missed the deny-delete file")
-        }
+        #expect(!blockers.refusing.isEmpty, "the walk before the build missed the deny-delete file")
 
         let dest = base.appendingPathComponent("dest")
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
@@ -167,9 +164,7 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         // stdout, and the run reads only stderr, so the explanation that names the
         // file and points at the sealed zip never fires there (measured 2026-10-01;
         // direct builds too). The bare "create failed - Permission denied" is left.
-        withKnownIssue("macOS 27: the deny-delete explanation is lost, hdiutil names the file on stdout", isIntermittent: true) {
-            #expect(error.contains("sealed zip"), "\(error)")
-        }
+        #expect(error.contains("sealed zip"), "\(error)")
         #expect(filteredLeftovers(scratch).isEmpty, "the plaintext copy was left in scratch: \(filteredLeftovers(scratch))")
         // and no image was left half-written beside it
         let images = (FileManager.default.enumerator(atPath: scratch.path)?.allObjects as? [String] ?? []).filter { $0.hasSuffix(".dmg") }
@@ -194,10 +189,8 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         let excluded = (try? folderURL.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup) ?? false
         let neverIndexed = FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(".metadata_never_index").path)
             || FileManager.default.fileExists(atPath: made.copy.appendingPathComponent(".metadata_never_index").path)
-        withKnownIssue("the plaintext copy relies on its location to stay out of Time Machine and Spotlight") {
-            #expect(excluded, "the copy isn't excluded from Time Machine")
-            #expect(neverIndexed, "the copy isn't kept out of Spotlight")
-        }
+        #expect(excluded, "the copy isn't excluded from Time Machine")
+        #expect(neverIndexed, "the copy isn't kept out of Spotlight")
     }
 
     // MARK: room
@@ -252,10 +245,8 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         }
         #expect(filteredLeftovers(scratch).isEmpty, "the copy was left in scratch")
         #expect(freeBytes(scratchVol) + (8 << 20) >= freeBefore, "scratch wasn't given back")
-        withKnownIssue("the room check counts compressed bytes on disk; the copy filled the scratch volume first") {
-            #expect(low.v > 8 << 20, "the scratch volume was filled to \(low.v) bytes free before the run failed")
-            #expect(error.contains("not enough space"), "it wasn't refused up front: \(error)")
-        }
+        #expect(low.v > 8 << 20, "the scratch volume was filled to \(low.v) bytes free before the run failed")
+        #expect(error.contains("not enough space"), "it wasn't refused up front: \(error)")
     }
 
     // MARK: what a filtered disk image keeps
@@ -358,7 +349,7 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         let r = try runner.run("/usr/bin/rsync", ["-aE", "--delete", "--partial", lib.path + "/", old.path + "/"])
         try #require(r.ok, "\(r.stderr)")
         let then = probe(old)
-        #expect(now.contains("hidden.txt flags dropped") && now.contains("locked.txt flags dropped"), "\(now)")
+        #expect(now.isEmpty, "\(now)")
         #expect(then.contains("hidden.txt flags dropped") && then.contains("locked.txt flags dropped"), "\(then)")
     }
 

@@ -102,7 +102,7 @@ enum MirrorCopy {
     /// new copy is read back, and the caller must have detached and attached the image
     /// again first, so the reads come from the drive and not from memory:
     ///   - every path in the library is in the new copy with the same type, size,
-    ///     date and link target, and nothing else is;
+    ///     date, link target and flags (a folder's date too), and nothing else is;
     ///   - every file this run wrote (its size or date differs from the previous copy,
     ///     or it is new, which is exactly what rsync copies, or it is a sparse file
     ///     copySparse wrote again) matches the library byte for byte. Files carried
@@ -149,7 +149,7 @@ enum MirrorCopy {
     }
 
     /// Compare `copy` with the library by structure: every path there with the same
-    /// type, size, date and link target, and nothing else. No file data is read.
+    /// type, size, date, link target and flags, and nothing else. No file data is read.
     static func structure(of copy: URL, against source: URL, previous: URL?, control: RunControl?) throws -> Differences {
         let fm = FileManager.default
         var found = Differences()
@@ -172,7 +172,11 @@ enum MirrorCopy {
                 if t1 != t2 { found.note(rel, "points somewhere else") }
                 continue
             }
-            if type == S_IFDIR { found.present.append(rel) }
+            if a.st_flags & copiedFlags != b.st_flags & copiedFlags { found.note(rel, "has different flags (hidden or locked)"); continue }
+            if type == S_IFDIR {
+                found.present.append(rel)
+                if a.st_mtimespec.tv_sec != b.st_mtimespec.tv_sec { found.note(rel, "has the wrong date") }
+            }
             guard type == S_IFREG else { continue }
             guard a.st_size == b.st_size, a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec else {
                 found.note(rel, "has the wrong size or date"); continue
@@ -337,9 +341,27 @@ enum MirrorCopy {
     ///
     /// Named pipes, sockets and devices are left out (see `leftOut(in:)`), and any a
     /// copy made before this holds are taken out of it. Returns the ones left out.
+    ///
+    /// Last, every folder gets the library's dates back, and every item its flags
+    /// (hidden, locked: see `copiedFlags`), which rsync drops; a restore needs both. A
+    /// copy made before this (the previous copy, cloned) is unlocked first, so rsync
+    /// can update and delete what a locked flag would stop. `beforeLocking` is work of
+    /// the caller's that still writes to the copy.
     @discardableResult
     static func sync(_ source: URL, into next: URL, runner: CommandRunner,
+                     beforeLocking: () throws -> Void = {},
                      execute: (Command) throws -> Void) throws -> [String] {
+        unlock(next)
+        let leftOut = try update(source, into: next, runner: runner, execute: execute)     // takes out what is left out
+        try beforeLocking()
+        try restoreFolderDates(from: source, to: next, control: runner.control)
+        try copyFlags(from: source, to: next, control: runner.control)
+        return leftOut
+    }
+
+    /// `sync` up to the dates and flags
+    private static func update(_ source: URL, into next: URL, runner: CommandRunner,
+                               execute: (Command) throws -> Void) throws -> [String] {
         let survey = survey(source)
         let readOnly = survey.readOnly, leftOut = survey.leftOut, sparse = survey.sparse
         defer { removeLeftOut(in: next) }
@@ -655,6 +677,71 @@ enum MirrorCopy {
         }
     }
 
+    /// Put every folder's dates back as the library has them, deepest first. rsync
+    /// sets them, but what follows it (the read-only files' --files-from pass, a
+    /// pipe an older copy held taken out, a relinked file) changes a folder by adding
+    /// to it or taking from it. Measured: a folder holding a read-only file came out
+    /// of a mirror run dated the run, and a restore brought it back so.
+    static func restoreFolderDates(from source: URL, to copy: URL, control: RunControl?) throws {
+        var rels = [""]
+        if let walker = FileManager.default.enumerator(atPath: source.path) {
+            while let rel = walker.nextObject() as? String {
+                if walker.fileAttributes?[.type] as? FileAttributeType == .typeDirectory { rels.append(rel) }
+            }
+        }
+        for (i, rel) in rels.sorted(by: { $0.count > $1.count }).enumerated() {
+            if i % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
+            let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
+            var a = stat(), b = stat()
+            guard lstat(from, &a) == 0, lstat(to, &b) == 0, b.st_mode & S_IFMT == S_IFDIR,
+                  a.st_mtimespec.tv_sec != b.st_mtimespec.tv_sec || a.st_mtimespec.tv_nsec != b.st_mtimespec.tv_nsec else { continue }
+            var times = [a.st_atimespec, a.st_mtimespec]
+            _ = utimensat(AT_FDCWD, to, &times, AT_SYMLINK_NOFOLLOW)
+        }
+    }
+
+    /// Flags a direct disk image keeps that a user may set: no-dump, locked,
+    /// append-only, opaque, hidden. rsync drops them all (1.5.6's mirror did too), so
+    /// a restore brought back hidden files shown and locked ones unlocked. (The
+    /// system's flags need root; compression and tracking belong to the file system.)
+    static let copiedFlags: UInt32 = UInt32(UF_NODUMP | UF_IMMUTABLE | UF_APPEND | UF_OPAQUE | UF_HIDDEN)
+
+    /// the flags that stop an item being changed, renamed or removed
+    static let lockingFlags: UInt32 = UInt32(UF_IMMUTABLE | UF_APPEND)
+
+    /// Give every item of the copy the library's flags (see `copiedFlags`), deepest
+    /// first. The last thing done to a copy: nothing can be written to a locked item
+    /// after. Setting a flag changes no date. One that can't be set is left for the
+    /// read-back to name.
+    static func copyFlags(from source: URL, to copy: URL, control: RunControl?) throws {
+        var rels = [""]
+        if let walker = FileManager.default.enumerator(atPath: source.path) {
+            while let rel = walker.nextObject() as? String { rels.append(rel) }
+        }
+        for (i, rel) in rels.sorted(by: { $0.count > $1.count }).enumerated() {
+            if i % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
+            let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
+            var a = stat(), b = stat()
+            guard lstat(from, &a) == 0, lstat(to, &b) == 0, a.st_mode & S_IFMT == b.st_mode & S_IFMT,
+                  a.st_flags & copiedFlags != b.st_flags & copiedFlags else { continue }
+            _ = lchflags(to, (b.st_flags & ~copiedFlags) | (a.st_flags & copiedFlags))
+        }
+    }
+
+    /// Take the locking flags off every item of `copy` (a previous copy, cloned), so
+    /// it can be brought up to date; `copyFlags` puts back the library's.
+    static func unlock(_ copy: URL) {
+        var st = stat()
+        if lstat(copy.path, &st) == 0, st.st_flags & lockingFlags != 0 { _ = lchflags(copy.path, st.st_flags & ~lockingFlags) }
+        guard let walker = FileManager.default.enumerator(atPath: copy.path) else { return }
+        while let rel = walker.nextObject() as? String {
+            let path = copy.appendingPathComponent(rel).path
+            if lstat(path, &st) == 0, st.st_flags & lockingFlags != 0 { _ = lchflags(path, st.st_flags & ~lockingFlags) }
+        }
+    }
+
     /// regular files under `root` their owner can't write, relative to it.
     static func readOnlyFiles(in root: URL) -> [String] { survey(root).readOnly }
 
@@ -749,7 +836,8 @@ enum MirrorCopy {
     /// A deny-delete ACL on either top folder forbids renaming it, and every standard
     /// home folder carries one (Documents, Music, Pictures and the rest) which rsync -E
     /// faithfully copies. So a mirror of one of those would fail every run here. The
-    /// ACLs are lifted from both top folders for the rename and put back after it.
+    /// ACLs are lifted from both top folders for the rename and put back after it, and
+    /// so is a locked flag (see copyFlags), which forbids it too.
     static func putInPlace(_ next: URL, _ current: URL) throws {
         let exchange = FileManager.default.fileExists(atPath: current.path)
         let flags = UInt32(exchange ? RENAME_SWAP : RENAME_EXCL)
@@ -763,12 +851,19 @@ enum MirrorCopy {
             if let nextACL { acl_free(UnsafeMutableRawPointer(nextACL)) }
             if let currentACL { acl_free(UnsafeMutableRawPointer(currentACL)) }
         }
+        var nextStat = stat(), currentStat = stat()
+        _ = lstat(next.path, &nextStat)
+        if exchange { _ = lstat(current.path, &currentStat) }
         clearACL(next.path)
         if exchange { clearACL(current.path) }
+        _ = lchflags(next.path, nextStat.st_flags & ~lockingFlags)
+        if exchange { _ = lchflags(current.path, currentStat.st_flags & ~lockingFlags) }
         guard renamex_np(next.path, current.path, flags) == 0 else {
             let e = errno
             if let nextACL { acl_set_file(next.path, ACL_TYPE_EXTENDED, nextACL) }
             if let currentACL { acl_set_file(current.path, ACL_TYPE_EXTENDED, currentACL) }
+            _ = lchflags(next.path, nextStat.st_flags)
+            if exchange { _ = lchflags(current.path, currentStat.st_flags) }
             throw MirrorCopyError.swapFailed(String(cString: strerror(e)))
         }
         // The paths have traded places: `current` now names the new copy. Its access
@@ -776,6 +871,9 @@ enum MirrorCopy {
         // folder without it unseen (the read-back was before this).
         if let nextACL, acl_set_file(current.path, ACL_TYPE_EXTENDED, nextACL) != 0 {
             throw MirrorCopyError.topFolderNotRestored("its access list couldn't be put back: \(String(cString: strerror(errno)))")
+        }
+        if nextStat.st_flags & lockingFlags != 0, lchflags(current.path, nextStat.st_flags) != 0 {
+            throw MirrorCopyError.topFolderNotRestored("its locked flag couldn't be put back: \(String(cString: strerror(errno)))")
         }
     }
 
@@ -792,8 +890,9 @@ enum MirrorCopy {
         let fm = FileManager.default
         try? fm.removeItem(at: staging)
         guard fm.fileExists(atPath: staging.path) else { return }
-        // deny-delete ACLs, and read-only folders (whose modes the copy keeps), are
-        // what stops a plain remove
+        // locked items, deny-delete ACLs, and read-only folders (all of which the copy
+        // keeps) are what stops a plain remove
+        _ = try? runner.run("/usr/bin/chflags", ["-R", "0", staging.path], stdin: nil)
         _ = try? runner.run("/bin/chmod", ["-R", "-N", staging.path], stdin: nil)
         _ = try? runner.run("/bin/chmod", ["-R", "u+w", staging.path], stdin: nil)
         try? fm.removeItem(at: staging)

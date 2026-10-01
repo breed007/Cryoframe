@@ -107,8 +107,11 @@ final class AppModel: ObservableObject {
         }
         Task.detached { ArchiveReader.sweepStaleOpens() }   // clean any browse mounts a crash left attached
         let locks = runLocks
-        Task.detached { JobExecutor.sweepOrphanedScratch(scratchBase: TransferConfig.scratchBase(),
-                                                         pendingStore: .standard(), locks: locks) }   // clean leftover build artifacts
+        Task.detached {                         // clean leftover build artifacts, and copies a crash left
+            for base in TransferConfig.scratchBases() {
+                JobExecutor.sweepOrphanedScratch(scratchBase: base, pendingStore: .standard(), locks: locks)
+            }
+        }
         watchOtherRuns()
         resumeTransfers()
         armWake()                               // align the optional pmset wake with the schedule

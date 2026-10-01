@@ -22,8 +22,20 @@ enum TransferConfig {
         if let path = UserDefaults.standard.string(forKey: Prefs.scratchDir), !path.isEmpty {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
-        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return defaultScratchBase()
+    }
+
+    /// the system cache on the startup disk: where an encrypted job's plaintext copy
+    /// of a folder is made, whatever Settings names (see JobExecutor.plaintextScratch)
+    static func defaultScratchBase() -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("app.cryoframe/scratch", isDirectory: true)
+    }
+
+    /// every place a build can leave something in, for the sweep at launch
+    static func scratchBases() -> [URL] {
+        scratchBase().standardizedFileURL == defaultScratchBase().standardizedFileURL ? [scratchBase()]
+            : [scratchBase(), defaultScratchBase()]
     }
 
     static func maxConcurrentJobs() -> Int {
@@ -46,6 +58,7 @@ enum TransferConfig {
         JobExecutor(helper: XPCPrivilegedHelper(),
                     detector: detector,
                     scratchBase: scratchBase(),
+                    plaintextScratch: defaultScratchBase(),
                     chunkSize: chunkSize(),
                     pendingStore: PendingTransferStore.standard(),
                     jobStore: store,

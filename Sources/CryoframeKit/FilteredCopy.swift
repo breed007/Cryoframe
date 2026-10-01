@@ -19,17 +19,19 @@
 //  bundle bit among them), so a disk image built from it has the layout a direct
 //  build has: a package as one item on the volume root, a plain folder's contents
 //  spread over it (see RestoreEngine). The copier is the mirror's (MirrorCopy.sync:
-//  attributes, access lists, read-only files, sparse files), plus two things a
-//  direct disk image keeps and rsync doesn't, measured:
+//  attributes, access lists, read-only files, sparse files, folder dates, and file
+//  flags, which hdiutil keeps and rsync drops), plus hard links: hdiutil keeps a
+//  library's hard links as one file, and rsync -a copies each path as a separate
+//  file, so they are made links again here, before anything is locked.
 //
-//    - hard links: hdiutil keeps a library's hard links as one file; rsync -a
-//      copies each path as a separate file. They are made links again here.
-//    - file flags (hidden, locked): hdiutil keeps them; rsync drops them. They are
-//      copied last, since a locked file or folder can't be changed after.
-//
-//  The copy is removed right after the build, and before any build of the library
-//  starts, and by the sweep of scratch a crash leaves (it is a plain copy of the
-//  library, with nothing else in it worth keeping).
+//  The copy is removed right after the build, before any build of the library
+//  starts, at the start of every run of its job, and by the sweep of scratch at the
+//  app's launch (it is a plain copy of the library, with nothing else in it worth
+//  keeping). It is a plaintext copy, an encrypted job's too, so while it exists it is
+//  kept out of Time Machine and Spotlight by marks of its own: the default scratch
+//  (the system cache) is passed over by both, but a scratch location chosen in
+//  Settings may be anywhere. An encrypted job's copy is never made there at all (see
+//  JobExecutor.plaintextScratch).
 //
 
 import Foundation
@@ -37,10 +39,8 @@ import Foundation
 enum FilteredCopy {
     static let folderName = "filtered"
 
-    /// flags a direct disk image keeps that a user may set: no-dump, locked,
-    /// append-only, opaque, hidden. (The system's flags need root; compression and
-    /// tracking belong to the file system.)
-    static let copiedFlags: UInt32 = UInt32(UF_NODUMP | UF_IMMUTABLE | UF_APPEND | UF_OPAQUE | UF_HIDDEN)
+    /// the flags the copy carries, as a direct disk image does (see MirrorCopy.copyFlags)
+    static let copiedFlags: UInt32 = MirrorCopy.copiedFlags
 
     /// Copy `source` to `<buildDir>/filtered/<name>`, leaving out the items neither
     /// sealed format can hold. Returns the copy and what was left out, relative to the
@@ -50,42 +50,116 @@ enum FilteredCopy {
         let folder = buildDir.appendingPathComponent(folderName, isDirectory: true)
         remove(in: buildDir, runner: runner.forTeardown)
         let copy = folder.appendingPathComponent(name, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        markPrivate(folder)
         try fm.createDirectory(at: copy, withIntermediateDirectories: true)
         // read before the copy: which paths are links to one file
         let links = hardLinks(in: source)
-        let leftOut = try MirrorCopy.sync(source, into: copy, runner: runner) { command in
-            let r = try runner.runRetryingBusy(command.tool, command.args, stdin: nil)
-            guard r.ok else {
-                throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent, status: r.status, stderr: r.stderr)
+        let leftOut: [String]
+        do {
+            // hard links made again before anything is locked (see MirrorCopy.sync)
+            leftOut = try MirrorCopy.sync(source, into: copy, runner: runner, beforeLocking: {
+                if runner.control?.isCancelled == true { throw CancelledError() }
+                relink(links, source: source, copy: copy)
+            }) { command in
+                let r = try runner.runRetryingBusy(command.tool, command.args, stdin: nil)
+                guard r.ok else {
+                    throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent, status: r.status, stderr: r.stderr)
+                }
             }
+        } catch let error where ranOutOfSpace(error, at: buildDir) {
+            throw FilteredCopyError.scratchFilled(volume: RestoreRoom.volumeName(for: buildDir), library: name)
         }
         if runner.control?.isCancelled == true { throw CancelledError() }
-        relink(links, source: source, copy: copy)
-        try restoreFolderDates(from: source, to: copy, control: runner.control)
-        try copyFlags(from: source, to: copy, control: runner.control)
         return (copy, leftOut)
     }
 
-    /// Put every folder's dates back as the library has them, deepest first. rsync
-    /// sets them, but the passes after it (the read-only files' --files-from pass, a
-    /// relinked file) change a folder by adding to it; a direct build reads the
-    /// library's.
-    static func restoreFolderDates(from source: URL, to copy: URL, control: RunControl?) throws {
-        var rels = [""]
-        if let walker = FileManager.default.enumerator(atPath: source.path) {
-            while let rel = walker.nextObject() as? String {
-                if walker.fileAttributes?[.type] as? FileAttributeType == .typeDirectory { rels.append(rel) }
+    /// Whether a failed copy failed for want of room. rsync's own word for it is
+    /// "No space left on device", but a copy that fills its volume can end with
+    /// something else entirely (measured: "rsync failed — unexpected end of file",
+    /// its receiving side having died of it); the volume, nearly full with the copy
+    /// still on it, tells.
+    static func ranOutOfSpace(_ error: Error, at dir: URL) -> Bool {
+        if case ArchiveError.toolFailed(_, let status, let stderr)? = error as? ArchiveError,
+           status == ENOSPC || stderr.localizedCaseInsensitiveContains("No space left on device") { return true }
+        guard error is ArchiveError, let free = JobExecutor.freeNow(for: dir) else { return false }
+        return free < nearlyFull
+    }
+
+    /// Build the archive from the copy (`from`). A disk image hdiutil refuses outright
+    /// (see `refusedOutright`) is tried once more with nothing in the copy locked, and
+    /// says so in `note`; refused again, the build fails saying why.
+    static func build(_ engine: SealedArchiveEngine, from: ArchiveSource, to dir: URL,
+                      library: String) throws -> (archive: ArchiveResult, note: String?) {
+        do {
+            return (try engine.archive(from, to: dir), nil)
+        } catch let ArchiveError.toolFailed(tool, _, stderr) where tool == "hdiutil" && refusedOutright(stderr) {
+            MirrorCopy.unlock(from.root)
+            do {
+                return (try engine.archive(from, to: dir), unlockedNote(library: library))
+            } catch let ArchiveError.toolFailed(tool, status, stderr) where tool == "hdiutil" && refusedOutright(stderr) {
+                throw FilteredCopyError.diskImageRefused(
+                    library: library, detail: ArchiveError.toolFailed(tool: tool, status: status, stderr: stderr).localizedDescription)
             }
         }
-        for (i, rel) in rels.sorted(by: { $0.count > $1.count }).enumerated() {
-            if i % 512 == 0, control?.isCancelled == true { throw CancelledError() }
-            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
-            let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
-            var a = stat(), b = stat()
-            guard lstat(from, &a) == 0, lstat(to, &b) == 0, b.st_mode & S_IFMT == S_IFDIR,
-                  a.st_mtimespec.tv_sec != b.st_mtimespec.tv_sec || a.st_mtimespec.tv_nsec != b.st_mtimespec.tv_nsec else { continue }
-            var times = [a.st_atimespec, a.st_mtimespec]
-            _ = utimensat(AT_FDCWD, to, &times, AT_SYMLINK_NOFOLLOW)
+    }
+
+    /// Whether hdiutil refused to build from the copy with "Operation not permitted".
+    ///
+    /// On macOS 15 (CI's runner, 2026-10-01) every disk image built from a copy of a
+    /// library holding locked and hidden items, an access list and hard links failed
+    /// "create failed - Operation not permitted", while a direct build of the same
+    /// library, and a filtered one of a library without them, succeeded; macOS 26 and
+    /// 27 build both. The likeliest difference is the locked flags the copy is given
+    /// (see MirrorCopy.copyFlags), set by a different process than the library's, so
+    /// the build is tried once more with nothing in the copy locked (unmeasured: no
+    /// macOS 15 here). If that is refused too, the run says so plainly; either way the
+    /// copy is removed.
+    static func refusedOutright(_ stderr: String) -> Bool {
+        stderr.localizedCaseInsensitiveContains("Operation not permitted")
+    }
+
+    /// what the run says when the disk image was built from a copy with nothing locked
+    static func unlockedNote(library: String) -> String {
+        "\(library): the disk image tool wouldn't build from a copy holding locked items, so they are in the disk image unlocked. Everything else is as in the folder."
+    }
+
+    /// free bytes under which a volume a copy failed on counts as having filled
+    static let nearlyFull: UInt64 = 32 << 20
+
+    /// Keep the folder holding the copy out of Time Machine (the sticky exclusion
+    /// attribute, which travels with the folder) and Spotlight. Best effort: a volume
+    /// that can't take either mark still holds the copy only for the build.
+    static func markPrivate(_ folder: URL) {
+        var folder = folder
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? folder.setResourceValues(values)
+        FileManager.default.createFile(atPath: folder.appendingPathComponent(".metadata_never_index").path, contents: Data())
+    }
+
+    /// Remove every copy a run of `jobID` left in each of `bases` (`<base>/<job>/build/<library>/filtered`),
+    /// and the folders that held only that. Only for a job whose run lock is held.
+    static func removeLeftovers(jobID: String, under bases: [URL]) {
+        let fm = FileManager.default
+        var seen = Set<String>()
+        for base in bases where seen.insert(base.standardizedFileURL.path).inserted {
+            let build = base.appendingPathComponent(jobID, isDirectory: true).appendingPathComponent("build", isDirectory: true)
+            for lib in (try? fm.contentsOfDirectory(at: build, includingPropertiesForKeys: nil)) ?? [] {
+                var st = stat()
+                guard lstat(lib.appendingPathComponent(folderName).path, &st) == 0 else { continue }
+                remove(in: lib, runner: ProcessCommandRunner())
+                removeEmpty(lib)
+            }
+        }
+    }
+
+    /// `<base>/<job>/build/<library>`, then its two parents, each only if empty
+    static func removeEmpty(_ libDir: URL) {
+        var dir = libDir
+        for _ in 0..<3 {
+            guard rmdir(dir.path) == 0 else { return }
+            dir = dir.deletingLastPathComponent()
         }
     }
 
@@ -197,25 +271,21 @@ enum FilteredCopy {
     private static func sameSizeAndDate(_ x: stat, _ y: stat) -> Bool {
         x.st_size == y.st_size && x.st_mtimespec.tv_sec == y.st_mtimespec.tv_sec && x.st_mtimespec.tv_nsec == y.st_mtimespec.tv_nsec
     }
+}
 
-    // MARK: flags
+/// What goes wrong making the copy (MirrorCopyError is the mirror's).
+public enum FilteredCopyError: Error, Equatable, LocalizedError {
+    /// the scratch volume filled while the copy was made
+    case scratchFilled(volume: String, library: String)
+    /// hdiutil refused to build from the copy, even with nothing in it locked
+    case diskImageRefused(library: String, detail: String)
 
-    /// Give every item of the copy the library's flags (see `copiedFlags`), deepest
-    /// first, so nothing is locked before what is inside it is set. Setting a flag
-    /// changes no date. A flag that can't be set leaves the item as rsync made it.
-    static func copyFlags(from source: URL, to copy: URL, control: RunControl?) throws {
-        var rels = [""]
-        if let walker = FileManager.default.enumerator(atPath: source.path) {
-            while let rel = walker.nextObject() as? String { rels.append(rel) }
-        }
-        for (i, rel) in rels.sorted(by: { $0.count > $1.count }).enumerated() {
-            if i % 512 == 0, control?.isCancelled == true { throw CancelledError() }
-            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
-            let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
-            var a = stat(), b = stat()
-            guard lstat(from, &a) == 0, lstat(to, &b) == 0, a.st_mode & S_IFMT == b.st_mode & S_IFMT,
-                  a.st_flags & copiedFlags != b.st_flags & copiedFlags else { continue }
-            _ = lchflags(to, (b.st_flags & ~copiedFlags) | (a.st_flags & copiedFlags))
+    public var errorDescription: String? {
+        switch self {
+        case .scratchFilled(let volume, let library):
+            return "\(volume) ran out of space while a copy of \(library) without its named pipes and sockets was being made to build the archive from. Nothing was backed up, and the copy was removed. Free up space on \(volume), or choose a scratch location with more room in Settings, and run again."
+        case .diskImageRefused(let library, let detail):
+            return "\(library) holds named pipes or sockets, so its disk image is built from a copy without them, and macOS's disk image tool refused to build from that copy (\(detail)). Nothing was backed up, and the copy was removed. The sealed zip format archives this folder."
         }
     }
 }

@@ -11,6 +11,13 @@
 //  on it all night, with its snapshot held. The run's walk of the library for its size
 //  looks for all three, and the run fails up front naming them.
 //
+//  And it looks for access lists hdiutil can't build past: an entry denying this user
+//  the right to delete a file, or to read an item's attributes or its access list,
+//  makes `create -srcfolder` fail outright ("could not access <file> - Permission
+//  denied"), whether the library is read live or from a read-only snapshot. Those
+//  fail the run up front too, naming the items, and the sealed zip format archives
+//  them.
+//
 //  It also finds what neither sealed format can hold (named pipes, sockets, devices).
 //  Those don't fail the run: a sealed build of such a folder reads a copy of it
 //  without them (see FilteredCopy), and the run says what was left out.
@@ -24,8 +31,9 @@ public struct DMGBlockers: Sendable, Equatable {
     /// pipe and wait for a writer forever, and both refuse a socket ("Operation not
     /// supported on socket"). Devices can't be made without root to measure; neither
     /// tool can recreate one as the user. These are left out of a sealed build (see
-    /// FilteredCopy), not refused; the other kinds refuse it.
-    public enum Kind: Sendable, CaseIterable { case unreadable, foreign, setgid, special }
+    /// FilteredCopy), not refused; the other kinds refuse it. `accessList`: an access
+    /// list hdiutil fails on (see `accessListStopsDiskImage`).
+    public enum Kind: Sendable, CaseIterable { case unreadable, foreign, setgid, special, accessList }
 
     /// how many examples of each kind are kept to name
     public static let examplesKept = 5
@@ -65,12 +73,47 @@ public struct DMGBlockers: Sendable, Equatable {
         switch type {
         case S_IFREG:
             if access(path, R_OK) != 0 { note(.unreadable, rel); return }
-            if st.st_mode & S_ISGID != 0, !groups.contains(st.st_gid) { note(.setgid, rel) }
+            if st.st_mode & S_ISGID != 0, !groups.contains(st.st_gid) { note(.setgid, rel); return }
         case S_IFDIR:
-            if access(path, R_OK | X_OK) != 0 { note(.unreadable, rel) }
+            if access(path, R_OK | X_OK) != 0 { note(.unreadable, rel); return }
         default:
             break
         }
+        if Self.accessListStopsDiskImage(path, isFolder: type == S_IFDIR, uid: uid) { note(.accessList, rel) }
+    }
+
+    /// Whether the item's access list makes `hdiutil create -srcfolder` fail. Measured
+    /// on macOS 27 (2026-10-01), each entry alone, denying the user building the image:
+    ///   - a file (or a link): delete, read attributes, read extended attributes, or
+    ///     read security (the access list itself) all fail it;
+    ///   - a folder: read attributes, read extended attributes and read security fail
+    ///     it; delete and delete-child don't (every home folder denies delete);
+    ///   - an entry for another user, an "allow" entry, or one that is only inherited
+    ///     by items made later doesn't.
+    /// The same file on a read-only volume (as a snapshot is) fails the same way, so
+    /// this reads the entries rather than asking the kernel, which answers "read-only
+    /// file system" there.
+    static func accessListStopsDiskImage(_ path: String, isFolder: Bool, uid: uid_t = geteuid()) -> Bool {
+        guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return errno == EACCES }   // can't read it: denied
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        let stopping: [acl_perm_t] = isFolder ? [ACL_READ_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_READ_SECURITY]
+                                              : [ACL_DELETE, ACL_READ_ATTRIBUTES, ACL_READ_EXTATTRIBUTES, ACL_READ_SECURITY]
+        var entry: acl_entry_t?
+        var which = ACL_FIRST_ENTRY.rawValue
+        while acl_get_entry(acl, which, &entry) == 0, let e = entry {
+            which = ACL_NEXT_ENTRY.rawValue
+            var tag = ACL_UNDEFINED_TAG
+            guard acl_get_tag_type(e, &tag) == 0, tag == ACL_EXTENDED_DENY else { continue }
+            var flags: acl_flagset_t?
+            if acl_get_flagset_np(UnsafeMutableRawPointer(e), &flags) == 0, let flags,
+               acl_get_flag_np(flags, ACL_ENTRY_ONLY_INHERIT) == 1 { continue }
+            var perms: acl_permset_t?
+            guard acl_get_permset(e, &perms) == 0, let perms, stopping.contains(where: { acl_get_perm_np(perms, $0) == 1 }),
+                  let qualifier = acl_get_qualifier(e) else { continue }
+            defer { acl_free(qualifier) }
+            if Membership.applies(qualifier.assumingMemoryBound(to: UInt8.self), to: uid) { return true }
+        }
+        return false
     }
 
     static func relative(_ path: String, to root: String) -> String {
@@ -82,6 +125,28 @@ public struct DMGBlockers: Sendable, Equatable {
     /// Whether the user is in a group. getgrouplist(3) asks directory services, so
     /// it answers for groups getgroups(2) leaves out; asked once per walk.
     struct Membership {
+        /// Whether an access list entry's qualifier (a user's or a group's UUID, 16
+        /// bytes) names `uid` or a group it is in ("everyone" included). The
+        /// membership calls aren't visible to Swift, so they are looked up by name;
+        /// if they can't be, an entry is taken to apply, which only ever refuses.
+        static func applies(_ qualifier: UnsafePointer<UInt8>, to uid: uid_t) -> Bool {
+            guard let calls = Self.calls else { return true }
+            var me = [UInt8](repeating: 0, count: 16)
+            guard calls.uidToUUID(uid, &me) == 0 else { return true }
+            if me.withUnsafeBufferPointer({ memcmp($0.baseAddress!, qualifier, 16) == 0 }) { return true }
+            var member: Int32 = 0
+            guard me.withUnsafeBufferPointer({ calls.check($0.baseAddress!, qualifier, &member) }) == 0 else { return false }
+            return member != 0
+        }
+
+        private typealias UIDToUUID = @convention(c) (uid_t, UnsafeMutablePointer<UInt8>) -> Int32
+        private typealias CheckMembership = @convention(c) (UnsafePointer<UInt8>, UnsafePointer<UInt8>, UnsafeMutablePointer<Int32>) -> Int32
+        private static let calls: (uidToUUID: UIDToUUID, check: CheckMembership)? = {
+            let handle = dlopen(nil, RTLD_NOW)
+            guard let u = dlsym(handle, "mbr_uid_to_uuid"), let c = dlsym(handle, "mbr_check_membership") else { return nil }
+            return (unsafeBitCast(u, to: UIDToUUID.self), unsafeBitCast(c, to: CheckMembership.self))
+        }()
+
         private var known: [gid_t: Bool]
         private var groups: Set<gid_t>?
         init(known: [gid_t: Bool] = [:]) { self.known = known }
@@ -131,6 +196,7 @@ public struct DMGBlockers: Sendable, Equatable {
             return "\(n) \(n == 1 ? one : many) (\(shown.joined(separator: ", "))\(n > shown.count ? ", …" : ""))"
         }
         var said: [String] = []
+        let refused = list(.accessList, "item whose access list it can't copy", "items whose access lists it can't copy")
         let found = [list(.unreadable, "item you can't read", "items you can't read"),
                      list(.foreign, "item owned by another user", "items owned by another user"),
                      list(.setgid, "file set to run as a group you're not in", "files set to run as a group you're not in")]
@@ -139,7 +205,13 @@ public struct DMGBlockers: Sendable, Equatable {
             said.append("\(library) can't be sealed into a disk image unattended: the disk image tool would stop and wait for an administrator's password because of "
                         + found.joined(separator: ", and ") + ".")
         }
+        if let refused {
+            said.append("\(library) can't be sealed into a disk image: the disk image tool fails on \(refused): an entry in it denies you deleting the item or reading its details.")
+        }
         var fix = "Nothing was backed up."
+        if refused != nil {
+            fix += " Remove those entries (in Terminal, chmod -N on each item takes its access list off), or switch this job to the sealed zip format, which archives them."
+        }
         if !found.isEmpty {
             fix += " Make these items yours and readable (in Finder, Get Info, then Sharing & Permissions), or move them out of the folder"
             if counts[.foreign] != nil || counts[.setgid] != nil {

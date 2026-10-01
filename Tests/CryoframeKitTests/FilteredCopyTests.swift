@@ -185,8 +185,9 @@ private func differences(_ a: [String: String], _ b: [String: String]) -> [Strin
         let made = try FilteredCopy.make(of: lib, name: name, in: buildDir, runner: ProcessCommandRunner())
         #expect(Set(made.leftOut) == ["build.pipe", "sub/editor.sock"], "\(made.leftOut)")
         #expect(made.copy.lastPathComponent == name)
-        let filtered = try SealedArchiveEngine(kind, passphrase: passphrase)
-            .archive(ArchiveSource(name: name, root: made.copy), to: buildDir)
+        // as the run builds it (see FilteredCopy.build)
+        let filtered = try FilteredCopy.build(SealedArchiveEngine(kind, passphrase: passphrase),
+                                              from: ArchiveSource(name: name, root: made.copy), to: buildDir, library: name).archive
         FilteredCopy.remove(in: buildDir, runner: ProcessCommandRunner())
         #expect(!FileManager.default.fileExists(atPath: buildDir.appendingPathComponent("filtered").path), "the copy wasn't removed")
 
@@ -217,7 +218,8 @@ private func differences(_ a: [String: String], _ b: [String: String]) -> [Strin
         let buildDir = base.appendingPathComponent("build")
         let made = try FilteredCopy.make(of: lib, name: name, in: buildDir, runner: ProcessCommandRunner())
         let out = base.appendingPathComponent("out")
-        let result = try SealedArchiveEngine(.dmg).archive(ArchiveSource(name: name, root: made.copy), to: out)
+        let result = try FilteredCopy.build(SealedArchiveEngine(.dmg), from: ArchiveSource(name: name, root: made.copy),
+                                            to: out, library: name).archive
         FilteredCopy.remove(in: buildDir, runner: ProcessCommandRunner())
         try ArchiveManifest.write(try ArchiveManifest.build(for: result), toDir: out)
         let archive = try #require(RestoreDiscovery.archive(at: out))

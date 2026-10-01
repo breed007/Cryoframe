@@ -31,6 +31,10 @@ public struct JobExecutor: Sendable {
     let probe: TargetProbe
     let locator: ContentLocator
     let scratchBase: URL
+    /// where an encrypted job's copy of a library without its pipes and sockets is
+    /// made (see FilteredCopy): the system cache on the startup disk, whatever
+    /// scratch location Settings names
+    let plaintextScratch: URL
     let chunkSize: UInt64
     let pendingStore: PendingTransferStore?
     let jobStore: JobStore?
@@ -50,6 +54,7 @@ public struct JobExecutor: Sendable {
                 locator: ContentLocator = ContentLocator(),
                 scratchBase: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("app.cryoframe/scratch", isDirectory: true),
+                plaintextScratch: URL? = nil,
                 chunkSize: UInt64 = 2 * 1_000_000_000,
                 pendingStore: PendingTransferStore? = nil,
                 jobStore: JobStore? = nil,
@@ -61,6 +66,7 @@ public struct JobExecutor: Sendable {
         self.helper = helper; self.detector = detector; self.probe = probe; self.locator = locator
         self.volumes = volumes
         self.scratchBase = scratchBase; self.chunkSize = chunkSize
+        self.plaintextScratch = plaintextScratch ?? scratchBase
         self.pendingStore = pendingStore; self.jobStore = jobStore; self.dataVolume = dataVolume
         self.passphraseProvider = passphraseProvider; self.healthRecords = healthRecords; self.runHistory = runHistory
     }
@@ -83,6 +89,7 @@ public struct JobExecutor: Sendable {
         let encrypted: Bool
         let buildDir: URL           // scratch dir to clean once distribution is done
         let dests: [Target]         // the available destinations to copy/ship it to
+        var note: String? = nil     // what the run says about how it was built
     }
 
     /// where one library lives, and how to reach it once its disk is frozen.
@@ -138,6 +145,11 @@ public struct JobExecutor: Sendable {
                     onStage: @escaping @Sendable (BackupStage) -> Void = { _ in },
                     onLibrary: @escaping @Sendable (String) -> Void = { _ in },
                     onProgress: @escaping @Sendable (RunProgress) -> Void = { _ in }) async throws -> JobOutcome {
+        // A copy of a library a crash left mid-build is a plaintext copy of it, an
+        // encrypted job's included: gone before anything else, not only at the app's
+        // next launch (the scheduled agent may run this job many times before that).
+        // The caller holds this job's run lock, so none of this job's builds is live.
+        FilteredCopy.removeLeftovers(jobID: saved.id, under: [scratchBase, plaintextScratch])
         // Each destination where it is now, found by its volume: a renamed or
         // remounted drive is still itself, and another drive of the same name is
         // never written to (see DestinationResolver). A folder on a renamed drive is
@@ -334,7 +346,10 @@ public struct JobExecutor: Sendable {
                 }
                 let stats = Self.directoryStats(root, forDMG: sealed == .dmg, forZip: sealed == .zip, forMirror: sealed == nil)
                 let sourceSize = stats.bytes
-                let source = ArchiveSource(name: root.lastPathComponent, root: root, sizeHint: sourceSize)
+                // a mirror writes every file out whole (see copySize); a sealed archive
+                // compresses, and is held to the bytes the library takes on disk
+                let source = ArchiveSource(name: root.lastPathComponent, root: root,
+                                           sizeHint: sealed == nil ? stats.copyBytes : sourceSize)
 
                 // An empty source seals into an archive that reports success and then
                 // cannot be restored: RestoreEngine finds nothing to rebuild the bundle
@@ -385,22 +400,24 @@ public struct JobExecutor: Sendable {
                     }
                     let live = reachable.filter { folderOf[$0.id]?[library.id] != nil }
                     if live.isEmpty { continue }
-                    // a filtered build holds the copy and the archive at once
-                    let room = Self.scratchRoom(sourceSize, filtered: filtered)
-                    if (Self.freeSpace(for: self.scratchBase) ?? .max) < room.needed {
-                        for t in live {
-                            results.append(.failed(library: library.displayName, destination: t.displayName,
-                                error: "not enough space on the scratch volume: needs ~\(Self.human(room.said)), only \(Self.human(Self.freeSpace(for: self.scratchBase) ?? 0)) free"))
-                        }
+                    let buildDir = self.scratchBase.appendingPathComponent("\(job.id)/build/\(Self.safe(library.id))", isDirectory: true)
+                    // a filtered build holds the copy and the archive at once; an
+                    // encrypted job's copy is made on the startup disk (see plaintextScratch)
+                    let copyBase = passphrase != nil ? self.plaintextScratch : self.scratchBase
+                    let copyDir = copyBase.appendingPathComponent("\(job.id)/build/\(Self.safe(library.id))", isDirectory: true)
+                    if let refusal = Self.scratchRefusal(archive: sourceSize, copy: filtered ? stats.copyBytes : nil,
+                                                         scratch: self.scratchBase, copyScratch: copyBase) {
+                        for t in live { results.append(.failed(library: library.displayName, destination: t.displayName, error: refusal)) }
                         continue
                     }
-                    let buildDir = self.scratchBase.appendingPathComponent("\(job.id)/build/\(Self.safe(library.id))", isDirectory: true)
-                    let poller = self.archivePoller(total: sourceSize, outputDir: buildDir, idx: idx, count: count, onProgress: onProgress)
+                    let poller = self.archivePoller(total: sourceSize, outputDir: buildDir, copyDir: copyDir, idx: idx, count: count,
+                                                    onProgress: onProgress)
                     do {
                         builds.append(try self.buildSealed(job: job, library: library, index: idx, source: source,
-                                                           sealed: sealed, filtered: filtered, buildDir: buildDir, dests: live,
-                                                           runner: runner, passphrase: passphrase, onStage: onStage))
+                                                           sealed: sealed, filtered: filtered, buildDir: buildDir, copyDir: copyDir,
+                                                           dests: live, runner: runner, passphrase: passphrase, onStage: onStage))
                         poller.cancel()
+                        if let note = builds.last?.note { notes.append(note) }
                         if filtered, let note = stats.dmgBlockers.leftOutOfSealed(library: library.displayName, zip: sealed == .zip) {
                             notes.append(note)
                         }
@@ -428,14 +445,15 @@ public struct JobExecutor: Sendable {
                         }
                         let mirrorExists = FileManager.default.fileExists(atPath: libDir.appendingPathComponent(source.name + ".sparsebundle").path)
                         if !mirrorExists {
-                            let needed = sourceSize + sourceSize / 20
+                            let copySize = stats.copyBytes
+                            let needed = copySize + copySize / 20
                             if (Self.freeSpace(for: t.destinationDir) ?? .max) < needed {
                                 results.append(.failed(library: library.displayName, destination: t.displayName,
-                                    error: "not enough space on \(t.displayName): needs ~\(Self.human(sourceSize)), only \(Self.human(Self.freeSpace(for: t.destinationDir) ?? 0)) free"))
+                                    error: "not enough space on \(t.displayName): needs ~\(Self.human(copySize)), only \(Self.human(Self.freeSpace(for: t.destinationDir) ?? 0)) free"))
                                 continue
                             }
                         }
-                        let poller = self.archivePoller(total: sourceSize, outputDir: libDir, idx: idx, count: count, onProgress: onProgress)
+                        let poller = self.archivePoller(total: stats.copyBytes, outputDir: libDir, idx: idx, count: count, onProgress: onProgress)
                         do {
                             results.append(try self.direct(job: job, library: library, source: source,
                                                            dest: libDir, target: t, runner: runner,
@@ -962,9 +980,10 @@ public struct JobExecutor: Sendable {
 
     /// polls the output directory's size against the (known) source size while an
     /// archive runs, so the UI shows a moving bytes-written bar.
-    private func archivePoller(total: UInt64, outputDir: URL, idx: Int, count: Int,
+    private func archivePoller(total: UInt64, outputDir: URL, copyDir: URL? = nil, idx: Int, count: Int,
                                onProgress: @escaping @Sendable (RunProgress) -> Void) -> Task<Void, Never> {
-        Task.detached {
+        let copyFolder = (copyDir ?? outputDir).appendingPathComponent(FilteredCopy.folderName)
+        return Task.detached {
             let start = Date()
             var lastBytes: UInt64 = 0
             var lastTime = start
@@ -974,7 +993,7 @@ public struct JobExecutor: Sendable {
                 // (see FilteredCopy) isn't the archive: measured apart, and while it is
                 // all there is, said instead of a bar that doesn't move
                 let written = Self.directorySize(outputDir, skipping: FilteredCopy.folderName)
-                if written == 0, FileManager.default.fileExists(atPath: outputDir.appendingPathComponent(FilteredCopy.folderName).path) {
+                if written == 0, FileManager.default.fileExists(atPath: copyFolder.path) {
                     onProgress(RunProgress(stage: .archiving, libraryIndex: idx, libraryCount: count, fraction: nil,
                                            detail: "Copying the folder without its named pipes and sockets",
                                            elapsed: Date().timeIntervalSince(start)))
@@ -1012,6 +1031,22 @@ public struct JobExecutor: Sendable {
     struct DirectoryStats {
         var bytes: UInt64 = 0; var entries = 0; var readable = true
         var dmgBlockers = DMGBlockers()
+        /// what a copy of the tree written out by the mirror's copier takes (see
+        /// `copySize`): more than `bytes` where files are stored compressed
+        var copyBytes: UInt64 = 0
+    }
+
+    /// What one file takes once copied by the mirror's copier (MirrorCopy.sync), which
+    /// writes every file out whole except a sparse one, copied with its holes. A file
+    /// APFS or HFS+ keeps compressed takes a fraction of its length on disk, and its
+    /// copy takes all of it: measured, a 20 MB text file holding 172 KB on disk took
+    /// 20 MB after `rsync -aE`. The room checks counted the 172 KB, so a library of
+    /// such files passed them and then filled the drive part-way through the copy.
+    static func copySize(allocated: UInt64, length: UInt64, path: String) -> UInt64 {
+        guard length > allocated else { return allocated }
+        var st = stat()
+        if lstat(path, &st) == 0, MirrorCopy.isSparse(path, st) { return allocated }
+        return (length + 4095) / 4096 * 4096
     }
 
     /// With `forZip`, what a sealed zip can't hold (named pipes, sockets, devices);
@@ -1019,7 +1054,8 @@ public struct JobExecutor: Sendable {
     static func directoryStats(_ url: URL, forDMG: Bool = false, forZip: Bool = false,
                                forMirror: Bool = false) -> DirectoryStats {
         var out = DirectoryStats()
-        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey,
+                                         .totalFileSizeKey]
         let root = url.standardizedFileURL.path
         // a folder that can't be listed is found by inspecting it, before the walk
         // tries to go in (see DMGBlockers.inspect)
@@ -1037,7 +1073,9 @@ public struct JobExecutor: Sendable {
             if v.isSymbolicLink == true { out.entries += 1; continue }
             guard v.isRegularFile == true else { continue }
             out.entries += 1
-            out.bytes += UInt64(v.totalFileAllocatedSize ?? v.fileAllocatedSize ?? 0)
+            let allocated = UInt64(v.totalFileAllocatedSize ?? v.fileAllocatedSize ?? 0)
+            out.bytes += allocated
+            out.copyBytes += copySize(allocated: allocated, length: UInt64(max(v.totalFileSize ?? 0, 0)), path: u.path)
         }
         return out
     }
@@ -1068,8 +1106,54 @@ public struct JobExecutor: Sendable {
     /// be as big as the library, and 5% over; a filtered build (see FilteredCopy)
     /// holds a copy of the library as well. `said`: the size a refusal names.
     static func scratchRoom(_ sourceSize: UInt64, filtered: Bool) -> (needed: UInt64, said: UInt64) {
-        let said = filtered ? sourceSize * 2 : sourceSize
-        return (said + sourceSize / 20, said)
+        scratchRoom(archive: sourceSize, copy: filtered ? sourceSize : nil)
+    }
+
+    /// The same, from the bytes the library takes on disk (`archive`) and what its
+    /// copy takes written out (`copy`, see copySize), which a compressed library makes
+    /// far more.
+    static func scratchRoom(archive: UInt64, copy: UInt64?) -> (needed: UInt64, said: UInt64) {
+        let said = archive + (copy ?? 0)
+        return (said + archive / 20, said)
+    }
+
+    /// Why a sealed build can't be made in scratch, or nil when there is room. The
+    /// copy of a filtered build is made in `copyScratch`, which for an encrypted job
+    /// is the startup disk's system cache and may be another volume than `scratch`:
+    /// then each is checked for its own part.
+    static func scratchRefusal(archive: UInt64, copy: UInt64?, scratch: URL, copyScratch: URL) -> String? {
+        let free = freeSpace(for: scratch)
+        guard let copy, !sameVolume(scratch, copyScratch) else {
+            let room = scratchRoom(archive: archive, copy: copy)
+            guard (free ?? .max) < room.needed else { return nil }
+            return "not enough space on the scratch volume: needs ~\(human(room.said)), only \(human(free ?? 0)) free"
+        }
+        let room = scratchRoom(archive: archive, copy: nil)
+        if (free ?? .max) < room.needed {
+            return "not enough space on the scratch volume: needs ~\(human(room.said)), only \(human(free ?? 0)) free"
+        }
+        let copyFree = freeSpace(for: copyScratch)
+        if (copyFree ?? .max) < copy + copy / 20 {
+            return "not enough space on the startup disk for the copy a disk image of this folder is built from (an encrypted job's copy is made there, never in the scratch location): needs ~\(human(copy)), only \(human(copyFree ?? 0)) free"
+        }
+        return nil
+    }
+
+    /// whether two folders (or their nearest existing parents) are on one volume
+    static func sameVolume(_ a: URL, _ b: URL) -> Bool {
+        func device(_ url: URL) -> dev_t? {
+            var dir = url
+            for _ in 0..<64 {
+                var st = stat()
+                if stat(dir.path, &st) == 0 { return st.st_dev }
+                let parent = dir.deletingLastPathComponent()
+                if parent.path == dir.path { return nil }
+                dir = parent
+            }
+            return nil
+        }
+        guard let x = device(a), let y = device(b) else { return false }
+        return x == y
     }
 
     /// what a failed library says on the job row, in History, and in alerts. Every
@@ -1090,22 +1174,30 @@ public struct JobExecutor: Sendable {
     /// `filtered`: the library holds named pipes, sockets or devices, so the build
     /// reads a copy of it without them (see FilteredCopy), removed once it is built.
     private func buildSealed(job: BackupJob, library: ContentType, index: Int, source: ArchiveSource,
-                             sealed: SealedArchiveEngine.Sealed, filtered: Bool, buildDir: URL, dests: [Target],
+                             sealed: SealedArchiveEngine.Sealed, filtered: Bool, buildDir: URL, copyDir: URL, dests: [Target],
                              runner: CommandRunner, passphrase: String?,
                              onStage: @escaping @Sendable (BackupStage) -> Void) throws -> SealedBuild {
         let fm = FileManager.default
         FilteredCopy.remove(in: buildDir, runner: runner.forTeardown)
+        FilteredCopy.remove(in: copyDir, runner: runner.forTeardown)
         try? fm.removeItem(at: buildDir)
         try fm.createDirectory(at: buildDir, withIntermediateDirectories: true)
+        var note: String?
         let archive: ArchiveResult = try {
             guard filtered else {
                 return try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase).archive(source, to: buildDir)
             }
             // removed however the build ends, Stop included, before anything reads the archive
-            defer { FilteredCopy.remove(in: buildDir, runner: runner.forTeardown) }
-            let copy = try FilteredCopy.make(of: source.root, name: source.name, in: buildDir, runner: runner).copy
-            return try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase)
-                .archive(ArchiveSource(name: source.name, root: copy, sizeHint: source.sizeHint), to: buildDir)
+            defer {
+                FilteredCopy.remove(in: copyDir, runner: runner.forTeardown)
+                if copyDir.path != buildDir.path { FilteredCopy.removeEmpty(copyDir) }
+            }
+            let copy = try FilteredCopy.make(of: source.root, name: source.name, in: copyDir, runner: runner).copy
+            let built = try FilteredCopy.build(SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase),
+                                               from: ArchiveSource(name: source.name, root: copy, sizeHint: source.sizeHint),
+                                               to: buildDir, library: library.displayName)
+            note = built.note
+            return built.archive
         }()
         guard let file = archive.artifacts.first,
               let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? UInt64 else {
@@ -1119,7 +1211,7 @@ public struct JobExecutor: Sendable {
         let digest = (try? Checksum.sha256(of: file)) ?? ""
         return SealedBuild(library: library, jobID: job.id, index: index, builtFile: file, format: archive.format,
                            byteSize: size, contentDigest: digest, verified: verified, encrypted: passphrase != nil,
-                           buildDir: buildDir, dests: dests)
+                           buildDir: buildDir, dests: dests, note: note)
     }
 
     private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL, target: Target,

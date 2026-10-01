@@ -85,8 +85,22 @@ public struct SealedArchiveEngine: ArchiveEngine {
         let r = try runner.runRetryingBusy(command.tool, command.args, stdin: stdin)
         guard r.ok else {
             throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent,
-                                          status: r.status, stderr: r.stderr)
+                                          status: r.status, stderr: Self.failureText(r))
         }
+    }
+
+    /// What a failed tool said. hdiutil names the file it couldn't copy on standard
+    /// output ("could not access <file> - Permission denied", measured on macOS 27),
+    /// and only "create failed" on standard error, so the lines of its output that
+    /// name a file go first: without them the explanation that names the file and
+    /// points at the sealed zip (see ArchiveError) never fired.
+    static func failureText(_ r: CommandResult) -> String {
+        let named = r.stdout.split(whereSeparator: \.isNewline).map(String.init).filter {
+            $0.localizedCaseInsensitiveContains("could not access") || $0.localizedCaseInsensitiveContains("Permission denied")
+                || $0.localizedCaseInsensitiveContains("Operation not permitted")
+        }
+        guard !named.isEmpty else { return r.stderr }
+        return named.joined(separator: "\n") + "\n" + r.stderr
     }
 
     private func partArtifacts(prefix: String, in dir: URL, fm: FileManager) throws -> [URL] {

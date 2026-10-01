@@ -673,8 +673,23 @@ extension MirrorCrashSafety {
         }
 
         try editEverything(src, files: 6)
-        #expect(throws: MirrorCopyError.self) { try engine.archive(ArchiveSource(name: "Lib", root: src), to: out) }
+        // A locked file alone no longer keeps a leftover in place: a mirror holds the
+        // library's locked items now, and the remove unlocks them (see removeStaging).
+        // One that won't go is made so by a chflags that fails.
+        #expect(throws: MirrorCopyError.self) {
+            try SparseBundleMirrorEngine(sizeGB: 1, runner: RefusesChflags(), mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        }
         #expect(try insideMirror(bundle).library == before)
+    }
+
+    /// a runner whose chflags fails, as one that can't clear a flag would
+    private struct RefusesChflags: CommandRunner {
+        let inner = ProcessCommandRunner()
+        var forTeardown: CommandRunner { self }
+        func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
+            if launchPath.hasSuffix("chflags") { return CommandResult(status: 1, stdout: "", stderr: "chflags: Operation not permitted\n") }
+            return try inner.run(launchPath, args, stdin: stdin)
+        }
     }
 }
 
@@ -745,8 +760,9 @@ extension MirrorCrashSafety {
         #expect {
             try SparseBundleMirrorEngine(sizeGB: 1, runner: loses, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: out)
         } throws: { error in
-            guard case MirrorCopyError.updateNotConfirmed(let count, _) = error else { return false }
-            return count == 1
+            // the file, and the date of the folder it was taken from (see MirrorCopy.structure)
+            guard case MirrorCopyError.updateNotConfirmed(let count, let examples) = error else { return false }
+            return count == 2 && examples.contains("sub/new0.txt is missing") && examples.contains("sub has the wrong date")
         }
         #expect(loses.lost, "nothing was lost after the swap, so this proves nothing")
         #expect(!MirrorSeal.isOpen(out), "a sound image holding a complete copy should be sealed")
