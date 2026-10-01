@@ -219,7 +219,10 @@ delete
 deleted
 deletelocalsnapshots
 deletes
+deleting
 denied
+denies
+deprecated
 describe
 desktop
 dest
@@ -283,6 +286,7 @@ enough
 enter
 enterprise
 entities
+entries
 entry
 errno
 error
@@ -332,6 +336,8 @@ finishing
 first
 fit
 fix
+flag
+flags
 folder
 folder's
 folders
@@ -487,6 +493,7 @@ lists
 live
 local
 localsnapshot
+location
 lock
 locked
 locks
@@ -506,6 +513,7 @@ machine
 machine's
 macl
 macos
+macos's
 made
 mail
 main
@@ -523,8 +531,11 @@ match
 matched
 may
 mb
+mbr
 me
+meaningful
 meanwhile
+membership
 messages
 metadata
 mib
@@ -662,6 +673,7 @@ previous
 private
 pro
 probe
+processcommandrunner
 profile
 profiles
 program
@@ -761,7 +773,6 @@ schedule's
 scheduled
 scheme
 scratch
-scratchbase
 sealed
 sec
 second
@@ -896,6 +907,7 @@ type
 ubf
 udbz
 udzo
+uid
 ulfo
 ulmo
 umount
@@ -905,6 +917,7 @@ unchanged
 uncompressed
 undone
 unfinished
+unlocked
 unmount
 unmounted
 unpack
