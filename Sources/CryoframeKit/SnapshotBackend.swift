@@ -122,6 +122,20 @@ public extension CommandRunner {
          "not recognized", "file exists", "corrupt"]
     }
 
+    /// A tool's stderr without hdiutil's deprecation notice. On macOS 27 hdiutil
+    /// prints a warning that it is deprecated in favor of `diskutil image` ahead of
+    /// its real error, and that line is no use to someone reading the message.
+    /// Every other line is kept, in order. If nothing but the notice is there, the
+    /// text is returned as it came: the error is never dropped.
+    static func meaningful(_ stderr: String) -> String {
+        let lines = stderr.split(separator: "\n", omittingEmptySubsequences: true)
+        let kept = lines.filter { l in
+            !(l.localizedCaseInsensitiveContains("diskutil image") || l.localizedCaseInsensitiveContains("deprecated"))
+        }
+        guard !kept.isEmpty else { return stderr.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return kept.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
+    }
+
     /// EAGAIN: the disk-image system itself is saturated, whatever is attached
     static func isWaitable(_ stderr: String) -> Bool {
         stderr.localizedCaseInsensitiveContains("resource temporarily unavailable")

@@ -225,7 +225,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             }
             guard attached?.ok == true, MountPoint.isMounted(mnt) else {
                 if runner.control?.isCancelled == true { throw CancelledError() }      // detached below
-                throw MirrorCopyError.couldNotConfirm(attached?.stderr.trimmingCharacters(in: .whitespacesAndNewlines) ?? "it wouldn't attach")
+                throw MirrorCopyError.couldNotConfirm(attached.map { ProcessCommandRunner.meaningful($0.stderr) } ?? "it wouldn't attach")
             }
         }
         let found = try MirrorCopy.structure(of: mnt.appendingPathComponent(name), against: source, previous: nil, control: runner.control)
@@ -431,7 +431,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         do {
             try execute(ArchivePlan.resize(image: bundle, sizeGB: 0, encrypted: encrypted, sectors: target / 512), stdin: stdin)
         } catch ArchiveError.toolFailed(_, _, let stderr) {
-            throw MirrorSpaceError.couldNotResize(stderr.split(separator: "\n").last.map(String.init) ?? "")
+            throw MirrorSpaceError.couldNotResize(ProcessCommandRunner.meaningful(stderr).split(separator: "\n").last.map(String.init) ?? "")
         }
         return target
     }
@@ -452,11 +452,15 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// The image is capped to leave `reserve` free on the drive (see MirrorSizing), so
     /// the drive must hold that as well. Without it a first run on a drive short of the
     /// reserve made an image, found it too small, and blamed the image's size.
+    ///
+    /// `free` stands in for the destination's measured free space (now, and counting
+    /// purgeable), so a test can fix the figures instead of depending on the machine.
     static func checkRoom(for needs: UInt64, image: URL, imageBytes: UInt64, destination: URL,
-                          reserve: UInt64 = 0) throws {
+                          reserve: UInt64 = 0, free: (now: UInt64?, eventually: UInt64?)? = nil) throws {
         if let refusal = roomVerdict(needs: needs, held: Checksum.byteSize(of: image), imageBytes: imageBytes,
-                                     freeNow: JobExecutor.freeNow(for: destination),
-                                     freeEventually: JobExecutor.freeSpace(for: destination), reserve: reserve) {
+                                     freeNow: free.map(\.now) ?? JobExecutor.freeNow(for: destination),
+                                     freeEventually: free.map(\.eventually) ?? JobExecutor.freeSpace(for: destination),
+                                     reserve: reserve) {
             throw refusal
         }
     }

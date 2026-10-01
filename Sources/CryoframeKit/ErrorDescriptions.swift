@@ -21,7 +21,7 @@ extension ArchiveError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .toolFailed(let tool, _, let stderr):
-            let lines = stderr.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            let lines = ProcessCommandRunner.meaningful(stderr).split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             // hdiutil refuses to BUILD a sealed DMG when any file inside carries a
             // deny-delete ACL, and says only "Permission denied" — which reads as a
             // Cryoframe permissions problem. It is not: ditto handles the same file,
@@ -134,7 +134,7 @@ public enum RestoreFailureText {
             switch a {
             case .toolFailed(let tool, _, let stderr):
                 if encrypted { return "couldn't open the archive — check the passphrase" }
-                let detail = stderr.split(separator: "\n").last.map(String.init) ?? ""
+                let detail = ProcessCommandRunner.meaningful(stderr).split(separator: "\n").last.map(String.init) ?? ""
                 return detail.isEmpty ? "couldn't open the archive (\(tool) failed)"
                                       : "couldn't open the archive — \(detail)"
             case .noArtifactProduced:   return "the archive is missing its files"
@@ -168,7 +168,7 @@ public enum RestoreFailureText {
             switch a {
             case .toolFailed(_, _, let stderr):
                 if encrypted { return "couldn't open — check the recovery key" }
-                return "couldn't open the archive — \(stderr.split(separator: "\n").last.map(String.init) ?? "unreadable")"
+                return "couldn't open the archive — \(ProcessCommandRunner.meaningful(stderr).split(separator: "\n").last.map(String.init) ?? "unreadable")"
             case .noArtifactProduced:    return "the archive is missing its files"
             case .sourceMissing(let s):  return "missing part of the archive — \(s)"
             case .passphraseUnavailable: return "encrypted, and no passphrase was recovered"

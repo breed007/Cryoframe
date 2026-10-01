@@ -420,14 +420,22 @@ private var deadOwner: ProcessIdentity {
         let image = edgeDir("img"), dest = edgeDir("dest")
         defer { for d in [image, dest] { try? FileManager.default.removeItem(at: d) } }
         let small: UInt64 = 100 << 20, big: UInt64 = 40 << 30
+        // The drive has room for either library. The figures are fixed here: the machine
+        // running the test may have far less than 41 GiB free, and that must not decide
+        // which refusal comes first.
+        let roomy: (now: UInt64?, eventually: UInt64?) = (1 << 40, 1 << 40)
         #expect(throws: Never.self) {
-            try SparseBundleMirrorEngine.checkRoom(for: small, image: image, imageBytes: small + small / 20, destination: dest)
+            try SparseBundleMirrorEngine.checkRoom(for: small, image: image, imageBytes: small + small / 20, destination: dest, free: roomy)
         }
         #expect(throws: MirrorSpaceError.imageTooSmall(size: small + small / 20 - 1, needed: small + small / 20)) {
-            try SparseBundleMirrorEngine.checkRoom(for: small, image: image, imageBytes: small + small / 20 - 1, destination: dest)
+            try SparseBundleMirrorEngine.checkRoom(for: small, image: image, imageBytes: small + small / 20 - 1, destination: dest, free: roomy)
         }
         #expect(throws: MirrorSpaceError.imageTooSmall(size: big, needed: big + (1 << 30))) {
-            try SparseBundleMirrorEngine.checkRoom(for: big, image: image, imageBytes: big, destination: dest)
+            try SparseBundleMirrorEngine.checkRoom(for: big, image: image, imageBytes: big, destination: dest, free: roomy)
+        }
+        // and a drive short of library plus margin is refused on room, with the exact figures
+        #expect(throws: MirrorSpaceError.notEnoughRoom(needed: big + (1 << 30), free: big)) {
+            try SparseBundleMirrorEngine.checkRoom(for: big, image: image, imageBytes: .max, destination: dest, free: (big, big))
         }
         // The boot volume's free space moves while other tests run (438 KB between two
         // reads was seen), so what is reported as free is only compared roughly. What is

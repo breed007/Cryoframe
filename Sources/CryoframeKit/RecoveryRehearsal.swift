@@ -157,7 +157,7 @@ public struct RecoveryRehearsal: Sendable {
                     return "couldn't be opened right now — the disk-image system was busy. Worth rehearsing again."
                 }
                 if encrypted { return "wouldn't open — the passphrase on this Mac may no longer match" }
-                let line = stderr.split(separator: "\n").last.map(String.init) ?? "no output"
+                let line = ProcessCommandRunner.meaningful(stderr).split(separator: "\n").last.map(String.init) ?? "no output"
                 return "wouldn't open — \(tool): \(line)"
             case .noArtifactProduced:    return "the archive has no files in it"
             case .sourceMissing(let s):  return "part of the archive is missing — \(s)"

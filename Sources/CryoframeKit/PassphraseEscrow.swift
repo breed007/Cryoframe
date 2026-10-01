@@ -209,7 +209,7 @@ public struct KeyCheck: Sendable {
         }
         guard result.ok else {
             if result.stderr.localizedCaseInsensitiveContains("Authentication error") { return .wrongKey }
-            let line = result.stderr.split(separator: "\n").last.map(String.init) ?? "hdiutil failed"
+            let line = ProcessCommandRunner.meaningful(result.stderr).split(separator: "\n").last.map(String.init) ?? "hdiutil failed"
             return .unchecked(line.trimmingCharacters(in: .whitespaces))
         }
         // the first device listed is the image's own disk; detaching it detaches the rest

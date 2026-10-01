@@ -148,3 +148,17 @@ import Foundation
     #expect(text.contains("sealed zip"), "\(text)")
     #expect(JobExecutor.failureText(ArchiveError.passphraseUnavailable).contains("passphrase"))
 }
+
+// On macOS 27 hdiutil prints a deprecation notice ahead of its real error. Someone
+// reading a failed run needs the error, not the notice, and never loses the error.
+@Test func hdiutilsDeprecationNoticeIsNotPartOfTheMessage() {
+    let notice = "hdiutil: WARNING: hdiutil is deprecated and will be removed in a future release; use `diskutil image` instead."
+    let real = "hdiutil: attach failed - Resource busy"
+    #expect(ProcessCommandRunner.meaningful("\(notice)\n\(real)\n") == real)
+    #expect(ProcessCommandRunner.meaningful("\(real)\n\(notice)\n") == real)
+    #expect(ProcessCommandRunner.meaningful(real) == real)
+    #expect(ProcessCommandRunner.meaningful("\(notice)\n") == notice, "nothing else to say: keep what there is")
+    let described = ArchiveError.toolFailed(tool: "hdiutil", status: 1, stderr: "\(notice)\n\(real)\n").localizedDescription
+    #expect(described == "hdiutil failed \u{2014} \(real)")
+    #expect(!described.contains("deprecated"))
+}
