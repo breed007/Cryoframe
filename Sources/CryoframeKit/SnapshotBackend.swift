@@ -177,6 +177,7 @@ public struct ProcessCommandRunner: CommandRunner {
         try p.run()
         let watch = ToolWatch(p, limit: quietLimit, control: control)
         watch.start()
+        if let control, !control.watching(watch) { watch.stopForCancel() }     // Stop came as it launched
         if let inPipe, let stdin {                  // feed the passphrase, then EOF
             inPipe.fileHandleForWriting.write(stdin)
             try? inPipe.fileHandleForWriting.close()

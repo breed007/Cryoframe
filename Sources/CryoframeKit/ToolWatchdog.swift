@@ -108,6 +108,7 @@ final class ToolWatch: @unchecked Sendable {
         var output: UInt64 = 0
         var stalledAfter: TimeInterval?
         var stoppedAt: TimeInterval?
+        var group: pid_t?
     }
 
     init(_ process: Process, limit: TimeInterval, control: RunControl?) {
@@ -120,7 +121,8 @@ final class ToolWatch: @unchecked Sendable {
     /// how long the tool had been quiet when it was stopped; nil if it wasn't
     var stalledAfter: TimeInterval? { state.withLock { $0.stalledAfter } }
 
-    /// when (system uptime) the watchdog began stopping the tool; nil if it hasn't
+    /// when (system uptime) the watchdog or Stop began stopping the tool; nil if
+    /// neither has
     var stoppedAt: TimeInterval? { state.withLock { $0.stoppedAt } }
 
     func start() {
@@ -129,6 +131,7 @@ final class ToolWatch: @unchecked Sendable {
         // its group (which outlives it while anything it started is left) can't be
         // read from it
         let group = ToolWatchdog.ownGroup(of: pid)
+        state.withLock { $0.group = group }
         let tick = min(5, max(0.02, limit / 10))
         Thread.detachNewThread { [self] in
             let clock = { ProcessInfo.processInfo.systemUptime }
@@ -136,7 +139,7 @@ final class ToolWatch: @unchecked Sendable {
             var last = (cpu: UInt64(0), io: UInt64(0), output: UInt64(0))
             if let a = ToolWatchdog.activity(of: pid) { last = (a.cpuNs, a.io, 0) }
             while done.wait(timeout: .now() + tick) == .timedOut {
-                guard process.isRunning else { return }
+                guard process.isRunning, stoppedAt == nil else { return }      // ended, or Stop is ending it
                 let output = state.withLock { $0.output }
                 let now = ToolWatchdog.activity(of: pid)
                 let cpu = now?.cpuNs ?? last.cpu, io = now?.io ?? last.io
@@ -151,8 +154,7 @@ final class ToolWatch: @unchecked Sendable {
                 }
                 let quiet = clock() - quietSince
                 guard quiet >= limit else { continue }
-                let at = clock()
-                state.withLock { $0.stalledAfter = quiet; $0.stoppedAt = at }
+                guard begin(stalledAfter: quiet) else { return }
                 stop(pid, group: group)
                 return
             }
@@ -161,6 +163,25 @@ final class ToolWatch: @unchecked Sendable {
 
     /// the tool exited or the run has moved on: stop watching
     func finish() { done.signal() }
+
+    /// Stop was pressed: end the tool the way the watchdog does (see stop), on a
+    /// thread of its own, so Stop returns at once. Its run waits for the tool's output
+    /// no longer than it does for a tool the watchdog stopped.
+    func stopForCancel() {
+        guard begin(stalledAfter: nil) else { return }
+        let pid = process.processIdentifier, group = state.withLock { $0.group }
+        Thread.detachNewThread { [self] in stop(pid, group: group) }
+    }
+
+    /// mark the tool as being stopped, once: false if the watchdog or Stop already is
+    private func begin(stalledAfter quiet: TimeInterval?) -> Bool {
+        let at = ProcessInfo.processInfo.systemUptime
+        return state.withLock {
+            guard $0.stoppedAt == nil else { return false }
+            $0.stoppedAt = at; $0.stalledAfter = quiet
+            return true
+        }
+    }
 
     /// SIGTERM the tool's process group and anything else under it, then wake it (a
     /// paused tool handles the SIGTERM before it runs anything more), then SIGKILL

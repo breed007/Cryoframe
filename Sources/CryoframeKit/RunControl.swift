@@ -35,6 +35,7 @@ public final class RunControl: @unchecked Sendable {
     private var cancelled = false
     private var paused = false
     private var current: Process?
+    private var watch: ToolWatch?
     /// how long a tool of this run may make no progress before it is stopped (see
     /// ToolWatchdog); shorter in tests
     public let quietLimit: TimeInterval
@@ -44,12 +45,13 @@ public final class RunControl: @unchecked Sendable {
     public var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
     public var isPaused: Bool { lock.lock(); defer { lock.unlock() }; return paused }
 
+    /// Stop: the tool in flight is ended the way the watchdog ends one (its process
+    /// group gets SIGTERM, then SIGCONT so a paused one handles it, then SIGKILL after
+    /// the grace period), so nothing it started is left running, and the run waits for
+    /// its output no longer than for a stalled tool. Returns at once.
     public func cancel() {
-        lock.lock(); cancelled = true; paused = false; let p = current; lock.unlock()
-        if let pid = p?.processIdentifier, pid > 0 {
-            for pr in Self.subtreeProcs(of: pid) { kill(pr.pid, SIGCONT) }   // wake so terminate can land
-        }
-        p?.terminate()
+        lock.lock(); cancelled = true; paused = false; let w = watch; lock.unlock()
+        w?.stopForCancel()
     }
 
     /// suspend the in-flight tool *and its children* — a tool like `ditto`/`rsync`
@@ -130,7 +132,16 @@ public final class RunControl: @unchecked Sendable {
         return true
     }
 
+    /// register the watch over the process just launched, which Stop ends it
+    /// through; returns false if Stop came first (the caller then ends the tool)
+    func watching(_ w: ToolWatch) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if cancelled { return false }
+        watch = w
+        return true
+    }
+
     func detach() {
-        lock.lock(); current = nil; lock.unlock()
+        lock.lock(); current = nil; watch = nil; lock.unlock()
     }
 }
