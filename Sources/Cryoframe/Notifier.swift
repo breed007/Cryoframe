@@ -63,6 +63,20 @@ enum Notifier {
         }
     }
 
+    /// post for a stopped check that found failures (see AlertPolicy.payload(forStopped:)),
+    /// as for a finished check's failures: unless notifications are off, and remotely
+    /// from here only for a check this app made (the agent alerts for its own)
+    static func notifyStopped(_ check: CanceledCheck) {
+        guard let p = AlertPolicy.payload(forStopped: check) else { return }
+        if check.trigger != "scheduled" { Task { await RemoteAlert.deliverPayload(p) } }
+        guard current() != .never else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Cryoframe — \(check.jobName)"
+        content.body = p.body
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "stopped-\(check.id)", content: content, trigger: nil))
+    }
+
     /// post for an archive health check. Failures alert unless notifications are off;
     /// clean results alert only on the "every run" policy.
     static func notifyHealth(_ record: HealthRecord) {

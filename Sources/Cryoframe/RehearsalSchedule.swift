@@ -38,7 +38,7 @@ enum RehearsalSchedule {
     /// A job a run holds is left for the next hourly pass (see HealthSchedule), and so
     /// is one whose rehearsal Stop ended: it isn't recorded, and stays due.
     @discardableResult
-    static func runIfDue(store: JobStore, now: Date) -> [HealthRecord] {
+    static func runIfDue(store: JobStore, now: Date) -> [CheckRecording.Outcome] {
         guard enabled else { return [] }
         let due = isDue(now: now)
         let pending = Set(UserDefaults.standard.stringArray(forKey: Prefs.rehearsalPending) ?? [])
@@ -48,7 +48,7 @@ enum RehearsalSchedule {
         let stopped = done.outcomes.compactMap { o -> String? in if case .canceled(let c) = o { return c.jobID }; return nil }
         UserDefaults.standard.set(done.busy.map(\.job.id) + stopped, forKey: Prefs.rehearsalPending)
         if due { UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Prefs.lastRehearsal) }
-        return done.outcomes.compactMap { o -> HealthRecord? in if case .recorded(let r) = o { return r }; return nil }
+        return done.outcomes
     }
 
     /// the rehearsal itself, without the schedule — also used by "Rehearse recovery".
@@ -74,23 +74,16 @@ enum RehearsalSchedule {
             let control = control ?? RunControl()
             let rehearsal = RecoveryRehearsal(runner: ProcessCommandRunner(control: control))
             let rehearsed = locks.whileChecking(jobID: job.id, wait: wait, control: control) { () -> HealthReport in
-                var checks: [ArchiveCheck] = []
-                var planned = 0
                 // each destination where it is now; one not connected has nothing to rehearse
                 let placed = DestinationResolver().resolve(resolved)
-                for target in placed.job.targets where (target.volume == nil && target.rotation == nil) || placed.presence[target.id]?.isPresent == true {
-                    let report = rehearsal.rehearse(
-                        destination: target.destinationDir,
-                        expecting: expecting,
-                        alsoKnownAs: Dictionary(resolved.libraries.map { ($0.displayName, $0.formerNames ?? []) }, uniquingKeysWith: +),
-                        isCloud: target.kind == .cloudSync,
-                        materializeCloud: materializeCloud,
-                        passphrase: { _ in key }).asHealthReport(multiDestination: resolved.targets.count > 1)
-                    checks += report.checks
-                    planned += report.planned
-                    if report.canceled { return HealthReport(checks: checks, canceled: true, planned: planned) }
-                }
-                return HealthReport(checks: checks, planned: planned)
+                let places = placed.job.targets
+                    .filter { ($0.volume == nil && $0.rotation == nil) || placed.presence[$0.id]?.isPresent == true }
+                    .map { RecoveryRehearsal.Place(destination: $0.destinationDir, isCloud: $0.kind == .cloudSync) }
+                return rehearsal.rehearse(places, expecting: expecting,
+                                          alsoKnownAs: Dictionary(resolved.libraries.map { ($0.displayName, $0.formerNames ?? []) },
+                                                                  uniquingKeysWith: +),
+                                          materializeCloud: materializeCloud, multiDestination: resolved.targets.count > 1,
+                                          passphrase: { _ in key })
             }
             guard case .done(let report) = rehearsed else {
                 if case .busy(let holder) = rehearsed { busy.append((job, holder)) } else { busy.append((job, nil)) }

@@ -91,13 +91,60 @@ public struct RecoveryRehearsal: Sendable {
                          isCloud: Bool = false,
                          materializeCloud: Bool = false,
                          passphrase: @Sendable (String) -> String? = { _ in nil }) -> Report {
+        rehearse(Self.plan(destination: destination, expecting: expecting, alsoKnownAs: alsoKnownAs),
+                 isCloud: isCloud, materializeCloud: materializeCloud, passphrase: passphrase)
+    }
+
+    /// what a rehearsal of one destination will look at, found before anything is opened
+    public struct Plan: Sendable {
+        let destination: URL
+        let moment: Date?
+        let selections: [RecoveryPlan.Selection]
+        let missing: [String]
+        /// the libraries it will open, and the ones it can't find
+        public var planned: Int { selections.count + missing.count }
+    }
+
+    /// Scan `destination` the way a recovery does (see `rehearse`), opening nothing.
+    public static func plan(destination: URL, expecting: [String], alsoKnownAs: [String: [String]] = [:]) -> Plan {
         let archives = RestoreDiscovery.scan(destination)     // the recovery entry point
         let found = Set(archives.map(\.displayName))
         let missing = expecting.filter { name in !([name] + (alsoKnownAs[name] ?? [])).contains(where: found.contains) }.sorted()
-
         let moment = RecoveryPlan.moments(in: archives).last
         let selections = moment.map { RecoveryPlan.selections(at: $0, in: archives) }
             ?? RecoveryPlan.selections(at: Date(), in: archives)
+        return Plan(destination: destination, moment: moment, selections: selections, missing: missing)
+    }
+
+    /// one destination of a job's rehearsal
+    public struct Place: Sendable {
+        public let destination: URL
+        public let isCloud: Bool
+        public init(destination: URL, isCloud: Bool = false) { self.destination = destination; self.isCloud = isCloud }
+    }
+
+    /// Rehearse a job's recovery from each of `places` in turn, as one check. Every
+    /// destination is scanned first, so a rehearsal Stop ends part-way says how many
+    /// libraries it got through of all it set out to look at, not of the destinations
+    /// it reached ("of 2" for a job whose second drive held 2 more).
+    public func rehearse(_ places: [Place], expecting: [String], alsoKnownAs: [String: [String]] = [:],
+                         materializeCloud: Bool = false, multiDestination: Bool,
+                         passphrase: @Sendable (String) -> String? = { _ in nil }) -> HealthReport {
+        let plans = places.map { Self.plan(destination: $0.destination, expecting: expecting, alsoKnownAs: alsoKnownAs) }
+        let all = plans.reduce(0) { $0 + $1.planned }
+        var checks: [ArchiveCheck] = []
+        for (place, plan) in zip(places, plans) {
+            let report = rehearse(plan, isCloud: place.isCloud, materializeCloud: materializeCloud, passphrase: passphrase)
+                .asHealthReport(multiDestination: multiDestination)
+            checks += report.checks
+            if report.canceled { return HealthReport(checks: checks, canceled: true, planned: all) }
+        }
+        return HealthReport(checks: checks, planned: all)
+    }
+
+    func rehearse(_ plan: Plan, isCloud: Bool, materializeCloud: Bool,
+                  passphrase: @Sendable (String) -> String?) -> Report {
+        let destination = plan.destination, moment = plan.moment, selections = plan.selections, missing = plan.missing
 
         let control = runner.control
         let quiet = (runner as? ProcessCommandRunner)?.quietLimit ?? control?.quietLimit ?? ToolWatchdog.defaultQuietLimit
@@ -231,13 +278,15 @@ extension RecoveryRehearsal.Report {
                          passed: o.ok || o.skipped, detail: o.detail,
                          destination: dest, skipped: o.skipped, libraryKey: o.key)
         }
-        // a stopped rehearsal says how many it opened, of how many (see CanceledCheck)
-        guard !canceled else { return HealthReport(checks: checks, canceled: true, planned: planned) }
+        // Found before anything was opened, so a stopped rehearsal keeps them too: a
+        // library a recovery wouldn't find is the finding this exists for, and Stop
+        // pressed a moment in shouldn't hide it. A stopped one says how many it got
+        // through, of how many (see CanceledCheck).
         checks += missing.map { lib in
             ArchiveCheck(library: lib, version: nil, passed: false,
                          detail: "nothing to recover here — a restore would not find this library",
                          destination: dest)
         }
-        return HealthReport(checks: checks, planned: planned + missing.count)
+        return HealthReport(checks: checks, canceled: canceled, planned: planned + missing.count)
     }
 }

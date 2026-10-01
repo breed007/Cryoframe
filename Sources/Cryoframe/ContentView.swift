@@ -423,39 +423,49 @@ private struct JobRow: View {
                     .help("Stop checking. What it finished is listed; a stopped check doesn't count, and the last finished one still stands.")
                     .accessibilityLabel("Stop checking \(job.name)")
             }.font(.caption2)
-        } else if let c = model.lastCanceledCheck[job.id], c.stoppedAt > (model.lastHealth[job.id]?.checkedAt ?? .distantPast) {
-            // a stopped check never replaces the last finished one; it is said beside it
-            HStack(spacing: 6) {
-                Image(systemName: "stop.circle").foregroundStyle(.secondary)
-                Text(c.summary).foregroundStyle(.secondary)
-                Text("· \(c.stoppedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
-            }
-            .font(.caption2)
-            .help("This check was stopped, so it doesn't count. "
-                  + (model.lastHealth[job.id].map { "The last finished check, \($0.checkedAt.formatted(.relative(presentation: .named))), still stands." }
-                     ?? "No check of this job has finished yet."))
-        } else if let h = model.lastHealth[job.id] {
-            HStack(spacing: 6) {
-                if h.archivesChecked == 0, let skip = h.skipPhrase {
-                    Image(systemName: "cloud").foregroundStyle(.secondary)
-                    Text(skip).foregroundStyle(.secondary)
-                } else if h.archivesChecked == 0 {
-                    Image(systemName: "questionmark.circle.fill").foregroundStyle(.cryoWarn)
-                    Text("No archives found to check").foregroundStyle(.secondary)
-                } else {
-                    Image(systemName: h.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(h.passed ? .cryoGood : .cryoCrit)
-                    Text((h.passed ? "\(h.passedSummary) (\(h.archivesChecked))"
-                                   : "\(h.failures.count) \(h.failureNoun) check(s) failed")
-                         + (h.skipped > 0 ? " · \(h.skipped) skipped" : ""))
-                        .foregroundStyle(h.passed ? Color.secondary : Color.cryoCrit)
-                }
-                Text("· \(h.checkedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
-            }
-            .font(.caption2)
-            .help(h.archivesChecked == 0 ? "Nothing was checked — the target may be offline, or the job hasn't run yet."
-                  : (h.passed ? h.explanation : h.failures.joined(separator: "\n")))
+        } else {
+            let lines = CheckLines.shown(last: model.lastHealth[job.id], stopped: model.lastCanceledCheck[job.id])
+            if lines.last, let h = model.lastHealth[job.id] { lastCheckLine(h) }
+            if lines.stopped, let c = model.lastCanceledCheck[job.id] { stoppedCheckLine(c) }
         }
+    }
+
+    /// a stopped check, beside the last finished one, which it never replaces
+    @ViewBuilder private func stoppedCheckLine(_ c: CanceledCheck) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: c.failures.isEmpty ? "stop.circle" : "exclamationmark.triangle.fill")
+                .foregroundStyle(c.failures.isEmpty ? Color.secondary : Color.cryoCrit)
+            Text(c.summary).foregroundStyle(c.failures.isEmpty ? Color.secondary : Color.cryoCrit)
+            Text("· \(c.stoppedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
+        }
+        .font(.caption2)
+        .help("This check was stopped, so it doesn't count. "
+              + (c.failures.isEmpty ? "" : c.failures.joined(separator: "\n") + "\n")
+              + (model.lastHealth[job.id].map { "The last finished check, \($0.checkedAt.formatted(.relative(presentation: .named))), still stands." }
+                 ?? "No check of this job has finished yet."))
+    }
+
+    @ViewBuilder private func lastCheckLine(_ h: HealthRecord) -> some View {
+        HStack(spacing: 6) {
+            if h.archivesChecked == 0, let skip = h.skipPhrase {
+                Image(systemName: "cloud").foregroundStyle(.secondary)
+                Text(skip).foregroundStyle(.secondary)
+            } else if h.archivesChecked == 0 {
+                Image(systemName: "questionmark.circle.fill").foregroundStyle(.cryoWarn)
+                Text("No archives found to check").foregroundStyle(.secondary)
+            } else {
+                Image(systemName: h.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(h.passed ? .cryoGood : .cryoCrit)
+                Text((h.passed ? "\(h.passedSummary) (\(h.archivesChecked))"
+                               : "\(h.failures.count) \(h.failureNoun) check(s) failed")
+                     + (h.skipped > 0 ? " · \(h.skipped) skipped" : ""))
+                    .foregroundStyle(h.passed ? Color.secondary : Color.cryoCrit)
+            }
+            Text("· \(h.checkedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
+        }
+        .font(.caption2)
+        .help(h.archivesChecked == 0 ? "Nothing was checked — the target may be offline, or the job hasn't run yet."
+              : (h.passed ? h.explanation : h.failures.joined(separator: "\n")))
     }
 
     @ViewBuilder private var lastRunRow: some View {

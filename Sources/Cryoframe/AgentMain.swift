@@ -115,8 +115,8 @@ enum AgentMain {
             group.wait()
         }
 
-        var healthRecords = HealthSchedule.runIfDue(store: store, now: Date())   // re-verify cold archives if due
-        healthRecords += RehearsalSchedule.runIfDue(store: store, now: Date())   // and prove a recovery would work
+        var checks = HealthSchedule.runIfDue(store: store, now: Date())   // re-verify cold archives if due
+        checks += RehearsalSchedule.runIfDue(store: store, now: Date())   // and prove a recovery would work
 
         // A destination that fills up doesn't fail loudly, it just stops working —
         // and on an unattended Mac nobody sees the dashboard say so. Warn while
@@ -145,7 +145,10 @@ enum AgentMain {
             for (p, sent) in overdue {
                 if await RemoteAlert.deliverPayload(p) { sent() }
             }
-            for record in healthRecords { await RemoteAlert.deliverHealth(for: record) }
+            // a stopped check's failures too (see AlertPolicy.payload(forStopped:))
+            for check in checks {
+                if let p = check.alert(everyEvent: RemoteAlert.allEvents) { await RemoteAlert.deliverPayload(p) }
+            }
             for finding in pressure {
                 await RemoteAlert.deliverStorage(for: finding)
                 StorageNag.recordWarned(finding.destination, now: Date())

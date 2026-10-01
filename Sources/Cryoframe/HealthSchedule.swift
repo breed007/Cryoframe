@@ -34,10 +34,10 @@ enum HealthSchedule {
     /// the next hourly pass rather than the next period.
     ///
     /// Stop pressed in the app ends a job's check (see RunLocks.whileChecking). A
-    /// stopped check isn't recorded as one, raises no alert, and the job stays due:
-    /// it is checked again on the next hourly pass.
+    /// stopped check isn't recorded as one, and the job stays due: it is checked again
+    /// on the next hourly pass. Failures it found are returned all the same, to alert.
     @discardableResult
-    static func runIfDue(store: JobStore, now: Date, locks: RunLocks = .standard()) -> [HealthRecord] {
+    static func runIfDue(store: JobStore, now: Date, locks: RunLocks = .standard()) -> [CheckRecording.Outcome] {
         guard period() != nil else { return [] }
         let due = isDue(now: now)
         let pending = Set(UserDefaults.standard.stringArray(forKey: Prefs.healthPending) ?? [])
@@ -48,7 +48,7 @@ enum HealthSchedule {
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
         let drill = UserDefaults.standard.string(forKey: Prefs.healthDepth) == "drill"
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
-        var written: [HealthRecord] = []
+        var written: [CheckRecording.Outcome] = []
         var stillPending: [String] = []
         for job in jobs {
             let resolved = job.resolvingLibraries(in: registry)
@@ -62,11 +62,10 @@ enum HealthSchedule {
                 return HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud, control: control)
             }
             guard case .done(let report) = checked else { stillPending.append(job.id); continue }
-            switch CheckRecording.record(report, job: resolved, kind: drill ? "drill" : "checksum", at: now,
-                                         trigger: "scheduled", health: healthStore, canceled: canceledStore) {
-            case .recorded(let record): written.append(record)
-            case .canceled: stillPending.append(job.id)
-            }
+            let outcome = CheckRecording.record(report, job: resolved, kind: drill ? "drill" : "checksum", at: now,
+                                                trigger: "scheduled", health: healthStore, canceled: canceledStore)
+            written.append(outcome)
+            if case .canceled = outcome { stillPending.append(job.id) }
         }
         UserDefaults.standard.set(stillPending, forKey: Prefs.healthPending)
         if due { UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Prefs.lastHealthCheck) }

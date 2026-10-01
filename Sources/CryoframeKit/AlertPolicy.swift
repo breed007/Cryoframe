@@ -124,6 +124,18 @@ public enum AlertPolicy {
     }
 
     /// nil when this health check isn't worth an alert.
+    /// A stopped check (see CanceledCheck) is not a check of the job, and says nothing
+    /// for what it didn't get to. But a failure it found is as real as a finished
+    /// check's, and is alerted the same way, whatever the setting; one that found
+    /// nothing wrong says nothing.
+    public static func payload(forStopped check: CanceledCheck) -> Payload? {
+        guard !check.failures.isEmpty else { return nil }
+        let n = check.failures.count
+        return Payload(title: "Cryoframe — archive health",
+                       body: "⚠️ \(check.jobName): \(n) archive check\(n == 1 ? "" : "s") failed before the check was stopped (\(check.failures[0]))",
+                       high: true, tags: "warning")
+    }
+
     public static func payload(forHealth record: HealthRecord, everyEvent: Bool) -> Payload? {
         // every copy was skipped (a cloud placeholder nobody downloaded, a drill without
         // room to join or unpack): not the same thing as a destination being offline.

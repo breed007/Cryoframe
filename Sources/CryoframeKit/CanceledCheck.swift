@@ -74,6 +74,19 @@ public struct CanceledCheck: Codable, Sendable, Identifiable, Equatable {
     }
 }
 
+/// Which lines a job's row shows for its checks. A stopped check is said beside the
+/// last finished one, and only when it is the newer; in place of a last check that
+/// passed, but never in place of one that failed or found nothing to check, which
+/// still stands and still needs looking at.
+public enum CheckLines {
+    public static func shown(last: HealthRecord?, stopped: CanceledCheck?) -> (last: Bool, stopped: Bool) {
+        let showStopped = stopped.map { $0.stoppedAt > (last?.checkedAt ?? .distantPast) } ?? false
+        guard let last else { return (false, showStopped) }
+        let needsLooking = !last.passed || (last.archivesChecked == 0 && last.skipPhrase == nil)
+        return (!showStopped || needsLooking, showStopped)
+    }
+}
+
 /// canceled-checks.json: the last few stopped checks, newest first. The app and the
 /// scheduled agent both write it, so each write is a read, change and write under a
 /// lock file, written whole.
@@ -136,8 +149,17 @@ public enum CheckRecording {
     public enum Outcome: Sendable {
         /// recorded as the job's latest check: report it, notify, alert as usual
         case recorded(HealthRecord)
-        /// not a check: no record, no alert, and a scheduled check stays due
+        /// not a check: no record, and a scheduled check stays due; failures it
+        /// found alert all the same (see AlertPolicy.payload(forStopped:))
         case canceled(CanceledCheck)
+
+        /// what to alert about, if anything
+        public func alert(everyEvent: Bool) -> AlertPolicy.Payload? {
+            switch self {
+            case .recorded(let record): return AlertPolicy.payload(forHealth: record, everyEvent: everyEvent)
+            case .canceled(let stopped): return AlertPolicy.payload(forStopped: stopped)
+            }
+        }
     }
 
     public static func record(_ report: HealthReport, job: BackupJob, kind: String, at date: Date,

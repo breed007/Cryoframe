@@ -301,6 +301,7 @@ final class AppModel: ObservableObject {
         case .recorded(let record): showHealth(record)
         case .canceled(let stopped):
             lastCanceledCheck[stopped.jobID] = stopped
+            Notifier.notifyStopped(stopped)             // what it found failing is real
             log(Self.canceledLine(stopped, cloud: job.targets.contains { $0.kind == .cloudSync }
                                                   && UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)))
         }

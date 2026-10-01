@@ -181,10 +181,11 @@ private func isUnpack(_ tool: String, _ args: [String]) -> Bool { tool.hasSuffix
             .rehearse(destination: base.appendingPathComponent("dest"), expecting: ["Alpha", "Bravo", "Charlie", "Delta"])
         #expect(report.canceled && report.planned == 3)
         #expect(report.outcomes.count == 1 && report.outcomes.allSatisfy(\.ok), "\(report.outcomes)")
-        // a stopped rehearsal says only what it opened: not the missing library, which
-        // a finished one reports as a failure
+        // a stopped rehearsal says what it opened, and keeps the missing library a
+        // finished one reports as a failure: it was found before anything was opened
         let health = report.asHealthReport(multiDestination: false)
-        #expect(health.canceled && health.checks.count == 1 && health.planned == 3)
+        #expect(health.canceled && health.checks.count == 2 && health.planned == 4, "\(health.checks.map(\.library)) \(health.planned)")
+        #expect(health.checks.contains { $0.library == "Delta" && !$0.passed })
     }
 
     // MARK: recording
