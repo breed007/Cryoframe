@@ -32,8 +32,16 @@ public struct ArchiveCheck: Codable, Sendable, Equatable, Identifiable {
 public struct HealthReport: Sendable {
     public var checks: [ArchiveCheck]
     public var passed: Bool { checks.allSatisfy(\.passed) }
+    /// Stop ended the check before it looked at every archive. Then `checks` holds
+    /// only the archives it finished, and the report is not a check of the job: it is
+    /// never recorded as one (see CheckRecording).
+    public var canceled: Bool
+    /// how many archives the check set out to look at
+    public var planned: Int
 
-    public init(checks: [ArchiveCheck]) { self.checks = checks }
+    public init(checks: [ArchiveCheck], canceled: Bool = false, planned: Int? = nil) {
+        self.checks = checks; self.canceled = canceled; self.planned = planned ?? checks.count
+    }
 }
 
 /// the outcome for ONE archive version, kept in the health record so the UI can say
@@ -67,50 +75,70 @@ public struct HealthChecker: Sendable {
 
     /// re-verify the job's archives against their checksum manifests. `latestOnly`
     /// checks just the newest version per library — far less I/O than re-hashing
-    /// every version of a large library on a schedule.
-    public func check(job saved: BackupJob, latestOnly: Bool = false, materializeCloud: Bool = false) -> HealthReport {
+    /// every version of a large library on a schedule. `control`: Stop ends the check
+    /// between archives, or within an archive's hashing, and the report says it was
+    /// canceled (see HealthReport.canceled).
+    public func check(job saved: BackupJob, latestOnly: Bool = false, materializeCloud: Bool = false,
+                      control: RunControl? = nil) -> HealthReport {
         var checks: [ArchiveCheck] = []
         let multiDest = saved.targets.count > 1
-        // each destination where it is now; one that isn't connected (or is another
-        // drive of its name) has nothing here to check
-        let (job, presence) = DestinationResolver(volumes: self.volumes).resolve(saved)
+        let verifier = control.map { ChecksumVerifier(control: $0) } ?? self.verifier
+        let plan = CheckPlan.archives(of: saved, latestOnly: latestOnly, volumes: volumes)
+        for (t, _, archive) in plan {
+            if control?.isCancelled == true { return HealthReport(checks: checks, canceled: true, planned: plan.count) }
+            let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
+            // a cloud archive evicted to a placeholder: skip it (don't trigger a
+            // surprise re-download) unless the user opted to download for checks.
+            if isCloud, CloudFile.anyDataless(in: archive.dir) {
+                if !materializeCloud {
+                    checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
+                                               detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",
+                                               destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
+                    continue
+                }
+                CloudFile.materialize(archive.dir)
+            }
+            // a checksum that wasn't compared isn't a verified archive: say so,
+            // and don't count it either way (see MirrorSeal)
+            let report = try? verifier.reverify(archiveDir: archive.dir)
+            // Stop part-way through the hashing isn't a mismatch: this archive wasn't checked
+            if control?.isCancelled == true { return HealthReport(checks: checks, canceled: true, planned: plan.count) }
+            // an open mirror whose checksum couldn't be compared: not verified,
+            // and not failed either, unless it has lost a band (see MirrorSeal)
+            if archive.format == .liveMirror, MirrorSeal.isOpen(archive.dir), report?.passed == true {
+                checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
+                                           detail: MirrorSeal.uncheckedDetail,
+                                           destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
+                continue
+            }
+            checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
+                                       passed: report?.passed ?? false,
+                                       detail: report?.details ?? "could not read manifest",
+                                       destination: multiDest ? t.displayName : nil, libraryKey: archive.libraryKey))
+        }
+        return HealthReport(checks: checks, planned: plan.count)
+    }
+}
+
+/// Every archive a check of a job looks at, in order: each destination where it is
+/// now (one that isn't connected, or is another drive of its name, has nothing here
+/// to check), each library, newest version first. Listed before the check starts, so
+/// a stopped check can say how far it got.
+public enum CheckPlan {
+    public typealias Item = (target: Target, library: ContentType, archive: RestorableArchive)
+
+    public static func archives(of saved: BackupJob, latestOnly: Bool, volumes: VolumeTable) -> [Item] {
+        let (job, presence) = DestinationResolver(volumes: volumes).resolve(saved)
+        var out: [Item] = []
         for t in job.targets {
             if let p = presence[t.id], !p.isPresent, t.volume != nil || t.rotation != nil { continue }   // away: nothing to check
-            let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             for library in job.libraries {
                 var archives = LibraryFolders.archives(job: job, library: library, in: t.destinationDir)   // newest first
                 if latestOnly { archives = Array(archives.prefix(1)) }      // its newest version, or its mirror
-                for archive in archives {
-                    // a cloud archive evicted to a placeholder: skip it (don't trigger a
-                    // surprise re-download) unless the user opted to download for checks.
-                    if isCloud, CloudFile.anyDataless(in: archive.dir) {
-                        if !materializeCloud {
-                            checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
-                                                       detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",
-                                                       destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
-                            continue
-                        }
-                        CloudFile.materialize(archive.dir)
-                    }
-                    // a checksum that wasn't compared isn't a verified archive: say so,
-                    // and don't count it either way (see MirrorSeal)
-                    let report = try? verifier.reverify(archiveDir: archive.dir)
-                    // an open mirror whose checksum couldn't be compared: not verified,
-                    // and not failed either, unless it has lost a band (see MirrorSeal)
-                    if archive.format == .liveMirror, MirrorSeal.isOpen(archive.dir), report?.passed == true {
-                        checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
-                                                   detail: MirrorSeal.uncheckedDetail,
-                                                   destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
-                        continue
-                    }
-                    checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
-                                               passed: report?.passed ?? false,
-                                               detail: report?.details ?? "could not read manifest",
-                                               destination: multiDest ? t.displayName : nil, libraryKey: archive.libraryKey))
-                }
+                out += archives.map { (t, library, $0) }
             }
         }
-        return HealthReport(checks: checks)
+        return out
     }
 }
 

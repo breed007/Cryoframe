@@ -35,7 +35,8 @@ enum RehearsalSchedule {
     }
 
     /// rehearse every job's destinations and record the result like any other check.
-    /// A job a run holds is left for the next hourly pass (see HealthSchedule).
+    /// A job a run holds is left for the next hourly pass (see HealthSchedule), and so
+    /// is one whose rehearsal Stop ended: it isn't recorded, and stays due.
     @discardableResult
     static func runIfDue(store: JobStore, now: Date) -> [HealthRecord] {
         guard enabled else { return [] }
@@ -43,22 +44,25 @@ enum RehearsalSchedule {
         let pending = Set(UserDefaults.standard.stringArray(forKey: Prefs.rehearsalPending) ?? [])
         let jobs = CheckRound.jobs(store.load().jobs, due: due, pending: pending)
         guard !jobs.isEmpty else { return [] }
-        let (records, busy) = run(store: store, now: now, jobs: Set(jobs.map(\.id)), wait: 30, trigger: "scheduled")
-        UserDefaults.standard.set(busy.map(\.job.id), forKey: Prefs.rehearsalPending)
+        let done = run(store: store, now: now, jobs: Set(jobs.map(\.id)), wait: 30, trigger: "scheduled")
+        let stopped = done.outcomes.compactMap { o -> String? in if case .canceled(let c) = o { return c.jobID }; return nil }
+        UserDefaults.standard.set(done.busy.map(\.job.id) + stopped, forKey: Prefs.rehearsalPending)
         if due { UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Prefs.lastRehearsal) }
-        return records
+        return done.outcomes.compactMap { o -> HealthRecord? in if case .recorded(let r) = o { return r }; return nil }
     }
 
     /// the rehearsal itself, without the schedule — also used by "Rehearse recovery".
-    /// Each job is rehearsed holding its run lock; `busy` are the ones a run held
-    /// throughout `wait`, not rehearsed.
+    /// Each job is rehearsed holding its run lock, recorded through CheckRecording;
+    /// `busy` are the ones a run held throughout `wait`, not rehearsed. `control` is
+    /// the Stop of a single job's rehearsal (the app's); without one each job gets
+    /// its own, which Stop pressed in the app reaches (see RunLocks.whileChecking).
     static func run(store: JobStore, now: Date, jobs jobIDs: Set<String>? = nil, wait: TimeInterval = 0,
-                    trigger: String = "manual", locks: RunLocks = .standard())
-        -> (records: [HealthRecord], busy: [(job: BackupJob, holder: RunHolder?)]) {
+                    trigger: String = "manual", locks: RunLocks = .standard(), control: RunControl? = nil)
+        -> (outcomes: [CheckRecording.Outcome], busy: [(job: BackupJob, holder: RunHolder?)]) {
         let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
-        let healthStore = HealthStore.standard()
+        let healthStore = HealthStore.standard(), canceledStore = CanceledCheckStore.standard()
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
-        var written: [HealthRecord] = []
+        var outcomes: [CheckRecording.Outcome] = []
         var busy: [(job: BackupJob, holder: RunHolder?)] = []
 
         for job in store.load().jobs where jobIDs?.contains(job.id) ?? true {
@@ -67,32 +71,34 @@ enum RehearsalSchedule {
             // one passphrase per library, from this Mac's Keychain — the same key a
             // restore would use. A job with no stored key rehearses as "locked".
             let key = resolved.encrypted ? KeychainArchiveKey.load(jobID: job.id) : nil
-            let rehearsed = locks.whileChecking(jobID: job.id, wait: wait) { () -> [ArchiveCheck] in
+            let control = control ?? RunControl()
+            let rehearsal = RecoveryRehearsal(runner: ProcessCommandRunner(control: control))
+            let rehearsed = locks.whileChecking(jobID: job.id, wait: wait, control: control) { () -> HealthReport in
                 var checks: [ArchiveCheck] = []
+                var planned = 0
                 // each destination where it is now; one not connected has nothing to rehearse
                 let placed = DestinationResolver().resolve(resolved)
                 for target in placed.job.targets where (target.volume == nil && target.rotation == nil) || placed.presence[target.id]?.isPresent == true {
-                    let report = RecoveryRehearsal().rehearse(
+                    let report = rehearsal.rehearse(
                         destination: target.destinationDir,
                         expecting: expecting,
                         alsoKnownAs: Dictionary(resolved.libraries.map { ($0.displayName, $0.formerNames ?? []) }, uniquingKeysWith: +),
                         isCloud: target.kind == .cloudSync,
                         materializeCloud: materializeCloud,
-                        passphrase: { _ in key })
-                    checks += report.asHealthReport(multiDestination: resolved.targets.count > 1).checks
+                        passphrase: { _ in key }).asHealthReport(multiDestination: resolved.targets.count > 1)
+                    checks += report.checks
+                    planned += report.planned
+                    if report.canceled { return HealthReport(checks: checks, canceled: true, planned: planned) }
                 }
-                return checks
+                return HealthReport(checks: checks, planned: planned)
             }
-            guard case .done(let checks) = rehearsed else {
+            guard case .done(let report) = rehearsed else {
                 if case .busy(let holder) = rehearsed { busy.append((job, holder)) } else { busy.append((job, nil)) }
                 continue
             }
-            let record = HealthRecord.from(job: resolved, report: HealthReport(checks: checks),
-                                           at: now, kind: "rehearsal",
-                                           trigger: trigger)
-            healthStore.append(record)
-            written.append(record)
+            outcomes.append(CheckRecording.record(report, job: resolved, kind: "rehearsal", at: now, trigger: trigger,
+                                                  health: healthStore, canceled: canceledStore))
         }
-        return (written, busy)
+        return (outcomes, busy)
     }
 }

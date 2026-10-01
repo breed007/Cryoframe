@@ -413,10 +413,27 @@ private struct JobRow: View {
 
     @ViewBuilder private var healthRow: some View {
         if model.verifyingJobIDs.contains(job.id) {
+            let stopping = model.stoppingCheckIDs.contains(job.id)
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
-                Text("Checking archives…").foregroundStyle(.secondary)
+                Text(stopping ? "Stopping the check…" : "Checking archives…").foregroundStyle(.secondary)
+                Button("Stop") { model.stopCheck(job.id) }
+                    .buttonStyle(.borderless).controlSize(.small)
+                    .disabled(stopping)
+                    .help("Stop checking. What it finished is listed; a stopped check doesn't count, and the last finished one still stands.")
+                    .accessibilityLabel("Stop checking \(job.name)")
             }.font(.caption2)
+        } else if let c = model.lastCanceledCheck[job.id], c.stoppedAt > (model.lastHealth[job.id]?.checkedAt ?? .distantPast) {
+            // a stopped check never replaces the last finished one; it is said beside it
+            HStack(spacing: 6) {
+                Image(systemName: "stop.circle").foregroundStyle(.secondary)
+                Text(c.summary).foregroundStyle(.secondary)
+                Text("· \(c.stoppedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.tertiary)
+            }
+            .font(.caption2)
+            .help("This check was stopped, so it doesn't count. "
+                  + (model.lastHealth[job.id].map { "The last finished check, \($0.checkedAt.formatted(.relative(presentation: .named))), still stands." }
+                     ?? "No check of this job has finished yet."))
         } else if let h = model.lastHealth[job.id] {
             HStack(spacing: 6) {
                 if h.archivesChecked == 0, let skip = h.skipPhrase {

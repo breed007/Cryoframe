@@ -10,14 +10,19 @@ import Foundation
 import CryptoKit
 
 public enum Checksum {
-    public static func sha256(of file: URL) throws -> String {
+    /// With `control`, Stop ends the hash (CancelledError) within 64 MB: a check of a
+    /// large archive on a slow drive hashes for many minutes.
+    public static func sha256(of file: URL, control: RunControl? = nil) throws -> String {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         var hasher = SHA256()
+        var chunks = 0
         while true {
+            if let control, chunks % 64 == 0, control.isCancelled { throw CancelledError() }
             let chunk = try handle.read(upToCount: 1 << 20) ?? Data()
             if chunk.isEmpty { break }
             hasher.update(data: chunk)
+            chunks += 1
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
@@ -33,10 +38,10 @@ public enum Checksum {
     /// destination reached through a symlink) every line fell back to a bare file
     /// name: the same bundle hashed two ways, and a mirror written through a symlink
     /// failed its checksum everywhere a scan found it.
-    public static func digest(of url: URL) throws -> String {
+    public static func digest(of url: URL, control: RunControl? = nil) throws -> String {
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        guard isDir.boolValue else { return try sha256(of: url) }
+        guard isDir.boolValue else { return try sha256(of: url, control: control) }
         return hash(lines(in: url) { "/" + $0 })
     }
 

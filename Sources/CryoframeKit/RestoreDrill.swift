@@ -26,47 +26,59 @@ public struct RestoreDriller: Sendable {
 
     /// drill the job's archives: `latestOnly` checks just the newest version per library
     /// per destination; `passphrase` opens an encrypted job's archives.
+    ///
+    /// Stop is the runner's (ProcessCommandRunner(control:)), as for every tool the
+    /// drill runs. It is looked at between archives, and the archive it came in the
+    /// middle of isn't counted either way: the report is marked canceled and holds
+    /// only the archives finished before it (see HealthReport.canceled). An attach in
+    /// flight is let finish and then closed (see ProcessCommandRunner.letsFinish), and
+    /// every archive opened is closed however the drill ends.
     public func drill(job saved: BackupJob, latestOnly: Bool = false, passphrase: String? = nil,
                       materializeCloud: Bool = false) -> HealthReport {
         var checks: [ArchiveCheck] = []
         let multiDest = saved.targets.count > 1
-        // each destination where it is now; one that isn't connected (or is another
-        // drive of its name) has nothing here to drill
-        let (job, presence) = DestinationResolver(volumes: self.volumes).resolve(saved)
-        for t in job.targets {
-            if let p = presence[t.id], !p.isPresent, t.volume != nil || t.rotation != nil { continue }   // away: nothing to drill
+        let control = runner.control
+        let plan = CheckPlan.archives(of: saved, latestOnly: latestOnly, volumes: volumes)
+        let quiet = (runner as? ProcessCommandRunner)?.quietLimit ?? control?.quietLimit ?? ToolWatchdog.defaultQuietLimit
+        for (t, library, archive) in plan {
+            if control?.isCancelled == true { return HealthReport(checks: checks, canceled: true, planned: plan.count) }
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
-            for library in job.libraries {
-                var archives = LibraryFolders.archives(job: job, library: library, in: t.destinationDir)   // newest first
-                if latestOnly { archives = Array(archives.prefix(1)) }      // its newest version, or its mirror
-                for archive in archives {
-                    // a drill restores the whole archive, so an evicted cloud placeholder
-                    // would pull it all down — skip unless the user opted to download.
-                    if isCloud, CloudFile.anyDataless(in: archive.dir) {
-                        if !materializeCloud {
-                            checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
-                                                       detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",
-                                                       destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
-                            continue
-                        }
-                        CloudFile.materialize(archive.dir)
-                    }
-                    let type = library
-                    let (passed, detail, skipped) = drillOne(archive, type: type, passphrase: job.encrypted ? passphrase : nil)
-                    checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
-                                               passed: passed, detail: detail,
-                                               destination: multiDest ? t.displayName : nil, skipped: skipped,
-                                               libraryKey: archive.libraryKey))
+            // a drill restores the whole archive, so an evicted cloud placeholder
+            // would pull it all down — skip unless the user opted to download.
+            if isCloud, CloudFile.anyDataless(in: archive.dir) {
+                if !materializeCloud {
+                    checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
+                                               detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",
+                                               destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
+                    continue
+                }
+                // watched, and ended by Stop; what came down stays on this Mac
+                do {
+                    try CloudDownload.system.bringDown(archive.archiveResult().artifacts, quietLimit: quiet, control: control)
+                } catch is CancelledError {
+                    return HealthReport(checks: checks, canceled: true, planned: plan.count)
+                } catch {
+                    checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: false,
+                                               detail: error.localizedDescription,
+                                               destination: multiDest ? t.displayName : nil, libraryKey: archive.libraryKey))
+                    continue
                 }
             }
+            let (passed, detail, skipped) = drillOne(archive, type: library, passphrase: saved.encrypted ? passphrase : nil)
+            // Stop part-way through: whatever this archive's check said, it didn't finish
+            if control?.isCancelled == true { return HealthReport(checks: checks, canceled: true, planned: plan.count) }
+            checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version,
+                                       passed: passed, detail: detail,
+                                       destination: multiDest ? t.displayName : nil, skipped: skipped,
+                                       libraryKey: archive.libraryKey))
         }
-        return HealthReport(checks: checks)
+        return HealthReport(checks: checks, planned: plan.count)
     }
 
     /// passed, what to say, and whether it was skipped rather than checked
     func drillOne(_ archive: RestorableArchive, type: ContentType, passphrase: String?) -> (Bool, String, Bool) {
         // 1. the bytes still match the manifest
-        guard let checksum = try? ChecksumVerifier().reverify(archiveDir: archive.dir) else {
+        guard let checksum = try? ChecksumVerifier(control: runner.control).reverify(archiveDir: archive.dir) else {
             return (false, "couldn't read the checksum manifest", false)
         }
         guard checksum.passed else { return (false, "checksum — \(checksum.details)", false) }

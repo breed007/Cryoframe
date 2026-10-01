@@ -25,6 +25,7 @@ final class AppModel: ObservableObject {
     private let store = JobStore.standard()
     private let history = RunHistoryStore.standard()
     private let healthStore = HealthStore.standard()
+    private let canceledStore = CanceledCheckStore.standard()
     private let runLocks = RunLocks.standard()
 
     @Published var jobs: [BackupJob] = []
@@ -41,6 +42,10 @@ final class AppModel: ObservableObject {
     @Published var lastHealth: [String: HealthRecord] = [:] // latest archive health check per job
     @Published var healthRecords: [HealthRecord] = []       // full history, newest first — drives per-version "verified" badges
     @Published var verifyingJobIDs: Set<String> = []        // jobs whose archives are being re-verified
+    @Published var stoppingCheckIDs: Set<String> = []       // checks this app is making, asked to stop
+    /// the latest stopped check per job (see CanceledCheck): shown beside the last
+    /// finished check, which a stopped one never replaces
+    @Published var lastCanceledCheck: [String: CanceledCheck] = [:]
     @Published var runningJobIDs: Set<String> = []      // jobs this app is running
     @Published var externalRuns: [String: RunHolder] = [:]   // jobs another process (the agent) is running
     @Published var stoppingJobIDs: Set<String> = []     // external runs asked to stop, not yet ended
@@ -65,6 +70,7 @@ final class AppModel: ObservableObject {
 
     private var queue: [String] = []                    // job ids waiting for a run slot
     private var controls: [String: RunControl] = [:]
+    private var checkControls: [String: RunControl] = [:]   // checks this app is making, by job
     private let sleepGuard = SleepGuard()
     private var notifiedIDs = Set<String>()             // run records already notified this session
     private var notifiedHealthIDs = Set<String>()       // health records already notified this session
@@ -195,53 +201,112 @@ final class AppModel: ObservableObject {
         for r in all where latest[r.jobID] == nil { latest[r.jobID] = r }
         lastHealth = latest
         healthRecords = all
+        var stopped: [String: CanceledCheck] = [:]
+        for c in canceledStore.all() where stopped[c.jobID] == nil { stopped[c.jobID] = c }
+        lastCanceledCheck = stopped
     }
 
     /// Rehearse recovering this job: look at its destinations the way a recovery
     /// would, and report what would actually come back. Off the main thread — it
     /// opens archives.
     func rehearseRecovery(_ job: BackupJob) {
-        guard !verifyingJobIDs.contains(job.id) else { return }
-        verifyingJobIDs.insert(job.id)
+        guard let control = beginCheck(job.id) else { return }
         log("🎯 \(job.name): rehearsing a recovery…")
         let store = JobStore.standard()
         Task.detached {
-            let (records, busy) = RehearsalSchedule.run(store: store, now: Date(), jobs: [job.id])
+            let done = RehearsalSchedule.run(store: store, now: Date(), jobs: [job.id], control: control)
             await MainActor.run {
-                self.verifyingJobIDs.remove(job.id)
-                for r in records { self.applyHealth(r) }
-                if let b = busy.first { self.log(Self.busyCheckLine(job.name, holder: b.holder)) }
+                self.endCheck(job.id)
+                for o in done.outcomes { self.show(o, job: job) }
+                if let b = done.busy.first { self.log(Self.busyCheckLine(job.name, holder: b.holder)) }
             }
         }
     }
 
     /// re-verify a job's existing archives against their checksums, off the main thread.
     func verifyArchives(_ job: BackupJob) {
-        guard !verifyingJobIDs.contains(job.id) else { return }
-        verifyingJobIDs.insert(job.id)
+        guard let control = beginCheck(job.id) else { return }
         log("🔍 \(job.name): checking archives…")
         let resolved = job.resolvingLibraries(in: registry)
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
         let locks = runLocks
         Task.detached {
-            let checked = locks.whileChecking(jobID: job.id) {
-                HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud)
+            let checked = locks.whileChecking(jobID: job.id, control: control) {
+                HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud, control: control)
             }
             await MainActor.run {
-                self.verifyingJobIDs.remove(job.id)
+                self.endCheck(job.id)
                 self.applyChecked(checked, job: resolved, kind: "checksum")
             }
         }
     }
 
+    /// A check of the job's archives starting here, with its own Stop; nil when one
+    /// is already under way.
+    private func beginCheck(_ id: String) -> RunControl? {
+        guard !verifyingJobIDs.contains(id) else { return nil }
+        verifyingJobIDs.insert(id)
+        let control = RunControl()
+        checkControls[id] = control
+        return control
+    }
+
+    private func endCheck(_ id: String) {
+        verifyingJobIDs.remove(id)
+        stoppingCheckIDs.remove(id)
+        checkControls[id] = nil
+    }
+
+    /// Stop a check of the job's archives, whether this app or the scheduled agent is
+    /// making it. What it finished is said; it doesn't count as a check (see
+    /// CanceledCheck).
+    func stopCheck(_ id: String) {
+        let name = jobs.first { $0.id == id }?.name ?? "Job"
+        if let control = checkControls[id] {
+            control.cancel()
+            stoppingCheckIDs.insert(id)
+            log("⏹ \(name): stopping the check of its archives…")
+        } else if externalRuns[id]?.trigger == .check {
+            if runLocks.requestStop(jobID: id) {
+                stoppingJobIDs.insert(id)
+                log("⏹ \(name): asked the scheduled check of its archives to stop")
+            } else {
+                log("⚠︎ \(name): couldn't reach the check to stop it — try again in a moment")
+            }
+        }
+    }
+
+    /// jobs whose archives are being checked, here or by the scheduled agent
+    var checkingJobIDs: Set<String> {
+        verifyingJobIDs.union(externalRuns.filter { $0.value.trigger == .check }.keys)
+    }
+
     /// record a check done under the job's lock, or say why it wasn't done
     private func applyChecked(_ checked: CheckUnderLock<HealthReport>, job: BackupJob, kind: String) {
         switch checked {
-        case .done(let report): applyHealth(HealthRecord.from(job: job, report: report, at: Date(), kind: kind))
+        case .done(let report):
+            show(CheckRecording.record(report, job: job, kind: kind, at: Date(), health: healthStore, canceled: canceledStore), job: job)
         case .busy(let holder): log(Self.busyCheckLine(job.name, holder: holder))
         case .unavailable(let why): log("⚠︎ \(job.name): its archives weren't checked — \(why)")
         }
+    }
+
+    /// a recorded check, shown and notified as usual; a stopped one, said and kept apart
+    private func show(_ outcome: CheckRecording.Outcome, job: BackupJob) {
+        switch outcome {
+        case .recorded(let record): showHealth(record)
+        case .canceled(let stopped):
+            lastCanceledCheck[stopped.jobID] = stopped
+            log(Self.canceledLine(stopped, cloud: job.targets.contains { $0.kind == .cloudSync }
+                                                  && UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)))
+        }
+    }
+
+    static func canceledLine(_ c: CanceledCheck, cloud: Bool) -> String {
+        let what = c.kind == "drill" ? "Restore drill" : (c.kind == "rehearsal" ? "Recovery rehearsal" : "Archive check")
+        return "⏹ \(c.jobName): \(what) stopped. \(c.summary). A stopped check doesn't count; the last finished one still stands."
+            + (cloud ? " Anything already downloaded from the cloud folder stays on this Mac." : "")
     }
 
     /// A check reads the newest version, so it waits for a run writing one: while a
@@ -254,8 +319,7 @@ final class AppModel: ObservableObject {
     /// the restore path works, not just that the bytes match. Needs the passphrase for
     /// an encrypted job, so it runs in the GUI where the Keychain is reachable.
     func drillArchives(_ job: BackupJob) {
-        guard !verifyingJobIDs.contains(job.id) else { return }
-        verifyingJobIDs.insert(job.id)
+        guard let control = beginCheck(job.id) else { return }
         log("🧪 \(job.name): restore drill…")
         let resolved = job.resolvingLibraries(in: registry)
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
@@ -263,11 +327,12 @@ final class AppModel: ObservableObject {
         let passphrase = job.encrypted ? KeychainArchiveKey.load(jobID: job.id) : nil
         let locks = runLocks
         Task.detached {
-            let checked = locks.whileChecking(jobID: job.id) {
-                RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase, materializeCloud: materializeCloud)
+            let checked = locks.whileChecking(jobID: job.id, control: control) {
+                RestoreDriller(runner: ProcessCommandRunner(control: control))
+                    .drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase, materializeCloud: materializeCloud)
             }
             await MainActor.run {
-                self.verifyingJobIDs.remove(job.id)
+                self.endCheck(job.id)
                 self.applyChecked(checked, job: resolved, kind: "drill")
             }
         }
@@ -326,29 +391,28 @@ final class AppModel: ObservableObject {
     /// re-verify every job's archives — serially, so we don't saturate the disk with
     /// one full re-hash per job at once.
     func verifyAllArchives() {
-        let pending = jobs.filter { !verifyingJobIDs.contains($0.id) }
+        // each with its own Stop, which ends a waiting one before it starts
+        let pending = jobs.compactMap { job in beginCheck(job.id).map { (job.resolvingLibraries(in: registry), $0) } }
         guard !pending.isEmpty else { return }
-        for j in pending { verifyingJobIDs.insert(j.id) }
-        let resolved = pending.map { $0.resolvingLibraries(in: registry) }
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
-        log("🔍 verifying \(resolved.count) job\(resolved.count == 1 ? "" : "s")…")
+        log("🔍 verifying \(pending.count) job\(pending.count == 1 ? "" : "s")…")
         let locks = runLocks
         Task.detached {
-            for job in resolved {
-                let checked = locks.whileChecking(jobID: job.id) {
-                    HealthChecker().check(job: job, latestOnly: latestOnly, materializeCloud: materializeCloud)
+            for (job, control) in pending {
+                let checked = locks.whileChecking(jobID: job.id, control: control) {
+                    HealthChecker().check(job: job, latestOnly: latestOnly, materializeCloud: materializeCloud, control: control)
                 }
                 await MainActor.run {
-                    self.verifyingJobIDs.remove(job.id)
+                    self.endCheck(job.id)
                     self.applyChecked(checked, job: job, kind: "checksum")
                 }
             }
         }
     }
 
-    private func applyHealth(_ record: HealthRecord) {
-        healthStore.append(record)
+    /// a check recorded through CheckRecording, which has put it in the store
+    private func showHealth(_ record: HealthRecord) {
         lastHealth[record.jobID] = record
         healthRecords.insert(record, at: 0)      // keep the badge source in step with the store
         log(Self.healthLine(record))
@@ -666,8 +730,7 @@ final class AppModel: ObservableObject {
                 // a scratch tidy holds the lock for a moment and listens for nothing
                 log("⏸ \(name): tidying up leftovers — done in a moment")
             } else if holder.trigger == .check {
-                // checks and drills can't be stopped part-way yet
-                log("⏸ \(name): its archives are being checked — that can't be stopped part-way; it ends on its own")
+                stopCheck(id)
             } else if runLocks.requestStop(jobID: id) {
                 stoppingJobIDs.insert(id)
                 log("⏹ \(name): asked the scheduled run to stop")

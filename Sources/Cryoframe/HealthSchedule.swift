@@ -32,6 +32,10 @@ enum HealthSchedule {
     /// Each job is checked holding its run lock, so a check never reads a version a
     /// run is still writing. A job a run holds (the app running it, say) is left for
     /// the next hourly pass rather than the next period.
+    ///
+    /// Stop pressed in the app ends a job's check (see RunLocks.whileChecking). A
+    /// stopped check isn't recorded as one, raises no alert, and the job stays due:
+    /// it is checked again on the next hourly pass.
     @discardableResult
     static func runIfDue(store: JobStore, now: Date, locks: RunLocks = .standard()) -> [HealthRecord] {
         guard period() != nil else { return [] }
@@ -40,7 +44,7 @@ enum HealthSchedule {
         let jobs = CheckRound.jobs(store.load().jobs, due: due, pending: pending)
         guard !jobs.isEmpty else { return [] }
         let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
-        let healthStore = HealthStore.standard()
+        let healthStore = HealthStore.standard(), canceledStore = CanceledCheckStore.standard()
         let latestOnly = UserDefaults.standard.string(forKey: Prefs.healthScope) != "all"
         let drill = UserDefaults.standard.string(forKey: Prefs.healthDepth) == "drill"
         let materializeCloud = UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives)
@@ -48,18 +52,21 @@ enum HealthSchedule {
         var stillPending: [String] = []
         for job in jobs {
             let resolved = job.resolvingLibraries(in: registry)
-            let checked = locks.whileChecking(jobID: job.id, wait: 30) { () -> HealthReport in
+            let control = RunControl()
+            let checked = locks.whileChecking(jobID: job.id, wait: 30, control: control) { () -> HealthReport in
                 if drill {
                     let passphrase = job.encrypted ? KeychainArchiveKey.load(jobID: job.id) : nil
-                    return RestoreDriller().drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase, materializeCloud: materializeCloud)
+                    return RestoreDriller(runner: ProcessCommandRunner(control: control))
+                        .drill(job: resolved, latestOnly: latestOnly, passphrase: passphrase, materializeCloud: materializeCloud)
                 }
-                return HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud)
+                return HealthChecker().check(job: resolved, latestOnly: latestOnly, materializeCloud: materializeCloud, control: control)
             }
             guard case .done(let report) = checked else { stillPending.append(job.id); continue }
-            let record = HealthRecord.from(job: resolved, report: report, at: now,
-                                           kind: drill ? "drill" : "checksum", trigger: "scheduled")
-            healthStore.append(record)
-            written.append(record)
+            switch CheckRecording.record(report, job: resolved, kind: drill ? "drill" : "checksum", at: now,
+                                         trigger: "scheduled", health: healthStore, canceled: canceledStore) {
+            case .recorded(let record): written.append(record)
+            case .canceled: stillPending.append(job.id)
+            }
         }
         UserDefaults.standard.set(stillPending, forKey: Prefs.healthPending)
         if due { UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Prefs.lastHealthCheck) }

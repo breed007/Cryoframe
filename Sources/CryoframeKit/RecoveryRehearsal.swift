@@ -55,12 +55,20 @@ public struct RecoveryRehearsal: Sendable {
         /// The quiet failure this whole thing exists to catch.
         public let missing: [String]
 
+        /// Stop ended the rehearsal before it opened everything: `outcomes` holds only
+        /// the libraries finished before it (see HealthReport.canceled)
+        public let canceled: Bool
+        /// how many libraries it set out to open
+        public let planned: Int
+
         public var passed: Bool { missing.isEmpty && outcomes.allSatisfy { $0.ok || $0.skipped } }
         public var openedCount: Int { outcomes.filter { $0.ok && !$0.skipped }.count }
 
-        public init(destination: String, moment: Date?, outcomes: [LibraryOutcome], missing: [String]) {
+        public init(destination: String, moment: Date?, outcomes: [LibraryOutcome], missing: [String],
+                    canceled: Bool = false, planned: Int? = nil) {
             self.destination = destination; self.moment = moment
             self.outcomes = outcomes; self.missing = missing
+            self.canceled = canceled; self.planned = planned ?? outcomes.count
         }
     }
 
@@ -74,6 +82,9 @@ public struct RecoveryRehearsal: Sendable {
     ///   - alsoKnownAs: other names an expected library may be found under (the
     ///     ones it had before it was renamed, until a run brings its folder up to date)
     ///   - isCloud: skip archives evicted to placeholders instead of pulling gigabytes.
+    ///
+    /// Stop is the runner's, looked at between libraries; the library it came in the
+    /// middle of isn't counted, and the report is marked canceled (see RestoreDriller).
     public func rehearse(destination: URL,
                          expecting: [String],
                          alsoKnownAs: [String: [String]] = [:],
@@ -88,58 +99,82 @@ public struct RecoveryRehearsal: Sendable {
         let selections = moment.map { RecoveryPlan.selections(at: $0, in: archives) }
             ?? RecoveryPlan.selections(at: Date(), in: archives)
 
-        let outcomes = selections.map { selection -> LibraryOutcome in
-            let a = selection.archive
-            if isCloud, CloudFile.anyDataless(in: a.dir) {
-                guard materializeCloud else {
-                    return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true,
-                                          skipped: true, detail: "not downloaded — skipped")
-                }
-                CloudFile.materialize(a.dir)
+        let control = runner.control
+        let quiet = (runner as? ProcessCommandRunner)?.quietLimit ?? control?.quietLimit ?? ToolWatchdog.defaultQuietLimit
+        var outcomes: [LibraryOutcome] = []
+        for selection in selections {
+            if control?.isCancelled == true {
+                return Report(destination: destination.lastPathComponent, moment: moment, outcomes: outcomes, missing: missing,
+                              canceled: true, planned: selections.count)
             }
-            let key = a.encrypted ? passphrase(a.displayName) : nil
-            if a.encrypted, key == nil {
-                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false, locked: true,
-                                      detail: "encrypted, and no passphrase is available on this Mac")
+            let outcome = rehearseOne(selection.archive, isCloud: isCloud, materializeCloud: materializeCloud,
+                                      quiet: quiet, passphrase: passphrase)
+            // Stop part-way through: whatever this library's outcome said, it didn't finish
+            if control?.isCancelled == true {
+                return Report(destination: destination.lastPathComponent, moment: moment, outcomes: outcomes, missing: missing,
+                              canceled: true, planned: selections.count)
             }
-            do {
-                // the same three things a recovery does before it copies anything
-                let sidecar = a.dir.appendingPathComponent(ArchiveManifest.sidecarName)
-                let manifest = try ArchiveManifest.read(sidecar)
-                let report = try ChecksumVerifier().verify(manifest, in: a.dir)
-                guard report.passed else {
-                    return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
-                                          detail: "checksums don't match — \(report.details)")
-                }
-                let opened = try ArchiveReader(runner: runner, freeSpace: freeSpace).open(a.archiveResult(), passphrase: key)
-                defer { opened.close() }
-                // A mirror holds the library at <volume>/<name>, which is what a restore
-                // copies. Its volume root is never empty (.fseventsd), so looking there
-                // passed a mirror a restore would find nothing in.
-                let look = a.format == .liveMirror ? opened.root.appendingPathComponent(a.bundleName) : opened.root
-                let entries = (try? FileManager.default.contentsOfDirectory(atPath: look.path)) ?? []
-                guard !entries.isEmpty else {
-                    return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
-                                          detail: "opened, but there is nothing inside it")
-                }
+            outcomes.append(outcome)
+        }
+        return Report(destination: destination.lastPathComponent, moment: moment,
+                      outcomes: outcomes, missing: missing)
+    }
+
+    private func rehearseOne(_ a: RestorableArchive, isCloud: Bool, materializeCloud: Bool, quiet: TimeInterval,
+                             passphrase: @Sendable (String) -> String?) -> LibraryOutcome {
+        if isCloud, CloudFile.anyDataless(in: a.dir) {
+            guard materializeCloud else {
                 return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true,
-                                      detail: "opened and readable")
-            } catch let e as RestoreError {
-                // no room on the startup disk to join or unpack it says nothing about the
-                // archive (as for a drill, see RestoreDriller): skipped, and why
-                if case .notEnoughRoom = e {
-                    return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true, skipped: true,
-                                          detail: "not rehearsed: " + Self.reason(e, encrypted: a.encrypted))
-                }
-                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
-                                      detail: Self.reason(e, encrypted: a.encrypted))
+                                      skipped: true, detail: "not downloaded — skipped")
+            }
+            // watched, and ended by Stop (the caller sees that); what came down stays
+            do {
+                try CloudDownload.system.bringDown(a.archiveResult().artifacts, quietLimit: quiet, control: runner.control)
             } catch {
                 return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
                                       detail: Self.reason(error, encrypted: a.encrypted))
             }
         }
-        return Report(destination: destination.lastPathComponent, moment: moment,
-                      outcomes: outcomes, missing: missing)
+        let key = a.encrypted ? passphrase(a.displayName) : nil
+        if a.encrypted, key == nil {
+            return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false, locked: true,
+                                  detail: "encrypted, and no passphrase is available on this Mac")
+        }
+        do {
+            // the same three things a recovery does before it copies anything
+            let sidecar = a.dir.appendingPathComponent(ArchiveManifest.sidecarName)
+            let manifest = try ArchiveManifest.read(sidecar)
+            let report = try ChecksumVerifier(control: runner.control).verify(manifest, in: a.dir)
+            guard report.passed else {
+                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
+                                      detail: "checksums don't match — \(report.details)")
+            }
+            let opened = try ArchiveReader(runner: runner, freeSpace: freeSpace).open(a.archiveResult(), passphrase: key)
+            defer { opened.close() }
+            // A mirror holds the library at <volume>/<name>, which is what a restore
+            // copies. Its volume root is never empty (.fseventsd), so looking there
+            // passed a mirror a restore would find nothing in.
+            let look = a.format == .liveMirror ? opened.root.appendingPathComponent(a.bundleName) : opened.root
+            let entries = (try? FileManager.default.contentsOfDirectory(atPath: look.path)) ?? []
+            guard !entries.isEmpty else {
+                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
+                                      detail: "opened, but there is nothing inside it")
+            }
+            return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true,
+                                  detail: "opened and readable")
+        } catch let e as RestoreError {
+            // no room on the startup disk to join or unpack it says nothing about the
+            // archive (as for a drill, see RestoreDriller): skipped, and why
+            if case .notEnoughRoom = e {
+                return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true, skipped: true,
+                                      detail: "not rehearsed: " + Self.reason(e, encrypted: a.encrypted))
+            }
+            return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
+                                  detail: Self.reason(e, encrypted: a.encrypted))
+        } catch {
+            return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
+                                  detail: Self.reason(error, encrypted: a.encrypted))
+        }
     }
 
     /// Say what actually went wrong. These are Swift enums, so localizedDescription
@@ -196,11 +231,13 @@ extension RecoveryRehearsal.Report {
                          passed: o.ok || o.skipped, detail: o.detail,
                          destination: dest, skipped: o.skipped, libraryKey: o.key)
         }
+        // a stopped rehearsal says how many it opened, of how many (see CanceledCheck)
+        guard !canceled else { return HealthReport(checks: checks, canceled: true, planned: planned) }
         checks += missing.map { lib in
             ArchiveCheck(library: lib, version: nil, passed: false,
                          detail: "nothing to recover here — a restore would not find this library",
                          destination: dest)
         }
-        return HealthReport(checks: checks)
+        return HealthReport(checks: checks, planned: planned + missing.count)
     }
 }

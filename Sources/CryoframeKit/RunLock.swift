@@ -388,7 +388,12 @@ extension RunLocks {
     /// it held waits for the next pass). Verifications, drills and rehearsals read the
     /// newest version; without the lock they could read one a run was still writing
     /// and report a good backup as broken. Waits up to `wait` for a run to finish.
-    public func whileChecking<T>(jobID: String, wait: TimeInterval = 0, _ body: () throws -> T) rethrows -> CheckUnderLock<T> {
+    ///
+    /// With `control`, Stop pressed in another process (the app, for a check the
+    /// scheduled agent is making) reaches it the way it reaches a run (see
+    /// RunLocks.requestStop).
+    public func whileChecking<T>(jobID: String, wait: TimeInterval = 0, control: RunControl? = nil,
+                                 _ body: () throws -> T) rethrows -> CheckUnderLock<T> {
         let lease: RunLease
         do {
             lease = try acquire(jobID: jobID, trigger: .check, wait: wait)
@@ -398,6 +403,7 @@ extension RunLocks {
             return .unavailable(error.localizedDescription)
         }
         defer { lease.release() }
+        if let control { lease.onStopRequest { control.cancel() } }
         return .done(try body())
     }
 

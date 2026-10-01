@@ -28,7 +28,9 @@ private func report(_ level: VerificationReport.Level, _ passed: Bool,
 // MARK: - checksum re-verify (periodic hook)
 
 public struct ChecksumVerifier: Sendable {
-    public init() {}
+    /// a check's Stop: hashing ends with CancelledError (see Checksum.sha256)
+    let control: RunControl?
+    public init(control: RunControl? = nil) { self.control = control }
 
     public func verify(_ manifest: VerificationManifest, in dir: URL) throws -> VerificationReport {
         var failures: [String] = []
@@ -52,7 +54,7 @@ public struct ChecksumVerifier: Sendable {
                 }
                 continue
             }
-            if try Checksum.digest(of: url) != a.sha256,
+            if try Checksum.digest(of: url, control: control) != a.sha256,
                !Self.matchesLegacyDirectoryDigest(url, a.sha256) { failures.append("checksum mismatch: \(a.name)") }
         }
         if unsealed, failures.isEmpty {

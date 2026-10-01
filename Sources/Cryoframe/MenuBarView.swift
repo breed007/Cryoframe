@@ -30,6 +30,14 @@ struct MenuBarView: View {
             Divider()
             Text("\(model.allRunningJobIDs.count) running")
         }
+        let checking = model.jobs.filter { model.checkingJobIDs.contains($0.id) }
+        if !checking.isEmpty {
+            Divider()
+            ForEach(checking) { job in
+                Button("Stop Checking \(job.name)") { model.stopCheck(job.id) }
+                    .disabled(model.stoppingCheckIDs.contains(job.id) || model.stoppingJobIDs.contains(job.id))
+            }
+        }
         Divider()
         if !model.jobs.isEmpty {
             Button("Verify all archives") { model.verifyAllArchives() }
