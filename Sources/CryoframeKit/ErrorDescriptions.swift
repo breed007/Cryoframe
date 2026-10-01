@@ -141,6 +141,13 @@ public enum RestoreFailureText {
         "Cryoframe couldn't read the list of what \(zip) holds, so it unpacked it on the startup disk without first checking that there was room. The zip may be damaged; its checksum says whether it is."
     }
 
+    /// a zip holding a file over 4 GiB, whose full unpacked size its directory doesn't
+    /// record (see ZipDirectory.unpackEstimate)
+    static func unpackedSizeUncertain(_ zip: String, atLeast: UInt64) -> String {
+        let least = ByteCountFormatter.string(fromByteCount: Int64(clamping: atLeast), countStyle: .file)
+        return "\(zip) holds a file over 4 GB, and a zip made by macOS doesn't record the full size of one. Cryoframe checked that the startup disk had room for at least \(least) before unpacking it; it may have needed more."
+    }
+
     /// why one archive failed to restore, for the Restore window's result list.
     public static func restoreMessage(_ e: Error, encrypted: Bool) -> String {
         switch e as? RestoreError {

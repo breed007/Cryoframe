@@ -186,14 +186,22 @@ public struct ArchiveReader: Sendable {
                 // A size that can't be read doesn't stop the open: refusing a restore
                 // over a size nobody can tell is worse than the risk it guards against,
                 // and an unpack that runs out of room fails, saying so, and is cleaned up.
-                let unpacked = Self.unpackedSize(of: zip)
-                if let unpacked { try checkRoom(unpacked, in: work, doing: "unpacked") }
+                // A zip holding a file over 4 GiB records only part of its size (see
+                // ZipDirectory.unpackEstimate): room is checked for what it needs at the
+                // least, and the open says it couldn't tell the rest.
+                let estimate = ZipDirectory.unpackEstimate(zip, blockSize: Self.blockSize)
+                if let estimate { try checkRoom(estimate.certain ? estimate.bytes : estimate.atLeast, in: work, doing: "unpacked") }
                 let ex = work.appendingPathComponent("extract"); try fm.createDirectory(at: ex, withIntermediateDirectories: true)
                 try exec(Command("/usr/bin/ditto", ["-x", "-k", zip.path, ex.path]))
                 // ditto dates some folders at the unpack (see ZipFolderDates)
                 ZipFolderDates.restore(from: zip, into: ex)
                 var opened = OpenedArchive(root: ex, work: work) {}
-                if unpacked == nil {
+                if let estimate {
+                    if !estimate.certain {
+                        opened.warning = RestoreFailureText.unpackedSizeUncertain(zip.lastPathComponent, atLeast: estimate.atLeast)
+                        Self.log.notice("unpacked \(zip.lastPathComponent, privacy: .public) with a room check for its least size: it holds a file over 4 GiB")
+                    }
+                } else {
                     opened.warning = RestoreFailureText.unpackedSizeWarning(zip.lastPathComponent)
                     Self.log.notice("unpacked \(zip.lastPathComponent, privacy: .public) without a room check: its directory couldn't be read")
                 }

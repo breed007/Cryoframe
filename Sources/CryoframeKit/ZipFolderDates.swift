@@ -113,27 +113,71 @@ enum ZipDirectory {
     /// What `zip` takes on disk once unpacked: the bytes its entries hold, and a whole
     /// block for every entry (see ArchiveReader.unpackedSize); nil if its directory
     /// can't be read.
-    ///
+    static func unpackedSize(_ zip: URL, blockSize: UInt64) -> UInt64? {
+        unpackEstimate(zip, blockSize: blockSize)?.bytes
+    }
+
+    /// What unpacking a zip takes, as far as its directory can say.
+    struct UnpackEstimate: Equatable {
+        /// the best count: exact when `certain`
+        var bytes: UInt64
+        /// what it takes at the least, whatever the 32-bit fields lost
+        var atLeast: UInt64
+        /// false when a file in the zip is over 4 GiB, so how far past 4 GiB it
+        /// unpacks isn't recorded anywhere in the directory
+        var certain: Bool
+    }
+
     /// Where ditto's 32-bit fields wrapped, the bytes are worked out from where the
     /// entries sit. The directory starts where the last entry's data ends, a position
     /// known exactly, so the gap between it and what the recorded sizes and headers
     /// add up to is the 4 GiB multiples the compressed sizes lost (the local headers'
     /// own extra fields and data descriptors are far smaller). An entry that lost
     /// 4 GiB of compressed bytes holds at least that many more uncompressed, since
-    /// deflate never grows data by more than a fraction of a percent. An entry that
-    /// compresses well and unpacks past 4 GiB with its compressed size under it can't
-    /// be told from the directory at all: the count is then low by a multiple of
-    /// 4 GiB, and an unpack that runs out of room fails and is cleaned up.
-    static func unpackedSize(_ zip: URL, blockSize: UInt64) -> UInt64? {
-        var bytes: UInt64 = 0, entries: UInt64 = 0, laidOut: UInt64 = 0
+    /// deflate never grows data by more than a fraction of a percent.
+    ///
+    /// An entry whose recorded unpacked size is below its compressed size must have
+    /// wrapped: nothing unpacks smaller than it compressed. It is counted at the
+    /// least size above its compressed size its recorded value allows. Neither rule
+    /// says how many more times past that it wrapped: a 9 GiB database compressed
+    /// 2:1 to 4.5 GiB reads as 5 GiB. So a zip with either sign of a file over
+    /// 4 GiB is uncertain, and the reader checks room for what it needs at the least
+    /// and says it couldn't tell the rest. Left over: a file that compresses well
+    /// and unpacks past 4 GiB with its recorded size above its compressed one shows
+    /// no sign at all, and is counted low by a multiple of 4 GiB; an unpack that
+    /// runs out of room fails and is cleaned up.
+    static func unpackEstimate(_ zip: URL, blockSize: UInt64) -> UnpackEstimate? {
+        let wrap: UInt64 = 1 << 32
+        var recorded: UInt64 = 0, compressed: UInt64 = 0, entries: UInt64 = 0, laidOut: UInt64 = 0
+        var provenWraps: UInt64 = 0
         guard let start = forEach(zip, { entry in
-            bytes &+= entry.uncompressed
+            recorded &+= entry.uncompressed
+            compressed &+= entry.compressed
             entries += 1
             laidOut &+= 30 + UInt64(entry.name.count) + entry.compressed
+            if entry.compressed < wrap, entry.uncompressed < wrap,
+               entry.uncompressed < entry.compressed - min(entry.compressed, Self.expansion(entry.compressed)) {
+                provenWraps += 1
+            }
         }), start >= laidOut else { return nil }
-        let lost = (start - laidOut) / (1 << 32) * (1 << 32)
-        return bytes &+ lost &+ entries * blockSize
+        let lost = (start - laidOut) / wrap
+        let blocks = entries * blockSize
+        guard lost > 0 || provenWraps > 0 else {
+            return UnpackEstimate(bytes: recorded &+ blocks, atLeast: recorded &+ blocks, certain: true)
+        }
+        // Which entries lost compressed multiples isn't recorded, so the proven wraps
+        // are counted only where no compressed size wrapped (each is then exact).
+        let bytes = recorded &+ (lost > 0 ? lost : provenWraps) &* wrap &+ blocks
+        // the least, whichever entries wrapped: the recorded sizes (each at most its
+        // true size), or everything the zip holds less the most deflate could add
+        let allCompressed = compressed &+ lost &* wrap
+        let floor = lost > 0 ? max(recorded, allCompressed - min(allCompressed, Self.expansion(allCompressed))) : recorded &+ provenWraps &* wrap
+        return UnpackEstimate(bytes: bytes, atLeast: floor &+ blocks, certain: false)
     }
+
+    /// more than any zip method grows `n` bytes by (deflate's stored blocks add 5
+    /// bytes in 65,535; bzip2 and LZMA a little more)
+    private static func expansion(_ n: UInt64) -> UInt64 { n / 128 + 1024 }
 
     /// The 64-bit sizes in an entry's Zip64 extra field (0x0001), which holds, in
     /// order, only the fields recorded as 0xFFFFFFFF.

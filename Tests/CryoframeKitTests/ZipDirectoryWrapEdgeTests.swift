@@ -53,12 +53,16 @@ private func makeZip(_ entries: [FakeEntry], at url: URL) throws {
 }
 
 private func sizeOf(_ entries: [FakeEntry]) throws -> UInt64? {
+    try estimateOf(entries)?.bytes
+}
+
+private func estimateOf(_ entries: [FakeEntry]) throws -> ZipDirectory.UnpackEstimate? {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cf-zipwrap-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: dir) }
     let zip = dir.appendingPathComponent("t.zip")
     try makeZip(entries, at: zip)
-    return ZipDirectory.unpackedSize(zip, blockSize: 4096)
+    return ZipDirectory.unpackEstimate(zip, blockSize: 4096)
 }
 
 @Suite struct ZipDirectoryWrapEdgeTests {
@@ -83,25 +87,50 @@ private func sizeOf(_ entries: [FakeEntry]) throws -> UInt64? {
         #expect(got >= unc + 4096, "\(got) for \(unc)")
     }
 
-    // The limit Mike stated: what compresses well and unpacks past 4 GiB, with its
-    // compressed size under that, can't be told from the directory. Pinned so that a
-    // fix turns it red: the check passes for 4 GiB of unpack that is never counted.
-    @Test func aCompressibleFileOverFourGigabytesIsCountedLow() throws {
+    // What compresses well and unpacks past 4 GiB, with its compressed size under
+    // that: its recorded size (the bytes past 4 GiB) is below its compressed size,
+    // which nothing unpacks to, so it wrapped at least once.
+    @Test func aCompressibleFileOverFourGigabytesIsCountedWhole() throws {
         let unc = wrap + 1000
-        let got = try #require(try sizeOf([FakeEntry(name: "disk.img", compressed: unc / 1000, uncompressed: unc)]))
-        withKnownIssue("an unpack past 4 GiB that compresses is counted as the bytes past a multiple of 4 GiB") {
-            #expect(got >= unc, "counted \(got) for a file that unpacks to \(unc)")
-        }
+        let got = try #require(try estimateOf([FakeEntry(name: "disk.img", compressed: unc / 1000, uncompressed: unc)]))
+        #expect(got.bytes >= unc, "counted \(got.bytes) for a file that unpacks to \(unc)")
+        #expect(got.atLeast >= unc && got.atLeast <= unc + 4096, "\(got.atLeast)")
+        #expect(!got.certain)
     }
 
-    // Not only the extreme: 2:1 data (text, a database) of 9 GiB wraps its compressed
-    // size once and its own twice, and only the compressed wrap is added back.
-    @Test func aTwoToOneFileOfNineGigabytesIsCountedLow() throws {
+    // 2:1 data (text, a database) of 9 GiB wraps its compressed size once and its own
+    // twice. No directory says the second wrap: the count is uncertain, so the reader
+    // checks room for what it needs at the least and warns, never refuses on a guess.
+    @Test func aTwoToOneFileOfNineGigabytesIsUncertain() throws {
         let unc = 9 * gib
-        let got = try #require(try sizeOf([FakeEntry(name: "db.sqlite", compressed: unc / 2, uncompressed: unc)]))
-        withKnownIssue("the 4 GiB multiples its own size lost beyond its compressed size's are not added back") {
-            #expect(got >= unc, "counted \(got) for a file that unpacks to \(unc)")
+        let got = try #require(try estimateOf([FakeEntry(name: "db.sqlite", compressed: unc / 2, uncompressed: unc)]))
+        #expect(!got.certain)
+        #expect(got.atLeast <= unc + 4096, "the least \(got.atLeast) is more than it takes, \(unc)")
+        // its compressed size, less the most any zip method could have added
+        #expect(got.atLeast >= unc / 2 - unc / 2 / 100, "the least \(got.atLeast) is well below its compressed size")
+    }
+
+    // Every case here: what it needs at the least is never more than it takes, and a
+    // zip with nothing over 4 GiB is exact.
+    @Test func theLeastIsNeverMoreThanItTakes() throws {
+        let cases: [[FakeEntry]] = [
+            [FakeEntry(name: "a", compressed: incompressible(wrap - 1), uncompressed: wrap - 1)],
+            [FakeEntry(name: "a", compressed: incompressible(wrap + 1000), uncompressed: wrap + 1000)],
+            [FakeEntry(name: "a", compressed: incompressible(2 * wrap + 5), uncompressed: 2 * wrap + 5),
+             FakeEntry(name: "b", compressed: 40, uncompressed: 100)],
+            [FakeEntry(name: "a", compressed: (wrap + 1000) / 1000, uncompressed: wrap + 1000)],
+            [FakeEntry(name: "a", compressed: 9 * gib / 2, uncompressed: 9 * gib)],
+            [FakeEntry(name: "a", compressed: 3 * gib, uncompressed: 6 * gib), FakeEntry(name: "b", compressed: 10, uncompressed: 10)],
+        ]
+        for entries in cases {
+            let got = try #require(try estimateOf(entries))
+            let takes = entries.reduce(0) { $0 + $1.uncompressed + 4096 }
+            #expect(got.atLeast <= takes, "\(entries.map(\.name)): least \(got.atLeast) over \(takes)")
+            #expect(got.atLeast <= got.bytes)
         }
+        let small = try #require(try estimateOf([FakeEntry(name: "a", compressed: 500, uncompressed: 2000),
+                                                  FakeEntry(name: "b", compressed: 7, uncompressed: 7)]))
+        #expect(small.certain && small.bytes == 2007 + 2 * 4096 && small.atLeast == small.bytes)
     }
 
     // The check the reader makes with the size: a zip that unpacks to more than the
