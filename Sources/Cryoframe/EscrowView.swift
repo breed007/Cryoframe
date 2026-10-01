@@ -17,6 +17,7 @@ struct EscrowView: View {
     @State private var encryptedCount = 0
     @State private var status: (text: String, ok: Bool)?
     @State private var freshness: EscrowFreshness.Status = .notNeeded
+    @State private var kitOutOfDate = false
 
     private var missingKeys: Int { max(0, encryptedCount - jobCount) }
 
@@ -42,6 +43,23 @@ struct EscrowView: View {
                 Text("Saves every archive passphrase into one file, encrypted with a master password you choose. Keep it somewhere safe and separate from the backups — a password manager or a second drive. Without it, an encrypted archive can't be opened on a Mac that doesn't have the original passphrase in its keychain.")
             }
             Section {
+                if let printed = RecoveryKitPrinter.lastPrinted() {
+                    Label(kitOutOfDate
+                          ? "Last printed \(printed.printedAt.formatted(date: .abbreviated, time: .shortened)), before your jobs changed. Print a new one and replace the old."
+                          : "Last printed \(printed.printedAt.formatted(date: .abbreviated, time: .shortened)).",
+                          systemImage: kitOutOfDate ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(kitOutOfDate ? Color.cryoWarn : .secondary).font(.callout)
+                }
+                Button("Print Recovery Kit…") {
+                    RecoveryKitPrinter.run()
+                    kitOutOfDate = RecoveryKitPrinter.isOutOfDate(jobs: JobStore.standard().load().jobs)
+                }
+            } header: {
+                Text("Recovery kit")
+            } footer: {
+                Text("A printed page listing your jobs, where each keeps its backups, and how to open them without Cryoframe. It holds no passphrases; you can print those on a separate page, after a warning.")
+            }
+            Section {
                 Button("Restore from a recovery file…") { importFlow() }
             } footer: {
                 Text("Opens a recovery file and shows the saved passphrases so you can copy them into the restore prompt on a new Mac. “Copy all” places them on the clipboard — paste where you need them, then copy something else to clear it.")
@@ -59,6 +77,7 @@ struct EscrowView: View {
             jobCount = PassphraseEscrow.collect().count
             encryptedCount = JobStore.standard().load().jobs.filter(\.encrypted).count
             freshness = EscrowFreshness.current()
+            kitOutOfDate = RecoveryKitPrinter.isOutOfDate(jobs: JobStore.standard().load().jobs)
         }
     }
 

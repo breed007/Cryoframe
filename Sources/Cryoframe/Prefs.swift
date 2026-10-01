@@ -36,4 +36,5 @@ enum Prefs {
     static let remoteAlertURL = "remote.alertURL"          // webhook endpoint or ntfy topic URL
     static let remoteAlertEvents = "remote.alertEvents"    // "failure" | "all", default "failure"
     static let escrowExport = "escrow.lastExport"          // JSON EscrowFreshness.Export — when the recovery file was last exported, and what it covered (no passphrases)
+    static let recoveryKitPrinted = "recoveryKit.printed"  // JSON RecoveryKitPrinter.Printed — when the kit was last printed, and a digest of the jobs it covered (no passphrases)
 }
