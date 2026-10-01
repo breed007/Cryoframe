@@ -46,7 +46,9 @@ anchor
 and
 angled
 another
+answer
 any
+anyone
 anything
 apart
 apfs
@@ -80,6 +82,7 @@ attributes
 attrs
 authentication
 available
+away
 axo
 back
 backed
@@ -108,6 +111,7 @@ blocks
 borrowed
 both
 box
+broken
 build
 builds
 built
@@ -316,7 +320,6 @@ exit
 export
 exported
 exports
-ext
 extended
 external
 extra
@@ -361,6 +364,7 @@ for
 force
 fork
 format
+formatname
 found
 free
 freespace
@@ -428,6 +432,7 @@ icloud
 id
 identified
 identifier
+identify
 if
 ifs
 ignore
@@ -482,6 +487,7 @@ kept
 key
 kib
 kind
+kit
 kmdlabel
 kmgt
 kmgtp
@@ -559,6 +565,7 @@ me
 meaningful
 meanwhile
 membership
+menu
 messages
 metadata
 mib
@@ -658,6 +665,7 @@ own
 owned
 owner
 owners
+page
 part
 partial
 parts
@@ -696,6 +704,7 @@ pragma
 prepare
 press
 previous
+printed
 private
 pro
 probe
@@ -709,6 +718,7 @@ protected
 protecting
 proven
 provenance
+provider
 prunefailures
 ps
 puppetstrings
@@ -742,6 +752,7 @@ recorded
 recover
 recovered
 recovery
+recoverynote
 rectangle
 refused
 rehearsal
@@ -808,6 +819,7 @@ second
 seconds
 secs
 sectors
+security
 see
 self
 separate
@@ -867,6 +879,7 @@ stays
 stderr
 stdinpass
 still
+stolen
 stop
 stopped
 store
@@ -944,6 +957,7 @@ umount
 unattended
 unavailable
 unchanged
+under
 undone
 unfinished
 unknown
@@ -953,6 +967,7 @@ unmount
 unmounted
 unpack
 unpacked
+unpacking
 unpacks
 unreadable
 until
@@ -962,6 +977,7 @@ up
 update
 updated
 upload
+uploaded
 url
 us
 use

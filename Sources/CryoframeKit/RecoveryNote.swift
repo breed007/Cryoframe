@@ -90,56 +90,9 @@ public enum RecoveryNote {
             add("")
         }
 
-        if formats.contains(.sealedDMG) {
-            add("TO OPEN A SEALED DISK IMAGE (.dmg)",
-                "",
-                "1. Open the library's folder, then the folder of the version you want.",
-                "2. Double-click the .dmg file. It opens in Finder as a read-only disk. If it is",
-                "   encrypted, macOS asks for its passphrase.",
-                "3. Copy what you need from that disk to your Mac, then eject the disk.",
-                "",
-                "In Terminal:  hdiutil attach -readonly \"NAME.dmg\"",
-                "")
-        }
-        if formats.contains(.sealedZip) {
-            add("TO OPEN A SEALED ZIP (.zip)",
-                "",
-                "1. Copy the .zip file to your Mac (the backup drive may not have room to unpack it).",
-                "2. Double-click it. Archive Utility unpacks it into a folder beside it.",
-                "",
-                "In Terminal (keeps Finder tags and other Mac details):",
-                "  ditto -x -k \"NAME.zip\" \"FOLDER TO UNPACK INTO\"",
-                "",
-                "On a computer that isn't a Mac, any unzip tool opens it; Mac-only details are",
-                "kept in extra files starting with \"._\" that you can ignore.",
-                "")
-        }
-        if formats.contains(.liveMirror) {
-            add("TO OPEN A LIVE MIRROR (.sparsebundle)",
-                "",
-                "1. Double-click the .sparsebundle in the library's folder. It opens as a disk. If",
-                "   it is encrypted, macOS asks for its passphrase.",
-                "2. On that disk, the folder named after the library is the backup. Copy what you",
-                "   need to your Mac, then eject the disk. Ignore a folder named .cryoframe-staging",
-                "   if there is one: it is an unfinished update.",
-                "",
-                "Don't change anything on that disk or inside the .sparsebundle: that is the backup.",
-                "In Terminal, to open it read-only:  hdiutil attach -readonly \"NAME.sparsebundle\"",
-                "")
-        }
-        if archives.contains(where: { $0.artifactNames.count > 1 }) {
-            let split = archives.filter { $0.artifactNames.count > 1 }
-            let ext = split.allSatisfy { $0.format == .sealedZip } ? "zip" : split.allSatisfy { $0.format == .sealedDMG } ? "dmg" : "dmg (or .zip)"
-            add("SPLIT ARCHIVES",
-                "",
-                "A large archive for a cloud folder is split into parts named NAME.\(ext).part.000,",
-                "NAME.\(ext).part.001 and so on (or .part.aa, .part.ab). Join them into one file",
-                "first, in Terminal, in the version's folder, in order:",
-                "  ls \"NAME.\(ext == "zip" ? "zip" : "dmg").part.\"* | sort -V | while IFS= read -r p; do cat \"$p\"; done > ~/Desktop/\"NAME.\(ext == "zip" ? "zip" : "dmg")\"",
-                "(sort -V puts part 1000 after part 999; with fewer parts, cat \"NAME.\(ext == "zip" ? "zip" : "dmg").part.\"* does the same.)",
-                "then open the joined file as above.",
-                "")
-        }
+        for f in ArchiveFormat.noteOrder where formats.contains(f) { out += steps(for: f) }
+        let split = archives.filter { $0.artifactNames.count > 1 }
+        if !split.isEmpty { out += splitSteps(Set(split.map(\.format))) }
 
         add("TO CHECK A BACKUP BY HAND",
             "",
@@ -156,24 +109,90 @@ public enum RecoveryNote {
             "version, for Cryoframe's Find a File. A restore doesn't need it.",
             "")
 
-        add("ENCRYPTED BACKUPS",
-            "",
-            "An encrypted backup opens only with its passphrase, on any Mac. Nobody can open it",
-            "without the passphrase, Cryoframe included. If you exported a Cryoframe recovery",
-            "file, it holds every passphrase, locked with the master password you chose. The",
-            "recovery file is opened with Cryoframe, which is free and open source:",
-            "https://github.com/breed007/Cryoframe",
-            "")
+        out += encryptedSteps
 
         add("Written by Cryoframe. This note holds no passwords or passphrases.")
         return out.joined(separator: "\n") + "\n"
     }
 
-    static func formatName(_ f: ArchiveFormat) -> String {
+    /// How to open one format with what macOS has, heading first and a blank line
+    /// last. The printed recovery kit (see RecoveryKit) uses these lines as they are.
+    public static func steps(for format: ArchiveFormat) -> [String] {
+        switch format {
+        case .sealedDMG:
+            return ["TO OPEN A SEALED DISK IMAGE (.dmg)",
+                    "",
+                    "1. Open the library's folder, then the folder of the version you want.",
+                    "2. Double-click the .dmg file. It opens in Finder as a read-only disk. If it is",
+                    "   encrypted, macOS asks for its passphrase.",
+                    "3. Copy what you need from that disk to your Mac, then eject the disk.",
+                    "",
+                    "In Terminal:  hdiutil attach -readonly \"NAME.dmg\"",
+                    ""]
+        case .sealedZip:
+            return ["TO OPEN A SEALED ZIP (.zip)",
+                    "",
+                    "1. Copy the .zip file to your Mac (the backup drive may not have room to unpack it).",
+                    "2. Double-click it. Archive Utility unpacks it into a folder beside it.",
+                    "",
+                    "In Terminal (keeps Finder tags and other Mac details):",
+                    "  ditto -x -k \"NAME.zip\" \"FOLDER TO UNPACK INTO\"",
+                    "",
+                    "On a computer that isn't a Mac, any unzip tool opens it; Mac-only details are",
+                    "kept in extra files starting with \"._\" that you can ignore.",
+                    ""]
+        case .liveMirror:
+            return ["TO OPEN A LIVE MIRROR (.sparsebundle)",
+                    "",
+                    "1. Double-click the .sparsebundle in the library's folder. It opens as a disk. If",
+                    "   it is encrypted, macOS asks for its passphrase.",
+                    "2. On that disk, the folder named after the library is the backup. Copy what you",
+                    "   need to your Mac, then eject the disk. Ignore a folder named .cryoframe-staging",
+                    "   if there is one: it is an unfinished update.",
+                    "",
+                    "Don't change anything on that disk or inside the .sparsebundle: that is the backup.",
+                    "In Terminal, to open it read-only:  hdiutil attach -readonly \"NAME.sparsebundle\"",
+                    ""]
+        }
+    }
+
+    /// How to join a split archive's parts, for archives of `formats` split into parts.
+    public static func splitSteps(_ formats: Set<ArchiveFormat>) -> [String] {
+        let ext = formats == [.sealedZip] ? "zip" : formats == [.sealedDMG] ? "dmg" : "dmg (or .zip)"
+        let one = ext == "zip" ? "zip" : "dmg"
+        return ["SPLIT ARCHIVES",
+                "",
+                "A large archive for a cloud folder is split into parts named NAME.\(ext).part.000,",
+                "NAME.\(ext).part.001 and so on (or .part.aa, .part.ab). Join them into one file",
+                "first, in Terminal, in the version's folder, in order:",
+                "  ls \"NAME.\(one).part.\"* | sort -V | while IFS= read -r p; do cat \"$p\"; done > ~/Desktop/\"NAME.\(one)\"",
+                "(sort -V puts part 1000 after part 999; with fewer parts, cat \"NAME.\(one).part.\"* does the same.)",
+                "then open the joined file as above.",
+                ""]
+    }
+
+    /// what an encrypted backup needs, and where the recovery file comes in
+    public static let encryptedSteps: [String] = [
+        "ENCRYPTED BACKUPS",
+        "",
+        "An encrypted backup opens only with its passphrase, on any Mac. Nobody can open it",
+        "without the passphrase, Cryoframe included. If you exported a Cryoframe recovery",
+        "file, it holds every passphrase, locked with the master password you chose. The",
+        "recovery file is opened with Cryoframe, which is free and open source:",
+        "https://github.com/breed007/Cryoframe",
+        "",
+    ]
+
+    public static func formatName(_ f: ArchiveFormat) -> String {
         switch f {
         case .sealedDMG: return "sealed disk image (.dmg)"
         case .sealedZip: return "sealed zip (.zip)"
         case .liveMirror: return "live mirror (.sparsebundle)"
         }
     }
+}
+
+extension ArchiveFormat {
+    /// the order the note and the kit explain formats in
+    public static let noteOrder: [ArchiveFormat] = [.sealedDMG, .sealedZip, .liveMirror]
 }
