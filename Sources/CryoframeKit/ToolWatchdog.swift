@@ -36,6 +36,10 @@ public enum ToolWatchdog {
     static let termGrace: TimeInterval = 10
     static let abandonAfter: TimeInterval = 20
 
+    /// how long Stop waits for a step it lets finish (see ProcessCommandRunner.letsFinish)
+    /// before the run stops waiting for it. The watchdog still watches it meanwhile.
+    static let finishAfterStop: TimeInterval = 5 * 60
+
     /// the process group `pid` leads, if it leads one of its own: one this process
     /// isn't in, so signaling it can never reach Cryoframe itself. Foundation's
     /// Process starts every tool as the leader of a new group, which everything the
@@ -46,15 +50,27 @@ public enum ToolWatchdog {
         return pid > 1 && group == pid && group != getpgrp() ? group : nil
     }
 
-    /// CPU time (ns) and disk bytes read and written, for `pid` and every process
-    /// under it; nil if `pid` can't be read (it has exited)
-    static func activity(of pid: pid_t) -> (cpuNs: UInt64, io: UInt64)? {
+    /// CPU time (ns) and disk bytes read and written, for `pid`, every process under
+    /// it, and every process seen under it before that has since left (`known`, kept
+    /// by the caller: pid and start time, so a later process given the pid isn't
+    /// counted); nil if `pid` can't be read (it has exited).
+    ///
+    /// The ones that left count because hdiutil's work is done by a diskimages-helper it
+    /// starts, not by hdiutil itself (measured: 0.01 s of CPU for hdiutil over a 30 s
+    /// create). The helper runs under hdiutil while it works, until an attach hands it
+    /// to launchd (a group of its own, parent 1) while hdiutil still waits.
+    static func activity(of pid: pid_t, known: inout [pid_t: TimeInterval]) -> (cpuNs: UInt64, io: UInt64)? {
         guard let own = usage(pid) else { return nil }
         var cpu = own.cpuNs, io = own.io
         var stack = children(pid), seen = Set<pid_t>([pid])
+        for (p, started) in known {
+            guard let id = ProcessIdentity.of(pid: p), abs(id.startedAt - started) < 0.000_5 else { known[p] = nil; continue }
+            stack.append(p)
+        }
         while let child = stack.popLast(), seen.count < 512 {
             guard seen.insert(child).inserted, let u = usage(child) else { continue }
             cpu &+= u.cpuNs; io &+= u.io
+            if known[child] == nil, known.count < 512, let id = ProcessIdentity.of(pid: child) { known[child] = id.startedAt }
             stack += children(child)
         }
         return (cpu, io)
@@ -101,6 +117,8 @@ final class ToolWatch: @unchecked Sendable {
     private let process: Process
     private let limit: TimeInterval
     private let control: RunControl?
+    /// a step Stop and the watchdog never signal (see ProcessCommandRunner.letsFinish)
+    let letFinish: Bool
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let done = DispatchSemaphore(value: 0)
 
@@ -108,11 +126,12 @@ final class ToolWatch: @unchecked Sendable {
         var output: UInt64 = 0
         var stalledAfter: TimeInterval?
         var stoppedAt: TimeInterval?
+        var stopAskedAt: TimeInterval?
         var group: pid_t?
     }
 
-    init(_ process: Process, limit: TimeInterval, control: RunControl?) {
-        self.process = process; self.limit = limit; self.control = control
+    init(_ process: Process, limit: TimeInterval, control: RunControl?, letFinish: Bool = false) {
+        self.process = process; self.limit = limit; self.control = control; self.letFinish = letFinish
     }
 
     /// the tool printed `n` more bytes
@@ -124,6 +143,10 @@ final class ToolWatch: @unchecked Sendable {
     /// when (system uptime) the watchdog or Stop began stopping the tool; nil if
     /// neither has
     var stoppedAt: TimeInterval? { state.withLock { $0.stoppedAt } }
+
+    /// when (system uptime) Stop was pressed during a step it lets finish; nil if it
+    /// wasn't
+    var stopAskedAt: TimeInterval? { state.withLock { $0.stopAskedAt } }
 
     func start() {
         let pid = process.processIdentifier
@@ -137,11 +160,12 @@ final class ToolWatch: @unchecked Sendable {
             let clock = { ProcessInfo.processInfo.systemUptime }
             var quietSince = clock()
             var last = (cpu: UInt64(0), io: UInt64(0), output: UInt64(0))
-            if let a = ToolWatchdog.activity(of: pid) { last = (a.cpuNs, a.io, 0) }
+            var known: [pid_t: TimeInterval] = [:]
+            if let a = ToolWatchdog.activity(of: pid, known: &known) { last = (a.cpuNs, a.io, 0) }
             while done.wait(timeout: .now() + tick) == .timedOut {
                 guard process.isRunning, stoppedAt == nil else { return }      // ended, or Stop is ending it
                 let output = state.withLock { $0.output }
-                let now = ToolWatchdog.activity(of: pid)
+                let now = ToolWatchdog.activity(of: pid, known: &known)
                 let cpu = now?.cpuNs ?? last.cpu, io = now?.io ?? last.io
                 // Paused on purpose (its processes are stopped), or moving: not quiet.
                 // CPU counts once it has added up to more than noise since the last
@@ -155,7 +179,9 @@ final class ToolWatch: @unchecked Sendable {
                 let quiet = clock() - quietSince
                 guard quiet >= limit else { continue }
                 guard begin(stalledAfter: quiet) else { return }
-                stop(pid, group: group)
+                // one let finish is only given up on: signaled, it leaves its image
+                // attached anyway, with no record of whose it is
+                if !letFinish { stop(pid, group: group) }
                 return
             }
         }
@@ -167,7 +193,15 @@ final class ToolWatch: @unchecked Sendable {
     /// Stop was pressed: end the tool the way the watchdog does (see stop), on a
     /// thread of its own, so Stop returns at once. Its run waits for the tool's output
     /// no longer than it does for a tool the watchdog stopped.
+    ///
+    /// A step Stop lets finish is left running, and only noted; its run waits for it
+    /// (see ProcessCommandRunner.run).
     func stopForCancel() {
+        if letFinish {
+            let at = ProcessInfo.processInfo.systemUptime
+            state.withLock { if $0.stopAskedAt == nil { $0.stopAskedAt = at } }
+            return
+        }
         guard begin(stalledAfter: nil) else { return }
         let pid = process.processIdentifier, group = state.withLock { $0.group }
         Thread.detachNewThread { [self] in stop(pid, group: group) }

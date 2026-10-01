@@ -9,7 +9,13 @@
 
 import Foundation
 
-public struct CancelledError: Error { public init() {} }
+public struct CancelledError: Error {
+    /// what a step Stop let finish printed (see ProcessCommandRunner.letsFinish): an
+    /// attach that went on to succeed, whose disk the caller's cleanup records and
+    /// detaches. nil when nothing was let finish.
+    public let finished: CommandResult?
+    public init(finished: CommandResult? = nil) { self.finished = finished }
+}
 
 /// live progress for the UI. `fraction` is 0…1 within the current library when
 /// known (archive bytes vs source, or transfer parts done), nil when indeterminate.
@@ -49,6 +55,9 @@ public final class RunControl: @unchecked Sendable {
     /// group gets SIGTERM, then SIGCONT so a paused one handles it, then SIGKILL after
     /// the grace period), so nothing it started is left running, and the run waits for
     /// its output no longer than for a stalled tool. Returns at once.
+    ///
+    /// Except a step that can't be stopped part way (an attach: see
+    /// ProcessCommandRunner.letsFinish), which is let finish, and then cleaned up.
     public func cancel() {
         lock.lock(); cancelled = true; paused = false; let w = watch; lock.unlock()
         w?.stopForCancel()

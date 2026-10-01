@@ -127,6 +127,35 @@ public extension CommandRunner {
         stderr.localizedCaseInsensitiveContains("resource temporarily unavailable")
     }
 
+    /// Steps that Stop and the watchdog never signal. Stop lets one finish (for up to
+    /// ToolWatchdog.finishAfterStop) and the run then stops, handing back what it
+    /// printed (CancelledError.finished), so whatever it attached is recorded and then
+    /// detached by the caller's cleanup. A stalled one is only given up on.
+    ///
+    ///   - An attach. Its work is done by a diskimages-helper that ending hdiutil
+    ///     doesn't end (measured on macOS 26.7): on SIGTERM hdiutil finishes the attach,
+    ///     and on SIGKILL the image is attached and mounted anyway a moment later. That
+    ///     attach is nobody's on record, and blocks the next run of the mirror.
+    ///   - The making of an empty image (a mirror's first run). Stopped in its first
+    ///     half second, by SIGTERM or SIGKILL, it leaves an image with no file system,
+    ///     which every later run then failed to attach (measured). It takes about a
+    ///     second.
+    ///
+    /// Making an image from a folder (create -srcfolder) is still stopped, as it can
+    /// take an hour: on SIGTERM hdiutil cancels it and removes what it wrote, and a
+    /// SIGKILL leaves a partial file that won't open, in a folder with no manifest, which
+    /// the next run sweeps (measured, no device left attached either way). So is a
+    /// resize: killed part way, the image was left at either size, attachable, with
+    /// nothing attached.
+    static func letsFinish(_ launchPath: String, _ args: [String]) -> Bool {
+        guard (launchPath as NSString).lastPathComponent == "hdiutil" else { return false }
+        switch args.first {
+        case "attach": return true
+        case "create": return !args.contains("-srcfolder")
+        default: return false
+        }
+    }
+
     static func isAttach(_ launchPath: String, _ args: [String]) -> Bool {
         (launchPath as NSString).lastPathComponent == "hdiutil" && args.first == "attach"
     }
@@ -184,7 +213,8 @@ public struct ProcessCommandRunner: CommandRunner {
         control?.waitWhilePaused()                  // don't launch the next command while paused
         if let control, !control.attach(p) { throw CancelledError() }
         try p.run()
-        let watch = ToolWatch(p, limit: quietLimit, control: control)
+        let letFinish = Self.letsFinish(launchPath, args)
+        let watch = ToolWatch(p, limit: quietLimit, control: control, letFinish: letFinish)
         watch.start()
         if let control, !control.watching(watch) { watch.stopForCancel() }     // Stop came as it launched
         if let inPipe, let stdin {                  // feed the passphrase, then EOF
@@ -221,15 +251,25 @@ public struct ProcessCommandRunner: CommandRunner {
         // stopped it, not much longer: a process stuck inside the kernel on a share
         // that stopped answering can't be killed until the kernel lets go, and the run
         // has cleanup to do.
+        // A step Stop lets finish is waited for, up to a bound (a drive gone dead under
+        // it never lets it finish).
         let patience = ToolWatchdog.termGrace + ToolWatchdog.abandonAfter
+        var gaveUp = false
         while drained.wait(timeout: .now() + 1) == .timedOut {
-            if let stoppedAt = watch.stoppedAt, ProcessInfo.processInfo.systemUptime - stoppedAt > patience { break }
+            let now = ProcessInfo.processInfo.systemUptime
+            if let stoppedAt = watch.stoppedAt, now - stoppedAt > patience { break }
+            if let asked = watch.stopAskedAt, now - asked > ToolWatchdog.finishAfterStop { gaveUp = true; break }
         }
         watch.finish()
         // not waitUntilExit: see ProcessWait
-        let status = watch.stoppedAt == nil ? p.waitForExit() : p.waitForExit(giveUpAfter: patience)
+        let status = gaveUp ? p.waitForExit(giveUpAfter: 0)
+            : watch.stoppedAt == nil ? p.waitForExit() : p.waitForExit(giveUpAfter: patience)
         control?.detach()
-        if control?.isCancelled == true { throw CancelledError() }
+        if control?.isCancelled == true {
+            guard letFinish, !gaveUp, watch.stoppedAt == nil else { throw CancelledError() }
+            throw CancelledError(finished: CommandResult(status: status, stdout: String(decoding: outData.data, as: UTF8.self),
+                                                         stderr: String(decoding: errData.data, as: UTF8.self)))
+        }
         if let quiet = watch.stalledAfter { throw ToolStalled(tool: (launchPath as NSString).lastPathComponent, quiet: quiet) }
         return CommandResult(
             status: status,

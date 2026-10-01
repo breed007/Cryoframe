@@ -224,6 +224,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                 }
             }
             guard attached?.ok == true, MountPoint.isMounted(mnt) else {
+                if runner.control?.isCancelled == true { throw CancelledError() }      // detached below
                 throw MirrorCopyError.couldNotConfirm(attached?.stderr.trimmingCharacters(in: .whitespacesAndNewlines) ?? "it wouldn't attach")
             }
         }
@@ -357,6 +358,11 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                     try AttachRecords.recording(bundle, sparing: before, mountedAt: mountpoint, runner: teardown) {
                         try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
                     }
+                } catch let stop as CancelledError {
+                    // Stop let the attach finish (see ProcessCommandRunner.letsFinish);
+                    // mounted read-write, the image has changed, and is detached below
+                    if MountPoint.isMounted(mountpoint) { touched = true }
+                    throw stop
                 } catch {
                     try MirrorMounts.refuseIfOpen(bundle, except: mountpoint, runner: teardown)   // opened elsewhere meanwhile
                     throw error

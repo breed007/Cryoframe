@@ -178,8 +178,9 @@ public struct ArchiveReader: Sendable {
             }
         } catch {
             // may be a no-op; cheap either way. A failed attach's own devices were
-            // detached as it failed (see ImageLock.attaching).
-            if let mnt = mountPoint { Self.detach(mnt, runner: teardown) }
+            // detached as it failed (see ImageLock.attaching). Mounted on another
+            // program's disk (an attach Stop let finish), it is only unmounted.
+            if let mnt = mountPoint { Self.close(mnt, borrowed: OpenedArchive.isBorrowed(work), runner: teardown) }
             OpenedArchive.removeWork(work)
             throw error
         }
@@ -225,6 +226,13 @@ public struct ArchiveReader: Sendable {
                         try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
                     }
                 }
+            } catch let stop as CancelledError {
+                // Stop let the attach finish: open's cleanup closes what it mounted,
+                // detaching this attach's own disk, only unmounting the holder's
+                if let device = MountPoint.device(at: mnt), !before.contains(device) {
+                    try? FileManager.default.removeItem(at: mark)
+                }
+                throw stop
             } catch {
                 try MirrorMounts.refuseIfOpen(image, except: mnt, runner: look)   // opened by someone else meanwhile
                 // a system process scanning a fresh image holds it for a while and

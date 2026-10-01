@@ -195,7 +195,17 @@ enum AttachRecords {
                              owner: ProcessIdentity? = .current, in base: URL = MirrorMounts.defaultBase,
                              _ attach: () throws -> T) rethrows -> T {
         let since = Date().timeIntervalSince1970
-        let result = try attach()
+        let result: T
+        do {
+            result = try attach()
+        } catch let stop as CancelledError {
+            // Stop let the attach finish (see ProcessCommandRunner.letsFinish): recorded
+            // like any other, until the caller's cleanup detaches it
+            if let done = stop.finished, let device = attachedDevice(done, mountedAt: mnt) {
+                record(image, device: device, since: since, sparing: before, runner: runner, owner: owner, in: base)
+            }
+            throw stop
+        }
         if let device = attachedDevice(result, mountedAt: mnt) {
             record(image, device: device, since: since, sparing: before, runner: runner, owner: owner, in: base)
         }
