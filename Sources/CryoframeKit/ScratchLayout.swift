@@ -76,6 +76,22 @@ public enum ScratchLayout {
         try Data(markText(jobID).utf8).write(to: jobDir.appendingPathComponent(markName), options: .atomic)
     }
 
+    /// What 1.5 left in a scratch location chosen in Settings, and what it takes on
+    /// disk. 1.5 built in the chosen folder itself (`<chosen>/<job>/build`), unmarked,
+    /// so nothing removes those folders (see the top); Settings shows them, to be
+    /// deleted by hand. Only a real folder named for a job (a UUID), holding a real
+    /// `build` folder and no mark, counts.
+    public static func oneFiveLeftovers(inChosen chosen: URL) -> (folders: [URL], bytes: UInt64) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: chosen.path)) ?? []
+        let folders = names.sorted().compactMap { name -> URL? in
+            let dir = chosen.appendingPathComponent(name, isDirectory: true)
+            guard UUID(uuidString: name) != nil, isRealFolder(dir), isRealFolder(dir.appendingPathComponent("build")),
+                  !isOurs(dir, jobID: name) else { return nil }
+            return dir
+        }
+        return (folders, RestoreRoom.bytes(of: folders))
+    }
+
     /// The job folder's `build`, if empty, then the folder itself if it holds nothing
     /// but its mark. Only for a folder of Cryoframe's (see `isOurs`).
     static func tidy(jobDir: URL) {

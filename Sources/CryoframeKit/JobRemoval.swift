@@ -10,9 +10,10 @@
 //  passphrase stays in the Keychain, or an encrypted job's backups would stop
 //  opening the moment it was deleted. What goes is the job itself (its schedule, its
 //  last run, its destinations' last copies), its interrupted uploads' records and
-//  the copies staged locally for them. The parts an upload already put on a
-//  destination stay there without a manifest: Restore can't read them and nothing
-//  tidies them up, so the confirmation names them, and where they are.
+//  the copies staged locally for them, 1.5's among them. The parts an upload
+//  already put on a destination stay there without a manifest: Restore can't read
+//  them and nothing tidies them up, so the confirmation names them, and where they
+//  are.
 //
 //  Delete used to stop the job's run and delete at once. The run was then still
 //  tearing down (its snapshot, its mounts, its half-written version) while the job
@@ -50,6 +51,9 @@ public enum JobRemoval {
         public var unfinished: [Unfinished]
         /// the local folder holding the job's staged copies, removed (nil: none)
         public var staged: URL?
+        /// archives 1.5 staged for the job's interrupted uploads, outside any folder
+        /// of Cryoframe's, removed (see `oneFiveStaged`)
+        public var stagedArchives: [URL] = []
         /// the job's passphrase stays in the Keychain
         public var encrypted: Bool
     }
@@ -97,7 +101,38 @@ public enum JobRemoval {
         }.sorted { $0.dir.path < $1.dir.path }
         let staged = stagedFolder(job.id, scratchBase: scratchBase).flatMap { ScratchLayout.isOurs($0, jobID: job.id) ? $0 : nil }
         return Plan(jobID: job.id, jobName: job.name, places: places, unfinished: unfinished,
-                    staged: staged, encrypted: job.encrypted)
+                    staged: staged, stagedArchives: oneFiveStaged(job.id, pending: pending.all(), scratchBase: scratchBase),
+                    encrypted: job.encrypted)
+    }
+
+    /// The archives 1.5 staged for `jobID`'s interrupted uploads, as the job's own
+    /// records name them. 1.5 built in the scratch location itself, unmarked
+    /// (`<location>/<job>/build/<library>/<archive>`), so no sweep will ever take
+    /// them (see ScratchLayout); once the job and its records are gone, nothing else
+    /// names them either. Only what is exactly there counts: a regular .dmg or .zip,
+    /// every folder on the way a real folder, in the scratch location Cryoframe
+    /// builds in now or the one it holds (a chosen location's), and not inside a
+    /// folder of Cryoframe's (which goes whole).
+    static func oneFiveStaged(_ jobID: String, pending: [PendingTransfer], scratchBase: URL) -> [URL] {
+        var bases = [scratchBase]
+        if scratchBase.lastPathComponent == ScratchLayout.folderName { bases.append(scratchBase.deletingLastPathComponent()) }
+        var out: [URL] = []
+        for p in pending where p.owningJobID == jobID {
+            let file = URL(fileURLWithPath: p.sourceFile)
+            let parts = file.pathComponents
+            guard p.sourceFile.hasPrefix("/"), !parts.contains("."), !parts.contains(".."),
+                  ["dmg", "zip"].contains(file.pathExtension.lowercased()) else { continue }
+            let library = file.deletingLastPathComponent(), build = library.deletingLastPathComponent()
+            let jobDir = build.deletingLastPathComponent()
+            guard build.lastPathComponent == "build",
+                  bases.contains(where: { stagedFolder(jobID, scratchBase: $0)?.path == jobDir.path }),
+                  !ScratchLayout.isOurs(jobDir, jobID: jobID),
+                  [jobDir, build, library].allSatisfy(ScratchLayout.isRealFolder) else { continue }
+            var st = stat()
+            guard lstat(file.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG, !out.contains(file) else { continue }
+            out.append(file)
+        }
+        return out.sorted { $0.path < $1.path }
     }
 
     /// Delete `job`, if it isn't in use and deleting it still does what `expected`
@@ -126,6 +161,15 @@ public enum JobRemoval {
         // scratch location chosen in Settings carries no mark, and stays
         if let staged = stagedFolder(job.id, scratchBase: scratchBase), ScratchLayout.isOurs(staged, jobID: job.id) {
             try? FileManager.default.removeItem(at: staged)
+        }
+        // what 1.5 staged for it, each file only, and the folders that then hold nothing
+        for file in now.stagedArchives {
+            var st = stat()
+            guard lstat(file.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG, unlink(file.path) == 0 else { continue }
+            let library = file.deletingLastPathComponent()
+            for dir in [library, library.deletingLastPathComponent(), library.deletingLastPathComponent().deletingLastPathComponent()] {
+                guard rmdir(dir.path) == 0 else { break }
+            }
         }
         store.update { s in
             s.jobs.removeAll { $0.id == job.id }

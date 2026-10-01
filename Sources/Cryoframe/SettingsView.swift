@@ -29,6 +29,8 @@ private struct TransferSettings: View {
     @AppStorage(Prefs.transferChunkValue) private var chunkValue = 2
     @AppStorage(Prefs.transferChunkUnit) private var chunkUnit = "GB"
     @AppStorage(Prefs.scratchDir) private var scratchDir = ""
+    /// what 1.5 left in the chosen scratch location (see ScratchLayout.oneFiveLeftovers)
+    @State private var leftovers: (folders: [URL], bytes: UInt64) = ([], 0)
 
     var body: some View {
         Form {
@@ -58,6 +60,15 @@ private struct TransferSettings: View {
                     Button("Change…") { chooseScratch() }
                     if !scratchDir.isEmpty { Button("Reset") { scratchDir = "" } }
                 }
+                if !leftovers.folders.isEmpty {
+                    HStack {
+                        let n = leftovers.folders.count
+                        Text("An earlier version of Cryoframe left \(n) build folder\(n == 1 ? "" : "s") here (\(ByteCountFormatter.string(fromByteCount: Int64(clamping: leftovers.bytes), countStyle: .file))). \(n == 1 ? "It isn't" : "They aren't") removed automatically; delete \(n == 1 ? "it" : "them") when you like.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(leftovers.folders) }
+                    }
+                }
             } header: {
                 Text("Resumable transfers")
             } footer: {
@@ -66,6 +77,11 @@ private struct TransferSettings: View {
             }
         }
         .formStyle(.grouped)
+        .task(id: scratchDir) {
+            let dir = scratchDir
+            leftovers = dir.isEmpty ? ([], 0)
+                : await Task.detached { ScratchLayout.oneFiveLeftovers(inChosen: URL(fileURLWithPath: dir, isDirectory: true)) }.value
+        }
     }
 
     private func chooseScratch() {

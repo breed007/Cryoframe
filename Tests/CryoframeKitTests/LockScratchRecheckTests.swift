@@ -225,10 +225,8 @@ private func archiveIn(_ dest: URL) throws -> RestorableArchive {
         #expect(pending.all().isEmpty)
         // the sweep can't reach it either: not in Cryoframe Scratch, and unmarked
         JobExecutor.sweepOrphanedScratch(scratchBase: root, pendingStore: pending, knownJobIDs: [job.id])
-        withKnownIssue("a 1.5 staged archive named by the deleted job's own transfer record is left, unshown, for good") {
-            #expect(plan.staged != nil, "the confirmation doesn't mention the staged archive")
-            #expect(!exists(staged), "the staged archive outlived its job and its transfer record")
-        }
+        #expect(plan.stagedArchives == [staged], "the confirmation doesn't mention the staged archive")
+        #expect(!exists(staged), "the staged archive outlived its job and its transfer record")
     }
 
     // MARK: marks that aren't what they seem

@@ -36,6 +36,7 @@ struct JobDeleteSheet: View {
                         ForEach(Array(plan.places.enumerated()), id: \.offset) { _, place in placeBlock(place) }
                         if plan.encrypted { encryptedBlock }
                         ForEach(Array(plan.unfinished.enumerated()), id: \.offset) { _, u in unfinishedBlock(u) }
+                        if !plan.stagedArchives.isEmpty { stagedBlock(plan.stagedArchives) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -119,6 +120,18 @@ struct JobDeleteSheet: View {
             Text("\(size(u.bytesReached)) of \(size(u.totalBytes)) reached \(u.destination). Restore can't read those parts, and nothing cleans them up once the job is gone; delete the folder yourself when you like.")
                 .font(.caption).fixedSize(horizontal: false, vertical: true)
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([u.dir]) }.buttonStyle(.link).font(.caption)
+        }
+    }
+
+    /// archives an earlier version built for its interrupted uploads, which go with it
+    private func stagedBlock(_ files: [URL]) -> some View {
+        let bytes = files.reduce(UInt64(0)) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size]) as? UInt64 ?? 0) }
+        let n = files.count
+        return VStack(alignment: .leading, spacing: 3) {
+            Label("\(n) archive\(n == 1 ? "" : "s") waiting to upload", systemImage: "trash").font(.callout.weight(.semibold))
+            Text("An earlier version of Cryoframe built \(n == 1 ? "this archive" : "these archives") (\(size(bytes))) for the interrupted upload\(n == 1 ? "" : "s") in your scratch location. \(n == 1 ? "It is" : "They are") deleted with the job.")
+                .font(.caption).fixedSize(horizontal: false, vertical: true)
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(files) }.buttonStyle(.link).font(.caption)
         }
     }
 

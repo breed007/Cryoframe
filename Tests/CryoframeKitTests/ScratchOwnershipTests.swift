@@ -170,6 +170,70 @@ private func mountedImage(_ image: URL, at mnt: URL, size: String = "40m", fs: S
         #expect(exists(copy), "deleting the job removed an unmarked folder")
     }
 
+    // Deleting a job removes a 1.5 staged archive only where 1.5 staged it, named by
+    // the job's own record: never a file another job's record names, one outside the
+    // job's folder or reached through a link or "..", or what isn't an archive, and
+    // nothing beside it.
+    @Test func deletingAJobRemovesOnlyTheOneFiveArchivesItsOwnRecordsName() throws {
+        let base = folder("records")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let chosen = base.appendingPathComponent("Developer")
+        let root = ScratchLayout.root(inChosen: chosen)
+        let job = BackupJob(name: "Photos", libraries: [], target: .localVolume(id: "d", name: "D", dir: base.appendingPathComponent("dest")),
+                            format: .sealedDMG, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+        let other = UUID().uuidString
+        let mine = chosen.appendingPathComponent("\(job.id)/build/photos/Photos.dmg")
+        let beside = chosen.appendingPathComponent("\(job.id)/build/photos/notes.txt")
+        let othersArchive = chosen.appendingPathComponent("\(other)/build/photos/Photos.dmg")
+        let project = chosen.appendingPathComponent("MyApp/build/Release/MyApp.dmg")
+        let text = chosen.appendingPathComponent("\(job.id)/build/notes/notes.txt")
+        let elsewhere = base.appendingPathComponent("elsewhere/Linked.dmg")
+        for f in [mine, beside, othersArchive, project, text, elsewhere] { try write("x", f) }
+        try FileManager.default.createSymbolicLink(at: chosen.appendingPathComponent("\(job.id)/build/linked"),
+                                                   withDestinationURL: elsewhere.deletingLastPathComponent())
+        let pending = PendingTransferStore(url: base.appendingPathComponent("pending.json"))
+        func record(_ owner: String, _ lib: String, _ path: String) {
+            pending.save(PendingTransfer(jobID: "\(owner):nas:\(lib)", sourceFile: path, baseName: "x.dmg", totalBytes: 1, chunkSize: 1,
+                                         targetDir: base.appendingPathComponent("nas/\(lib)").path, format: .sealedDMG))
+        }
+        record(job.id, "photos", mine.path)
+        record(job.id, "project", project.path)
+        record(job.id, "notes", text.path)
+        record(job.id, "linked", chosen.appendingPathComponent("\(job.id)/build/linked/Linked.dmg").path)
+        record(job.id, "dots", chosen.appendingPathComponent("\(job.id)/build/photos/../../../MyApp/build/Release/MyApp.dmg").path)
+        record(other, "photos", othersArchive.path)
+        let store = JobStore(url: base.appendingPathComponent("jobs.json"))
+        store.update { $0.jobs = [job] }
+        let plan = JobRemoval.plan(for: job, pending: pending, scratchBase: root, volumes: FixedVolumeTable([]))
+        #expect(plan.stagedArchives == [mine], "\(plan.stagedArchives)")
+        try JobRemoval.delete(job, expected: plan, store: store, pending: pending, scratchBase: root,
+                              locks: RunLocks(directory: base.appendingPathComponent("locks")), volumes: FixedVolumeTable([]))
+        #expect(!exists(mine))
+        for f in [beside, othersArchive, project, text, elsewhere] { #expect(exists(f), "\(f.path) was deleted") }
+    }
+
+    // Settings shows what 1.5 left in a chosen scratch location: job folders with a
+    // build inside, never a project's folder, Cryoframe Scratch, a marked job folder
+    // or a link to one.
+    @Test func theOneFiveLeftoversInAChosenFolderAreFoundAndSized() throws {
+        let base = folder("leftovers")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let chosen = base.appendingPathComponent("Developer")
+        let old = UUID().uuidString, marked = UUID().uuidString, noBuild = UUID().uuidString
+        try write(String(repeating: "x", count: 10_000), chosen.appendingPathComponent("\(old)/build/photos/Photos.dmg"))
+        try write("x", chosen.appendingPathComponent("MyApp/build/Release/MyApp"))
+        try write("x", chosen.appendingPathComponent("\(noBuild)/notes.txt"))
+        try write("x", ScratchLayout.root(inChosen: chosen).appendingPathComponent("\(UUID().uuidString)/build/a/A.zip"))
+        try write("x", chosen.appendingPathComponent("\(marked)/build/a/A.zip"))
+        try ScratchLayout.claim(libraryDir: chosen.appendingPathComponent("\(marked)/build/a"))
+        try FileManager.default.createSymbolicLink(at: chosen.appendingPathComponent(UUID().uuidString),
+                                                   withDestinationURL: chosen.appendingPathComponent(old))
+        let found = ScratchLayout.oneFiveLeftovers(inChosen: chosen)
+        #expect(found.folders.map(\.lastPathComponent) == [old], "\(found.folders)")
+        #expect(found.bytes >= 10_000)
+        #expect(ScratchLayout.oneFiveLeftovers(inChosen: base.appendingPathComponent("missing")).folders.isEmpty)
+    }
+
     // The temp folder's sweep takes only folders named as the reader names them
     // (`cf-open-<UUID>`, `cf-mirror-<UUID>`), and never a link.
     @Test func theOpenArchiveSweepTakesOnlyCryoframesWorkFolders() throws {
