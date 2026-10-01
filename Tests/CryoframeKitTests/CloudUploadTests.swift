@@ -105,15 +105,31 @@ private func probe(_ answer: @escaping @Sendable (URL) -> FileUpload, timeout: T
         let dest = folder("parts"); defer { try? FileManager.default.removeItem(at: dest) }
         let notes = lib("n", "Notes"), job = cloudJob([notes], dest: dest)
         let at = try version(job, notes, dest: dest, stamp: "2026-09-01-020000")
-        let archive = try #require(RestoreDiscovery.archive(at: at))
-        #expect(Set(UploadProbe.files(of: archive).map(\.lastPathComponent))
-                == ["Notes.zip", ArchiveManifest.sidecarName, ContentsListing.plainName])
+        try Data().write(to: at.appendingPathComponent(".DS_Store"))
+        #expect(Set(try #require(UploadProbe.files(inVersion: at)).map(\.lastPathComponent))
+                == ["Notes.zip", ArchiveManifest.sidecarName, ContentsListing.plainName], "hidden files count")
+        #expect(UploadProbe.files(inVersion: at.appendingPathComponent("nope")) == nil)
         // the archive itself evicted, its manifest and list still here: not uploaded
-        let p = probe { $0.pathExtension == "zip" ? .status(.uploaded) : .status(.unknown(nil)) }
+        final class Asked: @unchecked Sendable { var names: Set<String> = []; let lock = NSLock() }
+        let asked = Asked()
+        let p = probe { url in
+            asked.lock.withLock { _ = asked.names.insert(url.lastPathComponent) }
+            return url.pathExtension == "zip" ? .status(.uploaded) : .status(.unknown(nil))
+        }
         let ledger = UploadLedger(url: dest.deletingLastPathComponent().appendingPathComponent("up-\(UUID()).json"))
         defer { try? FileManager.default.removeItem(at: ledger.fileURL) }
         #expect(UploadCheck(ledger: ledger, probe: p).rescan(job: job, target: job.target, now: now) == .unknown(nil))
+        #expect(asked.lock.withLock { asked.names } == ["Notes.zip", ArchiveManifest.sidecarName, ContentsListing.plainName])
+        // a version folder without its manifest is never uploaded, whatever its files say
+        let bare = at.deletingLastPathComponent().appendingPathComponent("2026-09-02-020000")
+        try FileManager.default.createDirectory(at: bare, withIntermediateDirectories: true)
+        try Data("z".utf8).write(to: bare.appendingPathComponent("Notes.zip"))
+        let key = DestinationKey(jobID: job.id, targetID: job.target.id)
+        ledger.record([UploadEntry(version: bare.path, runAt: now)], for: key)
         let all = probe { _ in .status(.uploaded) }
+        _ = UploadCheck(ledger: ledger, probe: all).refresh(job: job, target: job.target, now: now)
+        #expect(ledger.destination(key)?.entries.map(\.version) == [bare.path])
+        try FileManager.default.removeItem(at: bare)
         #expect(UploadCheck(ledger: ledger, probe: all).rescan(job: job, target: job.target, now: now) == .uploaded)
     }
 

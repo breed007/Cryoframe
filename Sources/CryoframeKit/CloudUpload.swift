@@ -108,12 +108,16 @@ public struct UploadProbe: Sendable {
         return .unknown(nil)
     }
 
-    /// the files a version's upload is judged on
-    public static func files(of archive: RestorableArchive) -> [URL] {
-        var out = archive.archiveResult().artifacts
-        out.append(archive.dir.appendingPathComponent(ArchiveManifest.sidecarName))
-        if let list = archive.contents { out.append(archive.dir.appendingPathComponent(list.name)) }
-        return out
+    /// The files a version's upload is judged on: everything in its folder but hidden
+    /// files (its artifacts or their parts, its manifest, its file list). Found by
+    /// listing the folder, not by reading the manifest: reading an evicted manifest
+    /// would bring it back down, and the look would undo what it looks for. nil: the
+    /// folder is gone.
+    public static func files(inVersion dir: URL) -> [URL]? {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.filter { !$0.hasPrefix(".") }.sorted().map { dir.appendingPathComponent($0) }
     }
 
     /// what macOS says about a file, believed only as far as the allowlist goes
@@ -353,13 +357,7 @@ public struct UploadCheck: Sendable {
         var stalled = false
         var found: [String: UploadStatus?] = [:]
         for e in d.entries {
-            let dir = URL(fileURLWithPath: e.version)
-            guard let archive = RestoreDiscovery.archive(at: dir) else {
-                // no manifest: gone, unless the folder is still there and couldn't be read
-                found.updateValue(FileManager.default.fileExists(atPath: dir.path) ? .unknown(nil) : nil, forKey: e.version)
-                continue
-            }
-            found.updateValue(look(archive, provider: provider, stalled: &stalled), forKey: e.version)
+            found.updateValue(look(URL(fileURLWithPath: e.version), provider: provider, stalled: &stalled), forKey: e.version)
         }
         ledger.apply(found, for: key, at: now)
         return UploadSummary.of(ledger.destination(key), now: now)
@@ -371,17 +369,29 @@ public struct UploadCheck: Sendable {
         let key = DestinationKey(jobID: job.id, targetID: target.id)
         if let away = Self.folderAway(target) { return away }
         let provider = target.cloudProvider ?? CloudProvider.identify(target.destinationDir)
+        // Finding the job's versions reads their manifests, as every run does (its
+        // recovery note and retention read every manifest there), so an evicted
+        // manifest comes back down here as it would at the next run.
         let versions = job.libraries.flatMap { LibraryFolders.archives(job: job, library: $0, in: target.destinationDir) }
             .filter { $0.version != nil }
         var stalled = false
         var unconfirmed: [UploadEntry] = []
         var confirmed = 0
         for v in versions {
-            guard let status = look(v, provider: provider, stalled: &stalled) else { continue }    // gone
+            guard let status = look(v.dir, provider: provider, stalled: &stalled) else { continue }    // gone
             if status == .uploaded { confirmed += 1; continue }
             unconfirmed.append(UploadEntry(version: v.dir.path, runAt: v.version ?? now, status: status))
         }
-        ledger.replace(with: unconfirmed, confirmed: confirmed, looked: Set(versions.map(\.dir.path)), for: key, at: now)
+        let looked = Set(versions.map(\.dir.path))
+        ledger.replace(with: unconfirmed, confirmed: confirmed, looked: looked, for: key, at: now)
+        // what the record holds that the scan didn't find (a run's, recorded since it
+        // began, or a folder the job no longer reads): looked at on its own, so one
+        // that is gone doesn't stay
+        var found: [String: UploadStatus?] = [:]
+        for e in ledger.destination(key)?.entries ?? [] where !looked.contains(e.version) {
+            found.updateValue(look(URL(fileURLWithPath: e.version), provider: provider, stalled: &stalled), forKey: e.version)
+        }
+        if !found.isEmpty { ledger.apply(found, for: key, at: now) }
         return UploadSummary.of(ledger.destination(key), now: now)
     }
 
@@ -398,9 +408,13 @@ public struct UploadCheck: Sendable {
 
     /// One version's state. After one file goes unanswered, the provider is taken to
     /// be stuck and the rest of this look is "can't tell" without asking. nil: gone.
-    private func look(_ archive: RestorableArchive, provider: CloudProvider, stalled: inout Bool) -> UploadStatus? {
+    /// A folder without its manifest isn't a whole version (being written, or being
+    /// deleted): "can't tell".
+    private func look(_ dir: URL, provider: CloudProvider, stalled: inout Bool) -> UploadStatus? {
+        guard let urls = UploadProbe.files(inVersion: dir) else { return nil }
+        guard urls.contains(where: { $0.lastPathComponent == ArchiveManifest.sidecarName }) else { return .unknown(nil) }
         var files: [FileUpload] = []
-        for url in UploadProbe.files(of: archive) {
+        for url in urls {
             if stalled { files.append(.status(.unknown(nil))); continue }
             let (f, timedOut) = probe.file(url, provider: provider)
             if timedOut { stalled = true }
