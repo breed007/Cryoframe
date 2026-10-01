@@ -152,7 +152,8 @@ import Foundation
 // On macOS 27 hdiutil prints a deprecation notice ahead of its real error. Someone
 // reading a failed run needs the error, not the notice, and never loses the error.
 @Test func hdiutilsDeprecationNoticeIsNotPartOfTheMessage() {
-    let notice = "hdiutil: WARNING: hdiutil is deprecated and will be removed in a future release; use `diskutil image` instead."
+    // as macOS 27 prints it
+    let notice = "hdiutil: WARNING: 'hdiutil attach ...' is deprecated. Please use 'diskutil image attach ...' instead."
     let real = "hdiutil: attach failed - Resource busy"
     #expect(ProcessCommandRunner.meaningful("\(notice)\n\(real)\n") == real)
     #expect(ProcessCommandRunner.meaningful("\(real)\n\(notice)\n") == real)
