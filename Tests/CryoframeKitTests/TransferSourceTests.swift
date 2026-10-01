@@ -28,7 +28,7 @@ private func firstPartOnly(_ p: PendingTransfer) -> PendingTransfer {
     return saved.pending
 }
 
-@Suite struct TransferSourceTests {
+@Suite(.serialized) struct TransferSourceTests {
     // A rebuilt archive of the very same size: the parts already sent don't match it
     // by their hashes, so the upload is dropped rather than finished as a mix.
     @Test func aSameSizedRebuiltArchiveIsNeverResumedInto() throws {
@@ -66,5 +66,46 @@ private func firstPartOnly(_ p: PendingTransfer) -> PendingTransfer {
         // a record from before the stamp: checked by the parts' hashes, and resumed
         pending.source = nil
         #expect(throws: Never.self) { try ChunkedShipper().ship(pending, persist: { _ in }) }
+    }
+
+    // A scratch drive mounted again gets another device number. The archive on it is
+    // still the same file, known as such without reading every part sent again.
+    @Test func theSameArchiveOnARemountedDriveIsStillItself() throws {
+        let work = scratch("remount")
+        let runner = ProcessCommandRunner()
+        func image(_ name: String) throws -> URL {
+            let dmg = work.appendingPathComponent("\(name).dmg")
+            let made = try runner.run("/usr/bin/hdiutil", ["create", "-size", "8m", "-fs", "HFS+", "-volname", name, dmg.path])
+            try #require(made.ok, "\(made.stderr)")
+            return dmg
+        }
+        func attach(_ dmg: URL, at mnt: URL) throws {
+            try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
+            let r = try DiskImageGate.serialized { try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach", dmg.path, "-mountpoint", mnt.path, "-nobrowse"]) }
+            try #require(r.ok && MountPoint.isMounted(mnt), "\(r.stderr)")
+        }
+        func stamp(_ file: URL) throws -> (SourceStamp?, dev_t) {
+            let h = try FileHandle(forReadingFrom: file)
+            defer { try? h.close() }
+            var st = stat()
+            _ = fstat(h.fileDescriptor, &st)
+            return (SourceStamp.of(h.fileDescriptor), st.st_dev)
+        }
+        let scratchDrive = try image("Scratch"), other = try image("Other")
+        let mnt = work.appendingPathComponent("scratch"), otherMnt = work.appendingPathComponent("other")
+        try attach(scratchDrive, at: mnt)
+        let file = mnt.appendingPathComponent("Papers.dmg")
+        try Data((0..<100_000).map { _ in UInt8.random(in: 0...255) }).write(to: file)
+        let (before, devBefore) = try stamp(file)
+        MountPoint.detach(mnt, runner: runner)
+        // another image takes the device the scratch drive had
+        try attach(other, at: otherMnt)
+        defer { MountPoint.detach(otherMnt, runner: runner) }
+        try attach(scratchDrive, at: mnt)
+        defer { MountPoint.detach(mnt, runner: runner) }
+        let (after, devAfter) = try stamp(file)
+        try #require(devBefore != devAfter, "mounted again on the same device: nothing to test")
+        #expect(before != nil && before?.volume != nil)
+        #expect(before == after, "the same file on a remounted drive is taken for another: \(String(describing: before)) vs \(String(describing: after))")
     }
 }

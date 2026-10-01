@@ -87,10 +87,13 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
     }
 }
 
-/// Which file a staged archive is: its file system, inode, size and last change.
-/// A rebuilt archive at the same path differs in at least one of them.
+/// Which file a staged archive is: its volume, inode, size and last change. A
+/// rebuilt archive at the same path differs in at least one of them. The volume is
+/// known by its UUID, not its device number: a scratch drive mounted again gets
+/// another device number, and the same file on it is still the same file.
 public struct SourceStamp: Codable, Sendable, Equatable {
-    public var device: Int64
+    /// the UUID of the volume it is on; nil for one that has none
+    public var volume: String?
     public var inode: UInt64
     public var size: UInt64
     /// seconds and nanoseconds of its last modification
@@ -101,8 +104,16 @@ public struct SourceStamp: Codable, Sendable, Equatable {
     static func of(_ fd: Int32) -> SourceStamp? {
         var st = stat()
         guard fstat(fd, &st) == 0 else { return nil }
-        return SourceStamp(device: Int64(st.st_dev), inode: UInt64(st.st_ino), size: UInt64(st.st_size),
+        return SourceStamp(volume: volumeUUID(fd), inode: UInt64(st.st_ino), size: UInt64(st.st_size),
                            modified: Int64(st.st_mtimespec.tv_sec), modifiedNanos: Int64(st.st_mtimespec.tv_nsec))
+    }
+
+    /// the UUID of the volume the file open at `fd` is on
+    static func volumeUUID(_ fd: Int32) -> String? {
+        var fs = statfs()
+        guard fstatfs(fd, &fs) == 0 else { return nil }
+        let mount = withUnsafeBytes(of: fs.f_mntonname) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        return (try? URL(fileURLWithPath: mount, isDirectory: true).resourceValues(forKeys: [.volumeUUIDStringKey]))?.volumeUUIDString
     }
 }
 
