@@ -40,16 +40,37 @@ public struct ContentsQuery: Sendable, Equatable {
             .precomposedStringWithCanonicalMapping
     }
 
-    /// whether `entry` matches
+    /// whether `entry` matches. An ASCII name (most of them) is compared where it
+    /// is, ignoring case; any other is folded first.
     public func matches(_ entry: ContentsEntry) -> Bool {
-        let subject = matchesPaths ? entry.path : entry.name
-        var bytes = Array(subject.utf8)
-        if bytes.allSatisfy({ $0 < 0x80 }) {
-            for i in bytes.indices where bytes[i] >= 0x41 && bytes[i] <= 0x5A { bytes[i] += 0x20 }
-        } else {
-            bytes = Array(Self.fold(subject).utf8)
+        var path = entry.path
+        let ascii: Bool? = path.withUTF8 { all in
+            var from = 0
+            if !matchesPaths, let slash = all.lastIndex(of: 0x2F) { from = slash + 1 }
+            let hay = UnsafeBufferPointer(rebasing: all[from...])
+            guard !hay.contains(where: { $0 >= 0x80 }) else { return nil }
+            return Self.containsIgnoringASCIICase(hay, folded)
         }
-        return Self.contains(bytes, folded)
+        if let ascii { return ascii }
+        return Self.contains(Array(Self.fold(matchesPaths ? entry.path : entry.name).utf8), folded)
+    }
+
+    static func containsIgnoringASCIICase(_ hay: UnsafeBufferPointer<UInt8>, _ needle: [UInt8]) -> Bool {
+        guard needle.count <= hay.count else { return false }
+        if needle.isEmpty { return true }
+        var start = 0
+        while start + needle.count <= hay.count {
+            var k = 0
+            while k < needle.count {
+                var c = hay[start + k]
+                if c >= 0x41 && c <= 0x5A { c += 0x20 }
+                if c != needle[k] { break }
+                k += 1
+            }
+            if k == needle.count { return true }
+            start += 1
+        }
+        return false
     }
 
     static func contains(_ hay: [UInt8], _ needle: [UInt8]) -> Bool {
@@ -175,7 +196,7 @@ public struct ContentsSearch: Sendable {
             parts.append("Not in the \(versions(clear)) with a complete file list.")
         }
         if unknown > 0 {
-            parts.append("\(versions(unknown).prefix(1).uppercased() + versions(unknown).dropFirst()) couldn't be searched by \(unknown == 1 ? "its" : "their") file list, so \(unknown == 1 ? "it" : "they") may still hold it: use Look inside… to check.")
+            parts.append("\(versions(unknown).prefix(1).uppercased() + versions(unknown).dropFirst()) couldn't be fully searched by \(unknown == 1 ? "its" : "their") file list, so \(unknown == 1 ? "it" : "they") may still hold it: use Look inside… to check.")
         }
         if unread > 0 {
             parts.append(stopped ? "Stopped before \(versions(unread)) were searched." : "\(versions(unread)) not searched yet.")
@@ -203,5 +224,22 @@ public enum ArchiveLayout {
     /// the item a list's `path` names, in an opened archive
     public static func item(_ path: String, in opened: URL, for archive: RestorableArchive) -> URL {
         libraryRoot(in: opened, for: archive).appendingPathComponent(path)
+    }
+
+    /// For the file browser opened at a match: the folders from `root` down to the
+    /// one holding `item`, each built on `root` as the browser goes into them, and the
+    /// item's name in the last. By name, not path: a folder's listing names its items
+    /// by their real path ("/private/var/…" for "/var/…"), never the one built here.
+    /// nil when `item` isn't under `root`. Packages are gone into too: a match can be
+    /// inside one.
+    public static func opening(at item: URL, under root: URL) -> (folders: [URL], name: String)? {
+        let top = root.standardizedFileURL.pathComponents, parts = item.standardizedFileURL.pathComponents
+        guard parts.count > top.count, Array(parts.prefix(top.count)) == top else { return nil }
+        var folders: [URL] = [], at = root
+        for name in parts.dropFirst(top.count).dropLast() {
+            at = at.appendingPathComponent(name, isDirectory: true)
+            folders.append(at)
+        }
+        return (folders, parts[parts.count - 1])
     }
 }

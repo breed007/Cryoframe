@@ -150,6 +150,10 @@ public enum RecoveryNote {
             "and compare the result with the \"sha256\" value for that file in the manifest.",
             "A live mirror's value covers the whole .sparsebundle and can't be checked with",
             "shasum; to check a mirror, open it and run First Aid on its disk in Disk Utility.",
+            "",
+            "A version's folder may also hold cryoframe-contents.jsonl.gz, or",
+            "cryoframe-contents.cflist if the backup is encrypted: the list of files in that",
+            "version, for Cryoframe's Find a File. A restore doesn't need it.",
             "")
 
         add("ENCRYPTED BACKUPS",

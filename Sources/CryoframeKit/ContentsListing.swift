@@ -45,7 +45,13 @@ public struct StagedContents: Sendable, Equatable {
 
 /// one item in a list
 public struct ContentsEntry: Sendable, Hashable {
-    public enum Kind: String, Sendable { case file = "f", folder = "d", link = "l" }
+    public enum Kind: String, Sendable {
+        case file = "f", folder = "d", link = "l"
+        var byte: UInt8 { switch self { case .file: 0x66; case .folder: 0x64; case .link: 0x6C } }
+        init?(byte: UInt8) {
+            switch byte { case 0x66: self = .file; case 0x64: self = .folder; case 0x6C: self = .link; default: return nil }
+        }
+    }
     /// from the library's top, "/"-separated
     public var path: String
     public var size: UInt64
@@ -103,11 +109,15 @@ public enum ContentsListing {
             if count >= entryLimit || gzip.produced + pending.count >= byteLimit - (2 << 20) {
                 full = true; partial = true; return
             }
-            pending += Array(#"{"p":"#.utf8)
+            pending.append(contentsOf: JSONLine.pathKey)
             JSONLine.appendString(path, to: &pending)
-            pending += Array(#","s":"#.utf8) + Array(String(size).utf8)
-            pending += Array(#","m":"#.utf8) + Array(String(Int64((modified?.timeIntervalSince1970 ?? 0).rounded(.down))).utf8)
-            pending += Array(#","t":""#.utf8) + [kind.rawValue.utf8.first!] + Array("\"}\n".utf8)
+            pending.append(contentsOf: JSONLine.sizeKey)
+            JSONLine.appendInteger(Int64(clamping: size), to: &pending)
+            pending.append(contentsOf: JSONLine.modifiedKey)
+            JSONLine.appendInteger(Int64(exactly: (modified?.timeIntervalSince1970 ?? 0).rounded(.down)) ?? 0, to: &pending)
+            pending.append(contentsOf: JSONLine.kindKey)
+            pending.append(kind.byte)
+            pending.append(contentsOf: JSONLine.lineEnd)
             count += 1
             if pending.count >= 1 << 18 { flush() }
         }
@@ -309,21 +319,34 @@ public enum ContentsListing {
         }
 
         mutating func consume(_ bytes: Data, visit: (ContentsEntry) -> Void) throws {
-            var start = bytes.startIndex
-            while let nl = bytes[start...].firstIndex(of: 0x0A) {
-                carry += bytes[start ..< nl]
-                let l = carry
-                carry.removeAll(keepingCapacity: true)
-                try line(l, visit: visit)
-                start = nl + 1
+            try bytes.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
+                var start = 0
+                while let nl = buf[start...].firstIndex(of: 0x0A) {
+                    if carry.isEmpty {
+                        try line(UnsafeRawBufferPointer(rebasing: buf[start ..< nl]), visit: visit)
+                    } else {
+                        // a line split between two pieces
+                        carry.append(contentsOf: buf[start ..< nl])
+                        let l = carry
+                        carry = []
+                        try l.withUnsafeBytes { try line($0, visit: visit) }
+                    }
+                    start = nl + 1
+                }
+                carry.append(contentsOf: buf[start...])
             }
-            carry += bytes[start...]
             guard carry.count <= 1 << 20 else { throw GzipReader.Failure.corrupt }   // no line is this long
         }
 
-        mutating func line(_ l: [UInt8], visit: (ContentsEntry) -> Void) throws {
+        mutating func line(_ l: UnsafeRawBufferPointer, visit: (ContentsEntry) -> Void) throws {
             guard !ended else { throw GzipReader.Failure.corrupt }                  // nothing after the last line
-            let fields = try JSONLine.parse(l)
+            if binding != nil, let e = JSONLine.entry(l) {
+                guard !e.path.isEmpty, e.size >= 0, count < limit else { throw GzipReader.Failure.corrupt }
+                count += 1
+                visit(ContentsEntry(path: e.path, size: UInt64(e.size), modified: e.modified, kind: e.kind))
+                return
+            }
+            let fields = try JSONLine.parse(Array(l))
             if binding == nil {
                 guard case .string("contents")? = fields["cryoframe"], case .number(1)? = fields["v"],
                       case .string(let job)? = fields["job"], case .string(let lib)? = fields["library"],
@@ -363,22 +386,81 @@ public enum ContentsListing {
 enum JSONLine {
     enum Value: Equatable { case string(String), number(Int64), bool(Bool), null }
 
+    // an item's line, piece by piece: {"p":…,"s":…,"m":…,"t":"…"}
+    static let pathKey = Array(#"{"p":"#.utf8)
+    static let sizeKey = Array(#","s":"#.utf8)
+    static let modifiedKey = Array(#","m":"#.utf8)
+    static let kindKey = Array(#","t":""#.utf8)
+    static let lineEnd = Array("\"}\n".utf8)
+    static let hexDigits = Array("0123456789abcdef".utf8)
+
     static func appendString(_ s: String, to out: inout [UInt8]) {
         out.append(0x22)
         for b in s.utf8 {
             switch b {
-            case 0x22: out += [0x5C, 0x22]
-            case 0x5C: out += [0x5C, 0x5C]
-            case 0x0A: out += [0x5C, 0x6E]
-            case 0x0D: out += [0x5C, 0x72]
-            case 0x09: out += [0x5C, 0x74]
+            case 0x22: out.append(0x5C); out.append(0x22)
+            case 0x5C: out.append(0x5C); out.append(0x5C)
+            case 0x0A: out.append(0x5C); out.append(0x6E)
+            case 0x0D: out.append(0x5C); out.append(0x72)
+            case 0x09: out.append(0x5C); out.append(0x74)
             case 0..<0x20:
-                let hex = Array("0123456789abcdef".utf8)
-                out += [0x5C, 0x75, 0x30, 0x30, hex[Int(b >> 4)], hex[Int(b & 0xf)]]
+                out.append(contentsOf: [0x5C, 0x75, 0x30, 0x30, hexDigits[Int(b >> 4)], hexDigits[Int(b & 0xf)]])
             default: out.append(b)
             }
         }
         out.append(0x22)
+    }
+
+    static func appendInteger(_ n: Int64, to out: inout [UInt8]) {
+        if n == 0 { out.append(0x30); return }
+        if n < 0 { out.append(0x2D) }
+        var digits: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                     UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        var v = n.magnitude, count = 0
+        withUnsafeMutableBytes(of: &digits) { d in
+            while v > 0 { d[count] = 0x30 + UInt8(v % 10); v /= 10; count += 1 }
+            for i in stride(from: count - 1, through: 0, by: -1) { out.append(d[i]) }
+        }
+    }
+
+    /// An item's line exactly as Collector writes it, read without a general parser;
+    /// nil for any other line (an escape in the path, another key order), which the
+    /// general parser then reads.
+    static func entry(_ b: UnsafeRawBufferPointer) -> (path: String, size: Int64, modified: Int64, kind: ContentsEntry.Kind)? {
+        var i = 0
+        func take(_ word: [UInt8]) -> Bool {
+            guard i + word.count <= b.count else { return false }
+            for (k, c) in word.enumerated() where b[i + k] != c { return false }
+            i += word.count; return true
+        }
+        func integer() -> Int64? {
+            let negative = i < b.count && b[i] == 0x2D
+            if negative { i += 1 }
+            let start = i
+            var v: Int64 = 0
+            while i < b.count, b[i] >= 0x30, b[i] <= 0x39 {
+                let (m, o1) = v.multipliedReportingOverflow(by: 10)
+                let (s, o2) = m.addingReportingOverflow(Int64(b[i] - 0x30))
+                guard !o1, !o2 else { return nil }
+                v = s; i += 1
+            }
+            guard i > start, i - start == 1 || b[start] != 0x30 else { return nil }   // no leading zeros, as JSON
+            return negative ? -v : v
+        }
+        guard take(pathKey), i < b.count, b[i] == 0x22 else { return nil }
+        i += 1
+        let pathStart = i
+        while i < b.count, b[i] != 0x22 {
+            guard b[i] >= 0x20, b[i] != 0x5C else { return nil }
+            i += 1
+        }
+        guard i < b.count, let path = String(validating: UnsafeRawBufferPointer(rebasing: b[pathStart ..< i]), as: UTF8.self) else { return nil }
+        i += 1
+        guard take(sizeKey), let size = integer(), take(modifiedKey), let m = integer(), take(kindKey), i < b.count,
+              let kind = ContentsEntry.Kind(byte: b[i]) else { return nil }
+        i += 1
+        guard i + 2 == b.count, b[i] == 0x22, b[i + 1] == 0x7D else { return nil }
+        return (path, size, m, kind)
     }
 
     struct Malformed: Error {}

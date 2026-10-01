@@ -12,6 +12,7 @@ extension Redactor {
 a
 aa
 ab
+abcdef
 about
 above
 access
@@ -38,6 +39,7 @@ allow
 allows
 alone
 already
+also
 always
 an
 anchor
@@ -128,6 +130,7 @@ catalog
 cd
 certificate
 cf
+cflist
 change
 changed
 changes
@@ -181,6 +184,7 @@ consistent
 contain
 container
 containers
+contents
 control
 copied
 copies
@@ -201,7 +205,9 @@ create
 creates
 critical
 cryoframe
+cryoframe's
 cryokeys
+cryolist
 cstring
 current
 cut
@@ -262,6 +268,7 @@ don't
 done
 dot
 double
+download
 downloaded
 downloading
 drill
@@ -317,6 +324,7 @@ fail
 failed
 fails
 fake
+false
 fast
 fat
 few
@@ -371,6 +379,7 @@ gets
 gfs
 gib
 give
+given
 go
 goes
 going
@@ -379,6 +388,7 @@ good
 google
 googledrive
 group
+gz
 had
 hand
 hardware
@@ -398,6 +408,7 @@ hfs
 hhmmss
 hidden
 history
+hits
 hold
 holding
 holds
@@ -426,6 +437,7 @@ imovieapp
 imovielibrary
 in
 included
+incomplete
 incorrect
 index
 info
@@ -459,6 +471,7 @@ jobs
 join
 joined
 json
+jsonl
 kb
 keep
 keepparent
@@ -536,6 +549,7 @@ marks
 master
 match
 matched
+matches
 may
 mb
 mbr
@@ -603,6 +617,7 @@ nothing
 noverify
 now
 ntfy
+null
 numbered
 numbers
 octagon
@@ -783,6 +798,8 @@ scheduled
 scheme
 scratch
 sealed
+search
+searched
 sec
 second
 seconds
@@ -906,6 +923,7 @@ trash
 trashes
 triangle
 tried
+true
 trusted
 try
 turn
@@ -925,6 +943,7 @@ unavailable
 unchanged
 undone
 unfinished
+unknown
 unlock
 unlocked
 unmount

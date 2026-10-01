@@ -166,6 +166,46 @@ private func rerecord(_ a: inout RestorableArchive) throws {
         #expect(c.partial)
     }
 
+    // Names that need escaping, dates before 1970 and names in any script read back
+    // exactly as they were written.
+    @Test func oddNamesAndDatesReadBackExactly() throws {
+        let base = folder("odd")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let names = ["a \"quoted\" name", "back\\slash", "tab\there", "new\nline", "ctrl\u{1}x", "emoji 📷.heic",
+                     "Cafe\u{301}", "日本語/ファイル.txt", "plain.txt"]
+        let c = ContentsListing.Collector(binding: .init(jobID: "JOB-1", libraryID: "lib-1", version: stamp))
+        for (i, n) in names.enumerated() { c.add(n, size: UInt64(i), modified: Date(timeIntervalSince1970: -86_400 * Double(i)), kind: .file) }
+        let a = try version(base, entries: [], collector: c)
+        let (out, seen) = read(a)
+        #expect(out == .read(entries: names.count, partial: false))
+        #expect(seen.map(\.path) == names)
+        #expect(seen.map(\.modified) == names.indices.map { Int64(-86_400 * $0) })
+        #expect(seen.map(\.size) == names.indices.map { UInt64($0) })
+    }
+
+    // A list longer than one sealed chunk, with lines split across chunks and across
+    // what gzip hands out, reads back whole; Stop part-way counts for nothing.
+    @Test func aBigSealedListReadsBackAcrossChunks() throws {
+        let base = folder("big")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let names = (0..<60_000).map { _ in "\(UUID().uuidString)/\(UUID().uuidString).dat" }
+        let c = ContentsListing.Collector(binding: .init(jobID: "JOB-1", libraryID: "lib-1", version: stamp))
+        for n in names { c.add(n, size: 1, modified: nil, kind: .file) }
+        let a = try version(base, entries: [], pass: "correct horse", collector: c)
+        #expect((a.contents?.size ?? 0) > UInt64(2 * ContentsCrypto.chunkSize), "\(a.contents?.size ?? 0)")
+        let (out, seen) = read(a, passes: ["correct horse"])
+        #expect(out == .read(entries: names.count, partial: false))
+        #expect(seen.map(\.path) == names)
+        let control = RunControl()
+        var n = 0
+        let stopped = ContentsListing.read(a, master: { j in [keyring.master(jobID: j, passphrase: "correct horse")!] }, control: control) { _ in
+            n += 1; if n == 10 { control.cancel() }
+        }
+        #expect(stopped == .stopped)
+        #expect(ContentsSearch(keyring: keyring).search(ContentsQuery(names[59_999])!, in: a, passphrases: { _ in ["correct horse"] },
+                                                        control: control) == nil)
+    }
+
     // MARK: no list is not "not found"
 
     @Test func everyWayAListCanBeMissingIsNoList() throws {
@@ -558,6 +598,13 @@ private func rerecord(_ a: inout RestorableArchive) throws {
         defer { opened.close() }
         let item = ArchiveLayout.item(hit.hits[0].path, in: opened.root, for: a)
         #expect(try String(contentsOf: item, encoding: .utf8) == "w2")
+        // the browser opens in the item's folder, with the item as it lists it
+        let at = try #require(ArchiveLayout.opening(at: item, under: opened.root))
+        #expect(at.folders.last?.lastPathComponent == "2024" && at.name == "W-2 form.pdf")
+        #expect(at.folders.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+        let listed = try FileManager.default.contentsOfDirectory(at: try #require(at.folders.last), includingPropertiesForKeys: nil)
+        #expect(listed.map(\.lastPathComponent).contains(at.name), "\(listed.map(\.path)) vs \(at.name)")
+        #expect(ArchiveLayout.opening(at: URL(fileURLWithPath: "/elsewhere/x"), under: opened.root) == nil)
     }
 
     // MARK: wording

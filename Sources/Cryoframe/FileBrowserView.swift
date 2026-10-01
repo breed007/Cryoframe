@@ -17,6 +17,8 @@ struct FileBrowserView: View {
     let root: URL
     /// how the archive was opened, when that needs saying (see OpenedArchive.warning)
     var warning: String? = nil
+    /// an item to open at, selected, in its folder (Find a File's match)
+    var reveal: URL? = nil
     var onClose: () -> Void
 
     @State private var path: [URL] = []          // breadcrumb below root
@@ -59,8 +61,16 @@ struct FileBrowserView: View {
             footer
         }
         .frame(width: 560, height: 520)
-        .onAppear { reload() }
+        .onAppear {
+            if let reveal, let at = ArchiveLayout.opening(at: reveal, under: root) {
+                path = at.folders; revealName = at.name
+            }
+            reload()
+        }
     }
+
+    /// the name of the match to select once its folder is read (see ArchiveLayout.opening)
+    @State private var revealName: String?
 
     private var breadcrumb: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -92,10 +102,16 @@ struct FileBrowserView: View {
                 CryoEmptyState(symbol: "folder", title: "This folder is empty",
                                message: "Nothing was archived at this path.")
             } else {
-                List {
-                    ForEach(entries) { e in row(e) }
+                ScrollViewReader { proxy in
+                    List {
+                        ForEach(entries) { e in row(e) }
+                    }
+                    .listStyle(.inset)
+                    .onAppear {
+                        // opened at a match: bring it into view
+                        if let hit = entries.first(where: { selected.contains($0.id) }) { proxy.scrollTo(hit.id, anchor: .center) }
+                    }
                 }
-                .listStyle(.inset)
             }
         }
         .frame(maxHeight: .infinity)
@@ -169,6 +185,10 @@ struct FileBrowserView: View {
             let result = await Task.detached { Self.enumerate(dir, atRoot: atRoot) }.value
             guard current == dir else { return }      // user navigated again mid-read
             entries = result
+            if let name = revealName {
+                revealName = nil
+                selected = Set(result.filter { $0.name == name }.map(\.id))
+            }
             loading = false
         }
     }

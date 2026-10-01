@@ -234,6 +234,7 @@ struct RestoreView: View {
     @State private var selectedLibrary: String?
     @State private var selectedVersionID: String?
     @State private var mode: RestoreMode = .beside
+    @State private var finding = false
 
     // effective selection, with fallbacks so the view is always coherent
     private var activeLibrary: String? { selectedLibrary ?? r.orderedLibraries.first }
@@ -279,6 +280,9 @@ struct RestoreView: View {
             if let root = r.browseRoot {
                 FileBrowserView(archiveName: r.browsingName ?? "archive", root: root, warning: r.browseWarning) { r.endBrowse() }
             }
+        }
+        .sheet(isPresented: $finding) {
+            FindFileView(restore: r) { finding = false }
         }
         .alert("Replace your live library?",
                isPresented: Binding(get: { r.pendingInPlace != nil }, set: { if !$0 { r.pendingInPlace = nil } })) {
@@ -333,6 +337,11 @@ struct RestoreView: View {
             Text(r.sourceFolder?.path ?? "").font(.caption).lineLimit(1).truncationMode(.middle)
             Button("Change…") { chooseFolder { scanned($0) } }.buttonStyle(.link).font(.caption)
             Spacer()
+            if !r.archives.isEmpty {
+                Button { finding = true } label: { Label("Find a File…", systemImage: "magnifyingglass") }
+                    .controlSize(.small)
+                    .help("See which saved versions hold a file or folder")
+            }
         }
         .padding(.horizontal, 18).padding(.vertical, 9)
     }
