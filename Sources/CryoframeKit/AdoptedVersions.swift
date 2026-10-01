@@ -68,6 +68,10 @@ public struct AdoptionQuestion: Sendable, Equatable {
     /// (under one that keeps so many a day, week and month, which go depends on when
     /// the backups are made, so each is asked about when the next backup deletes it)
     public var later: [String] = []
+    /// of `later`, the one last known to restore (see KnownGood): it stays until a
+    /// newer one is, so it isn't said to go with the others. Saying yes still lets it
+    /// go then.
+    public var keptKnownGood: [String] = []
 
     /// every one of them the Keep rule deletes: what saying yes lets it delete
     public var allows: [String] { deletes + unfinished + later }
@@ -79,14 +83,20 @@ public struct AdoptionQuestion: Sendable, Equatable {
 
     /// what saying yes does, said the same way wherever it is asked: "none of them
     /// are deleted at the next backup; 2 more are deleted one at a time …"
-    public static func effect(deletes: Int, unfinished: Int, later: Int, total: Int) -> [String] {
+    /// `kept`: of the `later` ones, how many are kept as the last known to restore
+    public static func effect(deletes: Int, unfinished: Int, later: Int, total: Int, kept: Int = 0) -> [String] {
         var parts: [String] = []
         parts.append(deletes == 0 ? "none of them are deleted at the next backup"
                      : "\(deletes) \(deletes == 1 ? "is" : "are") deleted at the next backup")
-        if later > 0 {
-            let who = deletes == 0 && later == total ? (later == 1 ? "it is" : "all \(later) are")
-                : deletes == 0 ? "\(later) \(later == 1 ? "is" : "are")" : "\(later) more \(later == 1 ? "is" : "are")"
+        let going = max(0, later - kept)
+        if going > 0 {
+            let who = deletes == 0 && going == total ? (going == 1 ? "it is" : "all \(going) are")
+                : deletes == 0 ? "\(going) \(going == 1 ? "is" : "are")" : "\(going) more \(going == 1 ? "is" : "are")"
             parts.append("\(who) deleted one at a time as new backups are made")
+        }
+        if kept > 0 {
+            parts.append(kept == 1 ? "the one last proven to restore stays until a newer one is proven"
+                                   : "\(kept) last proven to restore stay until newer ones are proven")
         }
         if unfinished > 0 { parts.append("\(unfinished) that never finished \(unfinished == 1 ? "is" : "are") deleted too") }
         return parts
@@ -116,6 +126,9 @@ public struct AdoptionReview: Codable, Sendable, Equatable, Identifiable {
     /// the Keep rule they were counted under
     public var rule: RetentionPolicy
     public var foundAt: Date
+    /// of the later ones, how many are kept as the last known to restore (see
+    /// AdoptionQuestion.keptKnownGood); nil in a review saved before it was counted
+    public var keptKnownGood: Int?
 
     public init(jobID: String, targetID: String, libraryID: String, destination: String, library: String,
                 question: AdoptionQuestion, rule: RetentionPolicy, foundAt: Date) {
@@ -123,6 +136,7 @@ public struct AdoptionReview: Codable, Sendable, Equatable, Identifiable {
         self.destination = destination; self.library = library; self.versions = question.versions
         self.deletes = question.deletes.count; self.unfinished = question.unfinished.count
         self.allows = question.allows; self.rule = rule; self.foundAt = foundAt
+        self.keptKnownGood = question.keptKnownGood.count
     }
 
     /// of them, how many later backups delete one at a time (see AdoptionQuestion.later)
@@ -148,7 +162,8 @@ public struct AdoptionReview: Codable, Sendable, Equatable, Identifiable {
 
     /// what saying yes does, at the next backup and after it
     public var effect: String {
-        let parts = AdoptionQuestion.effect(deletes: deletes, unfinished: unfinished, later: later, total: versions.count)
+        let parts = AdoptionQuestion.effect(deletes: deletes, unfinished: unfinished, later: later, total: versions.count,
+                                            kept: keptKnownGood ?? 0)
         var rule = "The Keep rule"
         if case .keepLast(let n) = self.rule { rule = "Keep last \(n)" }
         return "\(rule) then applies to them: " + parts.joined(separator: "; ") + "."

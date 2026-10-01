@@ -49,6 +49,9 @@ public struct DrivePairing: Sendable, Equatable {
         /// of them, how many backups after the next delete one at a time (see
         /// AdoptionQuestion.later)
         public var later: Int = 0
+        /// of those, how many are kept as the last known to restore (see
+        /// AdoptionQuestion.keptKnownGood)
+        public var keptKnownGood: Int = 0
 
         public struct Copy: Sendable, Equatable {
             public var date: Date?
@@ -178,6 +181,7 @@ public struct DrivePairing: Sendable, Equatable {
             var asked: [String] = []
             var allows: [String] = []
             var later = 0
+            var keptKnownGood = 0
             if !adopted && legacy != nil {
                 effects.append("The folder there isn't only this job's to take, so it stays as it is and the next backup makes a new one beside it.")
             }
@@ -197,6 +201,7 @@ public struct DrivePairing: Sendable, Equatable {
                     asked = q.versions
                     allows = q.allows
                     later = q.later.count
+                    keptKnownGood = q.keptKnownGood.count
                 }
                 if adopted || n > 0 {
                     deletes = plan.versions.count
@@ -205,8 +210,13 @@ public struct DrivePairing: Sendable, Equatable {
                         effects.append("\(counted) dated version\(counted == 1 ? "" : "s") now follow this job's Keep rule"
                                        + (deletes > 0 ? "; \(deletes) \(deletes == 1 ? "is" : "are") deleted at the next backup." : "; none are deleted."))
                     }
-                    if later > 0 {
-                        effects.append("\(later) more of them \(later == 1 ? "is" : "are") deleted one at a time as new backups are made.")
+                    if later - keptKnownGood > 0 {
+                        let going = later - keptKnownGood
+                        effects.append("\(going) more of them \(going == 1 ? "is" : "are") deleted one at a time as new backups are made.")
+                    }
+                    if keptKnownGood > 0 {
+                        effects.append(keptKnownGood == 1 ? "The one last proven to restore stays until a newer one is proven."
+                                       : "\(keptKnownGood) last proven to restore stay until newer ones are proven.")
                     }
                     unfinished = plan.husks.count
                     if unfinished > 0 {
@@ -226,7 +236,8 @@ public struct DrivePairing: Sendable, Equatable {
             }
             return Library(name: lib.displayName, copy: copy, versions: versions, versionBytes: versionBytes,
                            deletes: deletes, replacesCopy: replacesCopy, unfinished: unfinished, effects: effects,
-                           libraryID: lib.id, adopted: asked, allows: allows, later: later)
+                           libraryID: lib.id, adopted: asked, allows: allows, later: later,
+                           keptKnownGood: keptKnownGood)
         }
         return DrivePairing(drive: drive, libraries: libraries, refusal: nil, rule: job.retention)
     }

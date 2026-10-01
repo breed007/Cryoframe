@@ -39,6 +39,11 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
 
     /// versions the next run deletes, over all destinations and libraries
     public var deletes: Int
+    /// dated folders that never finished, adopted, which the next run deletes
+    public var unfinished: Int = 0
+    /// adopted versions later backups delete one at a time (see AdoptionQuestion.later):
+    /// saving says yes to them too, though the next run deletes none of them
+    public var later: Int = 0
 
     /// The go-ahead saving records (see AdoptedVersions.swift): for the versions the
     /// next run takes over or moves in, and those adopted earlier that no one has said
@@ -55,7 +60,7 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
                           checks: [HealthRecord] = [], pending: [PendingTransfer] = [], lastRun: Date? = nil,
                           now: Date = Date()) -> JobEditImpact {
         var lines: [Line] = []
-        var deletes = 0
+        var deletes = 0, unfinished = 0, later = 0
         var consents: [AdoptionConsent] = []
         func say(_ kind: Line.Kind, _ text: String) { if !lines.contains(Line(kind: kind, text: text)) { lines.append(Line(kind: kind, text: text)) } }
         let resolver = DestinationResolver(volumes: volumes)
@@ -156,9 +161,12 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
                                                         confirmed: { given.confirmsAdoption(of: $0, target: t.id, library: lib.id) }) {
                     let n = q.versions.count
                     deletes += q.deletes.count
+                    unfinished += q.unfinished.count
+                    later += q.later.count
                     let text = "At \(name(t)), \(n) earlier backup\(n == 1 ? "" : "s") of \(lib.displayName) that this job didn't make "
                         + "(in “\(shelf.folder.lastPathComponent)”) now follow\(n == 1 ? "s" : "") its Keep rule: "
-                        + AdoptionQuestion.effect(deletes: q.deletes.count, unfinished: q.unfinished.count, later: q.later.count, total: n)
+                        + AdoptionQuestion.effect(deletes: q.deletes.count, unfinished: q.unfinished.count, later: q.later.count, total: n,
+                                                  kept: q.keptKnownGood.count)
                             .joined(separator: "; ")
                     say(q.allows.isEmpty ? .keeps : .deletes, text + ".")
                     consents.append(q.consent(target: t.id, library: lib.id, rule: draft.retention, at: now))
@@ -178,7 +186,7 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
             }
         }
         if lines.isEmpty, base != nil { say(.changes, "Nothing on the destinations changes; the next backup follows the new settings.") }
-        return JobEditImpact(lines: lines, deletes: deletes, consents: consents)
+        return JobEditImpact(lines: lines, deletes: deletes, unfinished: unfinished, later: later, consents: consents)
     }
 }
 

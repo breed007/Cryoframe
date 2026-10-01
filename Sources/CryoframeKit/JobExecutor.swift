@@ -810,7 +810,21 @@ public struct JobExecutor: Sendable {
             }
         }
         if waiting.allSatisfy(shown), gone.union(unfinished).union(later).allSatisfy(confirmed) { return nil }
-        return AdoptionQuestion(versions: waiting.sorted(), deletes: gone.sorted(), unfinished: unfinished.sorted(), later: later.sorted())
+        // of those, the one known to restore stays until a newer one is: said apart
+        var kept: [String] = []
+        if !later.isEmpty {
+            let complete = shelf.entries.filter {
+                shelf.identity?.holds($0.lastPathComponent) != true
+                    && FileManager.default.fileExists(atPath: $0.appendingPathComponent(ArchiveManifest.sidecarName).path)
+            }
+            let dated = complete.compactMap { e in VersionStamp.date(e.lastPathComponent).map { (name: e.lastPathComponent, date: $0) } }
+            if let known = KnownGood.version(of: shelf.library.displayName, key: shelf.identity?.key,
+                                             formerNames: shelf.identity?.formerNames ?? [], among: dated.map(\.date), records: checks) {
+                kept = dated.filter { $0.date == known && later.contains($0.name) }.map(\.name)
+            }
+        }
+        return AdoptionQuestion(versions: waiting.sorted(), deletes: gone.sorted(), unfinished: unfinished.sorted(), later: later.sorted(),
+                                keptKnownGood: kept.sorted())
     }
 
     /// What there is to ask about the versions `job`'s folders (`folderOf`) adopted

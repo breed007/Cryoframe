@@ -275,10 +275,17 @@ struct SaveSummarySheet: View {
         .padding(22).frame(width: 540)
     }
 
+    /// the button says what it agrees to, as Rename does
     private var saveTitle: String {
         let verb = isNew ? "Create" : "Save"
-        let n = impact.deletes
-        return n > 0 ? "\(verb), and delete \(n) version\(n == 1 ? "" : "s") at the next backup" : verb
+        let n = impact.deletes, unfinished = impact.unfinished, later = impact.later
+        var parts: [String] = []
+        if n > 0 { parts.append("delete \(n) version\(n == 1 ? "" : "s")") }
+        if unfinished > 0 { parts.append("delete \(unfinished) unfinished folder\(unfinished == 1 ? "" : "s")") }
+        if parts.isEmpty {
+            return later > 0 ? "\(verb), and let Keep apply to \(later) older version\(later == 1 ? "" : "s")" : verb
+        }
+        return "\(verb), and " + parts.joined(separator: " and ") + " at the next backup"
     }
 
     private func symbol(_ k: JobEditImpact.Line.Kind) -> String {

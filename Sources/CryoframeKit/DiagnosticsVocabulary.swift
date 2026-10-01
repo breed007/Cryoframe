@@ -361,6 +361,7 @@ gib
 give
 go
 goes
+going
 gone
 good
 google
@@ -561,6 +562,7 @@ needs
 network
 never
 new
+newer
 newest
 next
 nightly
@@ -662,6 +664,7 @@ progress
 project
 protected
 protecting
+proven
 provenance
 prunefailures
 ps
