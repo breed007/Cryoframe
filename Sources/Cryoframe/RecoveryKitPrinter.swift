@@ -61,7 +61,7 @@ enum RecoveryKitPrinter {
                 let warn = NSAlert()
                 warn.alertStyle = .critical
                 warn.messageText = "Print the passphrase page?"
-                warn.informativeText = "Anyone holding this page can open your encrypted backups. It goes through the print queue like any page, and the print panel's PDF menu (Save as PDF, Mail, Preview) writes or sends a copy: choose a printer, not PDF. Keep the page locked away, apart from the backup drives and the kit."
+                warn.informativeText = "Anyone holding this page can open your encrypted backups. It goes through the print queue like any page, and macOS keeps a copy of each print job's file for about a day afterward. The print panel's PDF menu (Save as PDF, Save to iCloud Drive, Mail, Preview) writes or sends a copy: choose a printer, not PDF. Keep the page locked away, apart from the backup drives and the kit."
                 warn.addButton(withTitle: "Print Passphrase Page…")
                 warn.addButton(withTitle: "Don't Print")
                 guard warn.runModal() == .alertFirstButtonReturn else { return }
