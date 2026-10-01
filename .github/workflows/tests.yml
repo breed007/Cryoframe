@@ -22,11 +22,15 @@ jobs:
     # macos-15 is the oldest release Cryoframe supports, and its Xcode 16 compiler
     # is stricter in places than the one releases are built with; macos-26 is
     # closer to the release toolchain. A change has to build and pass on both.
+    # xcode-27 (macOS 27 with Xcode 27) is the release Mac's toolchain. GitHub still
+    # calls that image a preview and may queue it, so it reports but doesn't gate a
+    # merge until the image is generally available.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-26]
+        os: [macos-15, macos-26, xcode-27]
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'xcode-27' }}
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
