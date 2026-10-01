@@ -38,9 +38,12 @@ public enum LibraryFolders {
 
     /// every archive of `library` for `job` at `destination`, in all its folders, newest
     /// first; of two without a version (mirrors), the one in its own folder first. So
-    /// the first is what a latest-only check looks at.
-    public static func archives(job: BackupJob, library: ContentType, in destination: URL) -> [RestorableArchive] {
-        holdings(job: job, library: library, in: destination).flatMap(\.archives).enumerated()
+    /// the first is what a latest-only check looks at. With `downloading` false, a
+    /// version whose manifest is evicted is found without reading it (see
+    /// RestoreDiscovery.scan): for counting and measuring, never for reading one.
+    public static func archives(job: BackupJob, library: ContentType, in destination: URL,
+                                downloading: Bool = true) -> [RestorableArchive] {
+        holdings(job: job, library: library, in: destination, downloading: downloading).flatMap(\.archives).enumerated()
             .sorted { a, b in
                 let (x, y) = (a.element.version ?? .distantPast, b.element.version ?? .distantPast)
                 return x != y ? x > y : a.offset < b.offset
@@ -62,7 +65,8 @@ public enum LibraryFolders {
     /// folder over (a custom folder "Photos" isn't the Photos library). A folder of
     /// another library of this same job is never read: 1.5.6 doesn't run a job with
     /// two libraries of one name. A 1.5 folder holding nothing is listed too.
-    static func holdings(job: BackupJob, library: ContentType, in destination: URL) -> [(folder: URL, archives: [RestorableArchive])] {
+    static func holdings(job: BackupJob, library: ContentType, in destination: URL,
+                         downloading: Bool = true) -> [(folder: URL, archives: [RestorableArchive])] {
         let key = LibraryIdentity.key(job: job, library: library)
         let mirror = !job.format.isSealed
         func ofItsKind(_ a: RestorableArchive) -> Bool { mirror ? a.format == .liveMirror && a.version == nil : a.format != .liveMirror }
@@ -75,7 +79,7 @@ public enum LibraryFolders {
         }
         var out: [(folder: URL, archives: [RestorableArchive])] = entries.filter { $0.identity?.key == key }
             .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
-            .map { e in (e.url, owned(RestoreDiscovery.scan(e.url, maxDepth: 1).filter { a in
+            .map { e in (e.url, owned(RestoreDiscovery.scan(e.url, maxDepth: 1, downloading: downloading).filter { a in
                 // not another job's version (see LibraryIdentity.owns)
                 ofItsKind(a) && (a.version == nil || e.identity?.owns(a.dir.lastPathComponent) != false)
             })) }
@@ -90,7 +94,7 @@ public enum LibraryFolders {
             // job was made a sealed job, those it held then, whatever it is now.
             if let identity = e.identity,
                mirror || !holdsMirror(e.url) && !(identity.heldVersions ?? []).contains(where: { !identity.owns($0) }) { continue }
-            let found = RestoreDiscovery.scan(e.url, maxDepth: 1).filter { a in
+            let found = RestoreDiscovery.scan(e.url, maxDepth: 1, downloading: downloading).filter { a in
                 guard let identity = e.identity, a.version != nil else { return true }
                 return !identity.owns(a.dir.lastPathComponent)
             }

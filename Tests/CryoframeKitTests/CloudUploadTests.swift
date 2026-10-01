@@ -216,7 +216,7 @@ private func probe(_ answer: @escaping @Sendable (URL) -> FileUpload, timeout: T
         let ledger = UploadLedger(url: dir.appendingPathComponent("up.json"), cap: 3)
         let key = DestinationKey(jobID: "j", targetID: "t")
         let old = now.addingTimeInterval(-48 * hour)
-        ledger.replace(with: [UploadEntry(version: "/v0", runAt: old, status: .uploading)], confirmed: 0,
+        ledger.replace(with: [UploadEntry(version: "/v0", runAt: old, status: .uploading)], confirmed: [],
                        looked: ["/v0"], for: key, at: now)
         #expect(UploadSummary.of(ledger.destination(key), now: now) == .notOffsite(count: 1, since: old))
         ledger.record((1...5).map { UploadEntry(version: "/v\($0)", runAt: now.addingTimeInterval(Double($0))) }, for: key)
@@ -256,5 +256,52 @@ private func probe(_ answer: @escaping @Sendable (URL) -> FileUpload, timeout: T
         ledger.record([UploadEntry(version: "/b", runAt: now)], for: drop)
         ledger.prune(keeping: [keep])
         #expect(ledger.destination(keep) != nil && ledger.destination(drop) == nil)
+    }
+
+    // A Check Again that couldn't tell about the folded versions keeps their warning;
+    // one that could, clears it.
+    @Test func aStalledCheckAgainKeepsTheFoldedWarning() throws {
+        let dir = folder("fold-stall"); defer { try? FileManager.default.removeItem(at: dir) }
+        let ledger = UploadLedger(url: dir.appendingPathComponent("up.json"), cap: 3)
+        let key = DestinationKey(jobID: "j", targetID: "t")
+        let old = now.addingTimeInterval(-48 * hour)
+        ledger.replace(with: [UploadEntry(version: "/v0", runAt: old, status: .uploading)], confirmed: [],
+                       looked: ["/v0"], for: key, at: now)
+        ledger.record((1...5).map { UploadEntry(version: "/v\($0)", runAt: now.addingTimeInterval(Double($0))) }, for: key)
+        let all = (0...5).map { UploadEntry(version: "/v\($0)", runAt: $0 == 0 ? old : now.addingTimeInterval(Double($0)),
+                                            status: .unknown("didn't answer")) }
+        ledger.replace(with: all, confirmed: [], looked: Set(all.map(\.version)), for: key, at: now)
+        let d = try #require(ledger.destination(key))
+        #expect(d.untracked?.notUploaded == true)
+        #expect(d.entries.map(\.version) == ["/v3", "/v4", "/v5"], "a folded version came back as well as being counted")
+        guard case .notOffsite = UploadSummary.of(d, now: now) else {
+            Issue.record("a stalled Check Again cleared the folded warning"); return
+        }
+        ledger.replace(with: [], confirmed: all.map(\.version), looked: Set(all.map(\.version)), for: key, at: now)
+        #expect(UploadSummary.of(ledger.destination(key), now: now) == .uploaded)
+    }
+
+    // A version whose manifest is evicted is found from its folder's listing, so
+    // counting it (Storage, the upload check) doesn't download the manifest.
+    @Test func aVersionIsFoundFromItsListingWithoutItsManifest() throws {
+        let dest = folder("listed"); defer { try? FileManager.default.removeItem(at: dest) }
+        let notes = lib("n", "Notes")
+        let job = cloudJob([notes], dest: dest)
+        let at = try version(job, notes, dest: dest, stamp: "2026-09-01-020000")
+        try FileManager.default.removeItem(at: at.appendingPathComponent("Notes.zip"))
+        for part in ["aa", "ab"] { try Data("p".utf8).write(to: at.appendingPathComponent("Notes.zip.part.\(part)")) }
+        let zip = try #require(RestoreDiscovery.listed(at: at))
+        #expect(zip.format == .sealedZip)
+        #expect(zip.artifactNames == ["Notes.zip.part.aa", "Notes.zip.part.ab"])
+        #expect(zip.version == VersionStamp.date("2026-09-01-020000"))
+        #expect(zip.libraryKey == LibraryIdentity.key(job: job, library: notes))
+        let dmgAt = try version(job, notes, dest: dest, stamp: "2026-09-02-020000")
+        try FileManager.default.removeItem(at: dmgAt.appendingPathComponent("Notes.zip"))
+        try Data("d".utf8).write(to: dmgAt.appendingPathComponent("Notes.dmg"))
+        #expect(RestoreDiscovery.listed(at: dmgAt)?.format == .sealedDMG)
+        // nothing but the manifest and the file list: not a version
+        let bare = try version(job, notes, dest: dest, stamp: "2026-09-03-020000")
+        try FileManager.default.removeItem(at: bare.appendingPathComponent("Notes.zip"))
+        #expect(RestoreDiscovery.listed(at: bare) == nil)
     }
 }

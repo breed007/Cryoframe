@@ -35,6 +35,9 @@ public enum CloudUpload {
 
     /// what to say when a provider's word isn't taken
     public static func unknownText(_ provider: CloudProvider) -> String {
+        if provider == .iCloud {
+            return "iCloud reports whether a file is uploaded, but Cryoframe doesn't rely on that yet; check iCloud Drive in Finder."
+        }
         let name = provider == .generic ? "This cloud service" : provider.displayName
         return "\(name) doesn't tell other apps whether a file is uploaded; check its menu."
     }
@@ -164,6 +167,16 @@ public struct UploadEntry: Codable, Sendable, Equatable {
         default: return false
         }
     }
+
+    /// What a new look found, over what the last one did. A look that can't tell
+    /// (the provider stopped answering, which is when uploads stall) knows nothing
+    /// new: a "not uploaded" it would replace stands.
+    func updated(_ found: UploadStatus) -> UploadEntry {
+        var e = self
+        if case .unknown = found, notUploaded { return e }
+        e.status = found
+        return e
+    }
 }
 
 /// versions folded out of the ledger when it passed its cap
@@ -173,6 +186,8 @@ public struct UploadUntracked: Codable, Sendable, Equatable {
     public var since: Date
     /// a verified provider had said one of them wasn't uploaded: the warning stands
     public var notUploaded: Bool
+    /// the newest folded version's run (nil: a record from before it was kept)
+    public var until: Date? = nil
 }
 
 /// one destination's versions not yet known to be uploaded
@@ -187,9 +202,12 @@ public struct DestinationUploads: Codable, Sendable, Equatable {
     /// versions found uploaded since the destination was last looked at whole: with
     /// none, an empty record is "nothing to check", never "uploaded"
     public var confirmed: Int = 0
+    /// those versions' folders, still on disk when last looked: a version in the
+    /// cloud folder that is neither here nor among `entries` hasn't been looked at
+    public var uploaded: [String] = []
     public init() {}
 
-    enum CodingKeys: String, CodingKey { case entries, untracked, scannedAt, checkedAt, confirmed }
+    enum CodingKeys: String, CodingKey { case entries, untracked, scannedAt, checkedAt, confirmed, uploaded }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -198,6 +216,7 @@ public struct DestinationUploads: Codable, Sendable, Equatable {
         scannedAt = try c.decodeIfPresent(Date.self, forKey: .scannedAt)
         checkedAt = try c.decodeIfPresent(Date.self, forKey: .checkedAt)
         confirmed = try c.decodeIfPresent(Int.self, forKey: .confirmed) ?? 0
+        uploaded = try c.decodeIfPresent([String].self, forKey: .uploaded) ?? []
     }
 }
 
@@ -276,18 +295,22 @@ public final class UploadLedger: @unchecked Sendable {
     }
 
     /// What a look at the versions on record found, by version folder: an uploaded
-    /// or gone (nil) version leaves the ledger, the rest keep what was found.
-    public func apply(_ found: [String: UploadStatus?], for key: DestinationKey, at now: Date) {
+    /// or gone (nil) version leaves the ledger, the rest keep what was found (see
+    /// UploadEntry.updated). `present`: every version on disk, when the look listed
+    /// them; an uploaded version no longer among them is forgotten.
+    public func apply(_ found: [String: UploadStatus?], present: Set<String>? = nil, for key: DestinationKey, at now: Date) {
         file.update { f in
             guard var d = f.destinations[key.string] else { return (false, ()) }
-            var confirmed = 0
+            var confirmed: [String] = []
             d.entries = d.entries.compactMap { e in
                 guard let result = found[e.version] else { return e }      // added since the look began
                 guard let status = result else { return nil }               // gone
-                if status == .uploaded { confirmed += 1; return nil }
-                var e = e; e.status = status; return e
+                if status == .uploaded { confirmed.append(e.version); return nil }
+                return e.updated(status)
             }
-            d.confirmed += confirmed
+            d.confirmed += confirmed.count
+            d.uploaded += confirmed.filter { !d.uploaded.contains($0) }
+            if let present { d.uploaded = d.uploaded.filter { present.contains($0) } }
             d.checkedAt = now
             f.destinations[key.string] = d
             return (true, ())
@@ -296,16 +319,36 @@ public final class UploadLedger: @unchecked Sendable {
 
     /// What a look at every version on disk found: the ones not uploaded replace the
     /// record, and the folded count is cleared, being looked at again. A version a
-    /// run recorded while the look went on (not among `looked`) stays.
-    public func replace(with unconfirmed: [UploadEntry], confirmed: Int, looked: Set<String>,
+    /// run recorded while the look went on (not among `looked`) stays. A version the
+    /// look couldn't tell about keeps a "not uploaded" it had; so does the folded
+    /// count, holding the versions in its span the look couldn't tell about.
+    public func replace(with unconfirmed: [UploadEntry], confirmed: [String], looked: Set<String>,
                         for key: DestinationKey, at now: Date) {
         file.update { f in
             var d = f.destinations[key.string] ?? DestinationUploads()
+            let before = Dictionary(d.entries.map { ($0.version, $0) }, uniquingKeysWith: { a, _ in a })
+            var unconfirmed = unconfirmed.map { e in
+                guard let old = before[e.version], let status = e.status else { return e }
+                return old.updated(status)
+            }
             let kept = d.entries.filter { !looked.contains($0.version) }
+            if let u = d.untracked, u.notUploaded {
+                let inSpan = { (e: UploadEntry) -> Bool in
+                    guard before[e.version] == nil, e.runAt <= (u.until ?? u.since), case .unknown? = e.status else { return false }
+                    return true
+                }
+                if unconfirmed.contains(where: inSpan) {
+                    unconfirmed.removeAll(where: inSpan)
+                } else {
+                    d.untracked = nil
+                }
+            } else {
+                d.untracked = nil
+            }
             let fresh = Set(unconfirmed.map(\.version))
             d.entries = (unconfirmed + kept.filter { !fresh.contains($0.version) }).sorted { $0.runAt < $1.runAt }
-            d.untracked = nil
-            d.confirmed = confirmed
+            d.confirmed = confirmed.count
+            d.uploaded = confirmed
             d.scannedAt = now; d.checkedAt = now
             fold(&d)
             f.destinations[key.string] = d
@@ -333,6 +376,7 @@ public final class UploadLedger: @unchecked Sendable {
         var u = d.untracked ?? UploadUntracked(count: 0, since: out.first!.runAt, notUploaded: false)
         u.count += out.count
         u.since = min(u.since, out.first!.runAt)
+        u.until = max(u.until ?? u.since, out.last!.runAt)
         u.notUploaded = u.notUploaded || out.contains(where: \.notUploaded)
         d.untracked = u
     }
@@ -347,19 +391,31 @@ public struct UploadCheck: Sendable {
 
     public init(ledger: UploadLedger, probe: UploadProbe = UploadProbe()) { self.ledger = ledger; self.probe = probe }
 
-    /// Look again at the versions on record. A destination never looked at whole is
-    /// scanned from disk instead (a cloud folder backed up before this check existed).
+    /// Look again at the versions on record, and at any version on disk there that
+    /// no look has seen (one a run didn't record), so "uploaded" covers every version
+    /// in the folder. A destination never looked at whole is scanned from disk
+    /// instead (a cloud folder backed up before this check existed).
     public func refresh(job: BackupJob, target: Target, now: Date = Date()) -> UploadSummary {
         let key = DestinationKey(jobID: job.id, targetID: target.id)
         if let away = Self.folderAway(target) { return away }
         guard let d = ledger.destination(key), d.scannedAt != nil else { return rescan(job: job, target: target, now: now) }
         let provider = target.cloudProvider ?? CloudProvider.identify(target.destinationDir)
+        let versions = Self.versions(job: job, target: target)
+        let seen = Set(d.entries.map(\.version) + d.uploaded)
+        let foldedUntil = d.untracked.map { $0.until ?? $0.since }
+        let unseen = versions.filter { v in
+            guard !seen.contains(v.dir.path) else { return false }
+            // a folded version is in neither list: one inside the folded span is counted there
+            if let foldedUntil, let made = v.version, made <= foldedUntil { return false }
+            return true
+        }
+        ledger.record(unseen.map { UploadEntry(version: $0.dir.path, runAt: $0.version ?? now) }, for: key)
         var stalled = false
         var found: [String: UploadStatus?] = [:]
-        for e in d.entries {
+        for e in ledger.destination(key)?.entries ?? [] {
             found.updateValue(look(URL(fileURLWithPath: e.version), provider: provider, stalled: &stalled), forKey: e.version)
         }
-        ledger.apply(found, for: key, at: now)
+        ledger.apply(found, present: Set(versions.map(\.dir.path)), for: key, at: now)
         return UploadSummary.of(ledger.destination(key), now: now)
     }
 
@@ -369,17 +425,13 @@ public struct UploadCheck: Sendable {
         let key = DestinationKey(jobID: job.id, targetID: target.id)
         if let away = Self.folderAway(target) { return away }
         let provider = target.cloudProvider ?? CloudProvider.identify(target.destinationDir)
-        // Finding the job's versions reads their manifests, as every run does (its
-        // recovery note and retention read every manifest there), so an evicted
-        // manifest comes back down here as it would at the next run.
-        let versions = job.libraries.flatMap { LibraryFolders.archives(job: job, library: $0, in: target.destinationDir) }
-            .filter { $0.version != nil }
+        let versions = Self.versions(job: job, target: target)
         var stalled = false
         var unconfirmed: [UploadEntry] = []
-        var confirmed = 0
+        var confirmed: [String] = []
         for v in versions {
             guard let status = look(v.dir, provider: provider, stalled: &stalled) else { continue }    // gone
-            if status == .uploaded { confirmed += 1; continue }
+            if status == .uploaded { confirmed.append(v.dir.path); continue }
             unconfirmed.append(UploadEntry(version: v.dir.path, runAt: v.version ?? now, status: status))
         }
         let looked = Set(versions.map(\.dir.path))
@@ -393,6 +445,13 @@ public struct UploadCheck: Sendable {
         }
         if !found.isEmpty { ledger.apply(found, for: key, at: now) }
         return UploadSummary.of(ledger.destination(key), now: now)
+    }
+
+    /// The job's versions on disk there, found without reading an evicted manifest
+    /// (that would download it, and undo what the look looks for).
+    static func versions(job: BackupJob, target: Target) -> [RestorableArchive] {
+        job.libraries.flatMap { LibraryFolders.archives(job: job, library: $0, in: target.destinationDir, downloading: false) }
+            .filter { $0.version != nil }
     }
 
     /// A cloud folder that isn't there (the provider signed out or removed, the folder

@@ -49,7 +49,9 @@ public enum StorageReporter {
             job.targets.map { t in
                 var archives: [ArchiveSize] = []
                 for library in job.libraries {
-                    for a in LibraryFolders.archives(job: job, library: library, in: t.destinationDir) {
+                    // without reading an evicted manifest: that would download it, and
+                    // undo what the cloud upload check looks for (see CloudUpload)
+                    for a in LibraryFolders.archives(job: job, library: library, in: t.destinationDir, downloading: false) {
                         archives.append(ArchiveSize(library: a.libraryName, version: a.version,
                                                     bytes: JobExecutor.directorySize(a.dir), kept: LibraryFolders.isKept(a)))
                     }

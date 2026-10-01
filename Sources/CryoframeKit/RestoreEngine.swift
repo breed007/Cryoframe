@@ -177,9 +177,13 @@ public enum RestoreDiscovery {
     /// walk down to `maxDepth` levels, collecting every directory that holds a
     /// manifest. Covers target/library (single-copy mirror or legacy) and
     /// target/library/<version> (versioned sealed archives).
-    public static func scan(_ folder: URL, maxDepth: Int = 2) -> [RestorableArchive] {
+    ///
+    /// With `downloading` false, a version whose manifest is evicted to a placeholder
+    /// isn't read (reading it would bring it back down); it is found from its folder's
+    /// listing instead (see `listed(at:)`). For measuring and counting only.
+    public static func scan(_ folder: URL, maxDepth: Int = 2, downloading: Bool = true) -> [RestorableArchive] {
         var out: [RestorableArchive] = []
-        walk(folder, depth: 0, maxDepth: maxDepth, into: &out)
+        walk(folder, depth: 0, maxDepth: maxDepth, downloading: downloading, into: &out)
         // two libraries of one name (two folders, or a library's folder and a 1.5
         // folder of its name): tell them apart by folder
         let folders = Dictionary(grouping: out, by: \.libraryName).mapValues { Set($0.map { $0.libraryFolder.lastPathComponent }) }
@@ -192,12 +196,12 @@ public enum RestoreDiscovery {
         }
     }
 
-    private static func walk(_ dir: URL, depth: Int, maxDepth: Int, into out: inout [RestorableArchive]) {
+    private static func walk(_ dir: URL, depth: Int, maxDepth: Int, downloading: Bool, into out: inout [RestorableArchive]) {
         // listing a symlink lists nothing: follow it (depth still bounds a loop)
         let dir = (try? dir.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
             ? dir.resolvingSymlinksInPath() : dir
         let fm = FileManager.default
-        if let a = archive(at: dir) {
+        if let a = archive(at: dir, downloading: downloading) {
             out.append(a)
             // A manifest dir is a leaf, but for the versions a sealed job kept beside
             // a mirror in a folder the two shared (1.5 named folders by library): the
@@ -205,7 +209,7 @@ public enum RestoreDiscovery {
             guard a.format == .liveMirror, a.version == nil, depth < maxDepth else { return }
             for entry in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
             where VersionStamp.date(entry.lastPathComponent) != nil {
-                if let v = archive(at: entry) { out.append(v) }
+                if let v = archive(at: entry, downloading: downloading) { out.append(v) }
             }
             return
         }
@@ -215,7 +219,7 @@ public enum RestoreDiscovery {
             // through one (a folder in the home folder pointing at a drive)
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue {
-                walk(entry, depth: depth + 1, maxDepth: maxDepth, into: &out)
+                walk(entry, depth: depth + 1, maxDepth: maxDepth, downloading: downloading, into: &out)
             }
         }
     }
@@ -241,8 +245,11 @@ public enum RestoreDiscovery {
         return v.count == 1 && v[0].version == nil
     }
 
-    public static func archive(at dir: URL) -> RestorableArchive? {
+    public static func archive(at dir: URL, downloading: Bool = true) -> RestorableArchive? {
         let sidecar = dir.appendingPathComponent(ArchiveManifest.sidecarName)
+        if !downloading, VersionStamp.date(dir.lastPathComponent) != nil, CloudFile.isDataless(sidecar) {
+            return listed(at: dir)
+        }
         guard let m = try? ArchiveManifest.read(sidecar), !m.artifacts.isEmpty else { return nil }
         // a timestamped folder name means this is one version; the library name is its parent.
         let version = VersionStamp.date(dir.lastPathComponent)
@@ -252,6 +259,25 @@ public enum RestoreDiscovery {
                                   bytes: m.artifacts.reduce(0) { $0 + $1.size }, artifactNames: m.artifacts.map(\.name),
                                   encrypted: m.encrypted ?? false, version: version, libraryKey: identity?.key)
         a.contents = m.contents
+        return a
+    }
+
+    /// A version whose manifest is evicted, from its folder's listing alone: its
+    /// artifacts are the files beside the manifest and the file list, its format told
+    /// by their extension (a version is never a mirror), its size unknown (0). Enough
+    /// to count and measure it; not to open, check or restore it.
+    static func listed(at dir: URL) -> RestorableArchive? {
+        guard let version = VersionStamp.date(dir.lastPathComponent) else { return nil }
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter {
+            !$0.hasPrefix(".") && $0 != ArchiveManifest.sidecarName && !ContentsListing.names.contains($0)
+        }.sorted()
+        guard !names.isEmpty else { return nil }
+        let folder = dir.deletingLastPathComponent()
+        let identity = LibraryIdentity.read(in: folder)
+        var a = RestorableArchive(dir: dir, libraryName: identity?.name ?? folder.lastPathComponent, format: .sealedDMG,
+                                  bytes: 0, artifactNames: names, version: version, libraryKey: identity?.key)
+        // "Notes.zip" or "Notes.zip.part.aa": the bundle name, then what follows it
+        if names[0].dropFirst(a.bundleName.count).hasPrefix(".zip") { a.format = .sealedZip }
         return a
     }
 }
