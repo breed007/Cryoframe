@@ -135,6 +135,8 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
     public var artifactNames: [String]    // from the manifest, in order
     public var encrypted: Bool            // needs a passphrase to open
     public var version: Date?             // the timestamp of this sealed version (nil = single-copy / legacy)
+    /// the version's file list, as its manifest records it (see ContentsListing); nil: none
+    public var contents: ContentsDigest?
 
     public init(dir: URL, libraryName: String, format: ArchiveFormat, bytes: UInt64,
                 artifactNames: [String], encrypted: Bool = false, version: Date? = nil, libraryKey: String? = nil,
@@ -246,9 +248,11 @@ public enum RestoreDiscovery {
         let version = VersionStamp.date(dir.lastPathComponent)
         let folder = version != nil ? dir.deletingLastPathComponent() : dir
         let identity = LibraryIdentity.read(in: folder)
-        return RestorableArchive(dir: dir, libraryName: identity?.name ?? folder.lastPathComponent, format: m.format,
-                                 bytes: m.artifacts.reduce(0) { $0 + $1.size }, artifactNames: m.artifacts.map(\.name),
-                                 encrypted: m.encrypted ?? false, version: version, libraryKey: identity?.key)
+        var a = RestorableArchive(dir: dir, libraryName: identity?.name ?? folder.lastPathComponent, format: m.format,
+                                  bytes: m.artifacts.reduce(0) { $0 + $1.size }, artifactNames: m.artifacts.map(\.name),
+                                  encrypted: m.encrypted ?? false, version: version, libraryKey: identity?.key)
+        a.contents = m.contents
+        return a
     }
 }
 

@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import CryptoKit
 import CryoframeShared
 
 public enum LibraryRunResult: Sendable, Equatable {
@@ -95,6 +96,8 @@ public struct JobExecutor: Sendable {
         let buildDir: URL           // scratch dir to clean once distribution is done
         let dests: [Target]         // the available destinations to copy/ship it to
         var notes: [String] = []    // what the run says about how it was built
+        /// the version's file list in scratch, copied beside each copy (see ContentsListing)
+        var contents: StagedContents?
     }
 
     /// where one library lives, and how to reach it once its disk is frozen.
@@ -331,6 +334,25 @@ public struct JobExecutor: Sendable {
                 "\(blocked.library.displayName) is on a \(fs) volume, which can't be frozen. Quit \(app) so it can be copied safely, then run again.")
         }
 
+        // The version folder's name, chosen now: each version's file list says which
+        // version it is, and is written as the archive is built. Not one an earlier
+        // run's version already has: two runs of the same job in the same second would
+        // otherwise overwrite. Bump by whole seconds so the name stays a parseable
+        // timestamp. Asked again once the archives are built (see below).
+        let allFolders = folderOf.values.flatMap(\.values)
+        func freeStamp(from date: Date) -> Date {
+            var d = date
+            while allFolders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(VersionStamp.string(d)).path) }) {
+                d = d.addingTimeInterval(1)
+            }
+            return d
+        }
+        let plannedDate = sealed == nil ? now : freeStamp(from: now)
+        let plannedStamp = VersionStamp.string(plannedDate)
+        // an encrypted job's lists are sealed with a key from its passphrase, derived
+        // once per run (see ContentsCrypto); without one, its versions get no list
+        let listKey = sealed != nil ? passphrase.flatMap { ContentsCrypto.masterKey(passphrase: $0, jobID: job.id) } : nil
+
         let coordinator = SnapshotCoordinator(helper: helper)
         let pass = try await Self.withFrozenVolumes(volumes, coordinator: coordinator, ownerUID: ownerUID) { mounts -> SnapshotPass in
             var results: [LibraryRunResult] = []
@@ -349,7 +371,14 @@ public struct JobExecutor: Sendable {
                       let root = placement.root(in: mounts) else {
                     results.append(.notFound(library: library.displayName)); continue   // source problem: all destinations
                 }
-                let stats = Self.directoryStats(root, forDMG: sealed == .dmg, forZip: sealed == .zip, forMirror: sealed == nil)
+                // a sealed version's file list, gathered on this walk (see ContentsListing).
+                // A library read live, not from a snapshot, may change between this walk
+                // and the build, so its list can't say what the archive lacks.
+                let listing = sealed == nil ? nil
+                    : ContentsListing.Collector(binding: ContentsCrypto.Binding(jobID: job.id, libraryID: library.id, version: plannedStamp))
+                if let listing, placement.volume.map({ mounts[$0.mountPoint] == nil }) ?? true { listing.markPartial() }
+                let stats = Self.directoryStats(root, forDMG: sealed == .dmg, forZip: sealed == .zip, forMirror: sealed == nil,
+                                                listing: listing)
                 let sourceSize = stats.bytes
                 // a mirror writes every file out whole (see copySize); a sealed archive
                 // compresses, and is held to the bytes the library takes on disk
@@ -426,7 +455,8 @@ public struct JobExecutor: Sendable {
                         builds.append(try self.buildSealed(job: job, library: library, index: idx, source: source,
                                                            sealed: sealed, plan: plan, found: stats.dmgBlockers,
                                                            buildDir: buildDir, copyDir: copyDir, copyRoomRefusal: copyRoomRefusal,
-                                                           dests: live, runner: runner, passphrase: passphrase, onStage: onStage))
+                                                           dests: live, runner: runner, passphrase: passphrase,
+                                                           listing: listing.map { ($0, listKey) }, onStage: onStage))
                         poller.cancel()
                         notes.append(contentsOf: builds.last?.notes ?? [])
                     } catch is CancelledError { poller.cancel(); cancelled = true; break }
@@ -495,26 +525,23 @@ public struct JobExecutor: Sendable {
         }
         var results = pass.results
 
-        // choose a version-folder name that doesn't collide with an existing one — two
-        // runs of the same job in the same second would otherwise overwrite. Bump by
-        // whole seconds so the name stays a parseable timestamp.
-        var versionDate = now
-        if !pass.builds.isEmpty {
-            let folders = folderOf.values.flatMap(\.values)
-            while folders.contains(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent(VersionStamp.string(versionDate)).path) }) {
-                versionDate = versionDate.addingTimeInterval(1)
-            }
-        }
+        // the name chosen before the build, unless a folder of it has turned up since:
+        // then the next free one, and the lists, which name the other, aren't copied
+        var builds = pass.builds
+        let versionDate = builds.isEmpty ? now : freeStamp(from: plannedDate)
         let versionStamp = VersionStamp.string(versionDate)
+        if versionStamp != plannedStamp {
+            for i in builds.indices { builds[i].contents = nil }
+        }
 
         // distribute each built sealed archive to its destinations (snapshot released).
         // A resumable destination ships in parts; everything else is a copy + split +
         // manifest. No recompression: the artifact was built once above.
-        for build in pass.builds {
-            if control.isCancelled { pass.builds.forEach(cleanupBuild); return .cancelled }
+        for build in builds {
+            if control.isCancelled { builds.forEach(cleanupBuild); return .cancelled }
             var keepBuild = false      // a dropped resumable ship leaves a pending → keep the artifact for resume
             for dest in build.dests {
-                if control.isCancelled { pass.builds.forEach(cleanupBuild); return .cancelled }
+                if control.isCancelled { builds.forEach(cleanupBuild); return .cancelled }
                 let needed = build.byteSize + build.byteSize / 20
                 if (Self.freeSpace(for: dest.destinationDir) ?? .max) < needed {
                     results.append(.failed(library: build.library.displayName, destination: dest.displayName,
@@ -528,11 +555,14 @@ public struct JobExecutor: Sendable {
                         onStage(.transferring)
                         let key = "\(build.jobID):\(Self.safe(dest.id)):\(build.library.id)"
                         // the drive it goes to, so it is finished on that drive and no other
-                        let pending = PendingTransfer(jobID: key, sourceFile: build.builtFile.path,
+                        var pending = PendingTransfer(jobID: key, sourceFile: build.builtFile.path,
                                                       baseName: build.builtFile.lastPathComponent, totalBytes: build.byteSize,
                                                       chunkSize: chunkSize, targetDir: destDir.path, format: build.format,
                                                       encrypted: build.encrypted,
                                                       volumeUUID: DestinationResolver(volumes: self.volumes).identity(for: dest.destinationDir)?.uuid)
+                        // the list beside the staged archive, as it is now: a resume
+                        // copies it only if it is still this file
+                        pending.contents = build.contents?.digest
                         pendingStore?.save(pending)
                         let tStart = Date(); let chunk = pending.chunkSize, totalBytes = pending.totalBytes
                         let manifest = try ChunkedShipper().ship(pending, persist: { pendingStore?.save($0) }, control: control,
@@ -556,7 +586,8 @@ public struct JobExecutor: Sendable {
                         let poller = self.archivePoller(total: build.byteSize, outputDir: destDir, idx: build.index, count: count, onProgress: onProgress)
                         let engine = SealedArchiveEngine(build.format == .sealedDMG ? .dmg : .zip,
                                                          split: dest.constraints.splitPolicy, runner: runner)
-                        let result = try engine.distribute(builtFile: build.builtFile, into: destDir, encrypted: build.encrypted)
+                        let result = try engine.distribute(builtFile: build.builtFile, into: destDir, encrypted: build.encrypted,
+                                                           contents: build.contents)
                         poller.cancel()
                         // confirm the copy matches the verified build, so a copy that was
                         // corrupted in transit can't masquerade as a good backup.
@@ -569,7 +600,7 @@ public struct JobExecutor: Sendable {
                                                   parts: result.artifacts.count, bytes: build.byteSize, verified: build.verified))
                     }
                 } catch is CancelledError {
-                    pass.builds.forEach(cleanupBuild); return .cancelled
+                    builds.forEach(cleanupBuild); return .cancelled
                 } catch {
                     if dest.constraints.resumableTransfer { keepBuild = true }     // pending saved → resume later
                     results.append(.failed(library: build.library.displayName, destination: dest.displayName, error: Self.failureText(error)))
@@ -1072,19 +1103,29 @@ public struct JobExecutor: Sendable {
 
     /// With `forZip`, what a sealed zip can't hold (named pipes, sockets, devices);
     /// with `forMirror`, the same, which a live mirror leaves out (see MirrorCopy.isLeftOut).
+    /// With `listing`, the version's file list is gathered on the same walk (see
+    /// ContentsListing): every folder, file and link, and none of what is left out.
     static func directoryStats(_ url: URL, forDMG: Bool = false, forZip: Bool = false,
-                               forMirror: Bool = false) -> DirectoryStats {
+                               forMirror: Bool = false, listing: ContentsListing.Collector? = nil) -> DirectoryStats {
         var out = DirectoryStats()
-        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey,
+        var keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey,
                                          .totalFileSizeKey]
+        if listing != nil { keys.formUnion([.isDirectoryKey, .contentModificationDateKey]) }
         let root = url.standardizedFileURL.path
+        let prefix = url.path.hasSuffix("/") ? url.path : url.path + "/"
+        func relative(_ u: URL) -> String {
+            let p = u.path
+            return p.hasPrefix(prefix) ? String(p.dropFirst(prefix.count)) : DMGBlockers.relative(p, to: root)
+        }
         // a folder that can't be listed is found by inspecting it, before the walk
         // tries to go in (see DMGBlockers.inspect)
         guard FileManager.default.isReadableFile(atPath: url.path),
               let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys), options: [],
                                                      errorHandler: { _, _ in out.readable = false; return true }) else {
-            out.readable = false; return out
+            out.readable = false; listing?.markPartial(); return out
         }
+        // what the walk couldn't see isn't listed, so the list can't say it isn't there
+        defer { if !out.readable { listing?.markPartial() } }
         var groups = DMGBlockers.Membership()
         let sealed = forDMG || forZip || forMirror
         // a mirror keeps locks (MirrorCopy.copyFlags); a sealed build may not
@@ -1094,13 +1135,23 @@ public struct JobExecutor: Sendable {
             if sealed {
                 out.dmgBlockers.inspect(u.path, relative: DMGBlockers.relative(u.path, to: root), groups: &groups, forDMG: forDMG, locks: locks)
             }
-            guard let v = try? u.resourceValues(forKeys: keys) else { continue }
-            if v.isSymbolicLink == true { out.entries += 1; continue }
+            guard let v = try? u.resourceValues(forKeys: keys) else { listing?.markPartial(); continue }
+            if v.isSymbolicLink == true {
+                out.entries += 1
+                listing?.add(relative(u), size: 0, modified: v.contentModificationDate, kind: .link)
+                continue
+            }
+            if v.isDirectory == true {
+                listing?.add(relative(u), size: 0, modified: v.contentModificationDate, kind: .folder)
+                continue
+            }
+            // named pipes, sockets and devices: in no archive, so in no list
             guard v.isRegularFile == true else { continue }
             out.entries += 1
             let allocated = UInt64(v.totalFileAllocatedSize ?? v.fileAllocatedSize ?? 0)
             out.bytes += allocated
             out.copyBytes += copySize(allocated: allocated, length: UInt64(max(v.totalFileSize ?? 0, 0)), path: u.path)
+            listing?.add(relative(u), size: UInt64(max(v.totalFileSize ?? 0, 0)), modified: v.contentModificationDate, kind: .file)
         }
         return out
     }
@@ -1204,6 +1255,7 @@ public struct JobExecutor: Sendable {
                              sealed: SealedArchiveEngine.Sealed, plan: SealedReadPlan, found: DMGBlockers,
                              buildDir: URL, copyDir: URL, copyRoomRefusal: () -> String?, dests: [Target],
                              runner: CommandRunner, passphrase: String?,
+                             listing: (ContentsListing.Collector, SymmetricKey?)? = nil,
                              onStage: @escaping @Sendable (BackupStage) -> Void) throws -> SealedBuild {
         let fm = FileManager.default
         // marked as this job's before anything goes in (see ScratchLayout)
@@ -1226,9 +1278,13 @@ public struct JobExecutor: Sendable {
             verified = try StrongVerifier(runner: runner).verify(archive, type: library, passphrase: passphrase).passed
         }
         let digest = (try? Checksum.sha256(of: file)) ?? ""
+        // the version's file list, beside the archive in scratch: an encrypted job's
+        // only ever sealed, so no plaintext of it is written (see ContentsListing).
+        // One that can't be written leaves the version without a list, nothing more.
+        let contents = listing.flatMap { ContentsListing.write($0.0, master: $0.1, encrypted: passphrase != nil, into: buildDir) }
         return SealedBuild(library: library, jobID: job.id, index: index, builtFile: file, format: archive.format,
                            byteSize: size, contentDigest: digest, verified: verified, encrypted: passphrase != nil,
-                           buildDir: buildDir, dests: dests, notes: notes)
+                           buildDir: buildDir, dests: dests, notes: notes, contents: contents)
     }
 
     private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL, target: Target,

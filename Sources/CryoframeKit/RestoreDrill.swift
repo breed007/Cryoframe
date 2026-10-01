@@ -45,7 +45,7 @@ public struct RestoreDriller: Sendable {
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             // a drill restores the whole archive, so an evicted cloud placeholder
             // would pull it all down — skip unless the user opted to download.
-            if isCloud, CloudFile.anyDataless(in: archive.dir) {
+            if isCloud, CloudFile.anyDataless(of: archive) {
                 if !materializeCloud {
                     checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
                                                detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",

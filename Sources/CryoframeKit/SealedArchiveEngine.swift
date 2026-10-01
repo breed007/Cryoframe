@@ -53,15 +53,20 @@ public struct SealedArchiveEngine: ArchiveEngine {
     /// place an already-built artifact into a destination, applying this engine's split
     /// policy and writing the checksum manifest. Lets a sealed archive be built once and
     /// copied to several destinations (each with its own split cap) without recompressing.
-    public func distribute(builtFile: URL, into destDir: URL, encrypted: Bool) throws -> ArchiveResult {
+    /// `contents`: the version's file list, copied first; the manifest names it only
+    /// if the copy matches (see ContentsListing.place).
+    public func distribute(builtFile: URL, into destDir: URL, encrypted: Bool,
+                           contents: StagedContents? = nil) throws -> ArchiveResult {
         let fm = FileManager.default
         try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let listed = contents.flatMap { ContentsListing.place($0, into: destDir) }
+        if listed == nil { ContentsListing.removeAll(in: destDir) }
         let copied = destDir.appendingPathComponent(builtFile.lastPathComponent)
         try? fm.removeItem(at: copied)
         try fm.copyItem(at: builtFile, to: copied)
         let format: ArchiveFormat = sealed == .dmg ? .sealedDMG : .sealedZip
         let result = ArchiveResult(artifacts: try maybeSplit(copied, in: destDir, fm: fm), format: format)
-        try ArchiveManifest.write(try ArchiveManifest.build(for: result, encrypted: encrypted), toDir: destDir)
+        try ArchiveManifest.write(try ArchiveManifest.build(for: result, encrypted: encrypted, contents: listed), toDir: destDir)
         return result
     }
 

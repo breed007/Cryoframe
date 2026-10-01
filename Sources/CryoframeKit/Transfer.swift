@@ -32,6 +32,11 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
     /// resume could otherwise read a different archive from the one its first parts
     /// came from. nil: recorded before this was.
     public var source: SourceStamp?
+    /// The version's file list, as it was staged beside `sourceFile` when the transfer
+    /// began (see ContentsListing). On a resume the staged list goes only if it is
+    /// still that file: a later run makes its own at the same path. nil: none, or
+    /// recorded before lists were (the manifest then names none).
+    public var contents: ContentsDigest?
 
     public var totalParts: Int { Int((totalBytes + chunkSize - 1) / max(chunkSize, 1)) }
 
@@ -57,6 +62,7 @@ public struct PendingTransfer: Codable, Sendable, Identifiable {
         completed = try c.decodeIfPresent([ArtifactDigest].self, forKey: .completed) ?? []
         volumeUUID = try c.decodeIfPresent(String.self, forKey: .volumeUUID)
         source = try? c.decodeIfPresent(SourceStamp.self, forKey: .source)
+        contents = try? c.decodeIfPresent(ContentsDigest.self, forKey: .contents)
     }
 
     /// The job this transfer belongs to: records are keyed `<job>:<dest>:<lib>`
@@ -260,8 +266,16 @@ public struct ChunkedShipper: Sendable {
             persist(state)
             throw TransferPartMissing(part: Self.partName(state.baseName, gone))
         }
+        // the file list, before the manifest that names it, and only as recorded
+        // when the transfer began: the digest is the record's, never the staged
+        // file's now (see PendingTransfer.contents)
+        let contents = state.contents.flatMap { d in
+            ContentsListing.place(StagedContents(url: URL(fileURLWithPath: state.sourceFile).deletingLastPathComponent()
+                                                     .appendingPathComponent(d.name), digest: d), into: targetDir)
+        }
+        if contents == nil { ContentsListing.removeAll(in: targetDir) }
         let manifest = VerificationManifest(format: state.format, artifacts: state.completed,
-                                            encrypted: state.encrypted ? true : nil)
+                                            encrypted: state.encrypted ? true : nil, contents: contents)
         try ArchiveManifest.write(manifest, toDir: targetDir)   // completion marker, written last
         return manifest
     }

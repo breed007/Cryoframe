@@ -169,7 +169,7 @@ public struct RecoveryRehearsal: Sendable {
 
     private func rehearseOne(_ a: RestorableArchive, isCloud: Bool, materializeCloud: Bool, quiet: TimeInterval,
                              passphrase: @Sendable (String) -> String?) -> LibraryOutcome {
-        if isCloud, CloudFile.anyDataless(in: a.dir) {
+        if isCloud, CloudFile.anyDataless(of: a) {
             guard materializeCloud else {
                 return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: true,
                                       skipped: true, detail: "not downloaded — skipped")

@@ -46,6 +46,18 @@ public enum CloudFile {
         return false
     }
 
+    /// Whether any of `archive`'s own files, the artifacts its manifest names, is a
+    /// placeholder. Not its whole folder: a version's file list (see ContentsListing)
+    /// evicted on its own made a version on this Mac read "not downloaded, skipped".
+    public static func anyDataless(of archive: RestorableArchive) -> Bool {
+        archive.archiveResult().artifacts.contains { anyDataless(in: $0) }
+    }
+
+    /// the same, downloading: only the artifacts, never the file list beside them
+    public static func materialize(_ archive: RestorableArchive) {
+        archive.archiveResult().artifacts.forEach { materialize($0) }
+    }
+
     /// best-effort download of a placeholder so a subsequent read is local. iCloud gets
     /// an explicit kick; the file providers fault the data in on a coordinated read.
     public static func materialize(_ url: URL) {

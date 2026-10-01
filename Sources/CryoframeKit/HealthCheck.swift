@@ -89,14 +89,14 @@ public struct HealthChecker: Sendable {
             let isCloud = t.kind == .cloudSync   // by kind, so pre-1.2 cloud jobs (no provider field) count too
             // a cloud archive evicted to a placeholder: skip it (don't trigger a
             // surprise re-download) unless the user opted to download for checks.
-            if isCloud, CloudFile.anyDataless(in: archive.dir) {
+            if isCloud, CloudFile.anyDataless(of: archive) {
                 if !materializeCloud {
                     checks.append(ArchiveCheck(library: archive.libraryName, version: archive.version, passed: true,
                                                detail: "not downloaded from \(t.cloudProvider?.displayName ?? "the cloud folder") — skipped",
                                                destination: multiDest ? t.displayName : nil, skipped: true, libraryKey: archive.libraryKey))
                     continue
                 }
-                CloudFile.materialize(archive.dir)
+                CloudFile.materialize(archive)
             }
             // a checksum that wasn't compared isn't a verified archive: say so,
             // and don't count it either way (see MirrorSeal)

@@ -21,9 +21,24 @@ public struct VerificationManifest: Codable, Sendable, Equatable {
     /// a mirror's bands when it was sealed, as hex ranges ("0-1f,22"); see MirrorSeal.
     /// nil for sealed archives and for mirrors sealed before 1.6.
     public var sealedBands: String?
+    /// the version's file list (see ContentsListing): apart from `artifacts`, so
+    /// nothing that checks, counts or restores the archive sees it. nil: no list.
+    public var contents: ContentsDigest?
 
-    public init(format: ArchiveFormat, artifacts: [ArtifactDigest], encrypted: Bool? = nil, sealedBands: String? = nil) {
+    public init(format: ArchiveFormat, artifacts: [ArtifactDigest], encrypted: Bool? = nil, sealedBands: String? = nil,
+                contents: ContentsDigest? = nil) {
         self.format = format; self.artifacts = artifacts; self.encrypted = encrypted; self.sealedBands = sealedBands
+        self.contents = contents
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        format = try c.decode(ArchiveFormat.self, forKey: .format)
+        artifacts = try c.decode([ArtifactDigest].self, forKey: .artifacts)
+        encrypted = try c.decodeIfPresent(Bool.self, forKey: .encrypted)
+        sealedBands = try c.decodeIfPresent(String.self, forKey: .sealedBands)
+        // a list record this version can't read is no list, never an unreadable manifest
+        contents = try? c.decodeIfPresent(ContentsDigest.self, forKey: .contents)
     }
 }
 
@@ -31,11 +46,13 @@ public enum ArchiveManifest {
     public static let sidecarName = "cryoframe-manifest.json"
 
     /// hash every artifact and build the manifest.
-    public static func build(for result: ArchiveResult, encrypted: Bool = false) throws -> VerificationManifest {
+    public static func build(for result: ArchiveResult, encrypted: Bool = false,
+                             contents: ContentsDigest? = nil) throws -> VerificationManifest {
         let digests = try result.artifacts.map { url -> ArtifactDigest in
             ArtifactDigest(name: url.lastPathComponent, size: Checksum.byteSize(of: url), sha256: try Checksum.digest(of: url))
         }
-        return VerificationManifest(format: result.format, artifacts: digests, encrypted: encrypted ? true : nil)
+        return VerificationManifest(format: result.format, artifacts: digests, encrypted: encrypted ? true : nil,
+                                    contents: contents)
     }
 
     @discardableResult
