@@ -36,6 +36,16 @@ public enum ToolWatchdog {
     static let termGrace: TimeInterval = 10
     static let abandonAfter: TimeInterval = 20
 
+    /// the process group `pid` leads, if it leads one of its own: one this process
+    /// isn't in, so signaling it can never reach Cryoframe itself. Foundation's
+    /// Process starts every tool as the leader of a new group, which everything the
+    /// tool starts joins unless it makes one of its own (pinned in ToolWatchdogTests).
+    /// nil when that isn't so: the tool is then stopped by the processes under it.
+    static func ownGroup(of pid: pid_t) -> pid_t? {
+        let group = getpgid(pid)
+        return pid > 1 && group == pid && group != getpgrp() ? group : nil
+    }
+
     /// CPU time (ns) and disk bytes read and written, for `pid` and every process
     /// under it; nil if `pid` can't be read (it has exited)
     static func activity(of pid: pid_t) -> (cpuNs: UInt64, io: UInt64)? {
@@ -115,6 +125,10 @@ final class ToolWatch: @unchecked Sendable {
 
     func start() {
         let pid = process.processIdentifier
+        // read now, while the tool surely runs: once it has exited and been reaped,
+        // its group (which outlives it while anything it started is left) can't be
+        // read from it
+        let group = ToolWatchdog.ownGroup(of: pid)
         let tick = min(5, max(0.02, limit / 10))
         Thread.detachNewThread { [self] in
             let clock = { ProcessInfo.processInfo.systemUptime }
@@ -139,7 +153,7 @@ final class ToolWatch: @unchecked Sendable {
                 guard quiet >= limit else { continue }
                 let at = clock()
                 state.withLock { $0.stalledAfter = quiet; $0.stoppedAt = at }
-                stop(pid)
+                stop(pid, group: group)
                 return
             }
         }
@@ -148,16 +162,30 @@ final class ToolWatch: @unchecked Sendable {
     /// the tool exited or the run has moved on: stop watching
     func finish() { done.signal() }
 
-    /// SIGTERM the tool and everything under it (woken first, if paused), then SIGKILL
-    /// whatever is still there after the grace period
-    private func stop(_ pid: pid_t) {
-        let tree = RunControl.subtreeProcs(of: pid).map(\.pid)
-        for p in tree { kill(p, SIGCONT) }
-        for p in tree { kill(p, SIGTERM) }
-        let deadline = ProcessInfo.processInfo.systemUptime + ToolWatchdog.termGrace
-        while ProcessInfo.processInfo.systemUptime < deadline, tree.contains(where: { kill($0, 0) == 0 }) {
-            Thread.sleep(forTimeInterval: 0.1)
+    /// SIGTERM the tool's process group and anything else under it, then wake it (a
+    /// paused tool handles the SIGTERM before it runs anything more), then SIGKILL
+    /// whatever of it is still there after the grace period.
+    ///
+    /// The group, not just the processes read under the tool: a tool woken from a
+    /// pause runs on between the read and the signal, and a child it starts then (or
+    /// leaves behind as it exits, handed to launchd) isn't under it, but is in its
+    /// group. Left running, that child held the tool's output open, and the run
+    /// waited out the time allowed for a tool stuck in the kernel.
+    private func stop(_ pid: pid_t, group: pid_t?) {
+        // anything under the tool that left its group (or all of it, if the tool has
+        // no group of its own to signal)
+        let strays = RunControl.subtreeProcs(of: pid).map(\.pid).filter { p in group.map { getpgid(p) != $0 } ?? true }
+        func signal(_ sig: Int32) {
+            if let group { kill(-group, sig) }
+            for p in strays { kill(p, sig) }
         }
-        for p in tree where kill(p, 0) == 0 { kill(p, SIGKILL) }
+        func running() -> Bool {
+            (group.map { kill(-$0, 0) == 0 } ?? false) || strays.contains { kill($0, 0) == 0 }
+        }
+        signal(SIGTERM)
+        signal(SIGCONT)
+        let deadline = ProcessInfo.processInfo.systemUptime + ToolWatchdog.termGrace
+        while ProcessInfo.processInfo.systemUptime < deadline, running() { Thread.sleep(forTimeInterval: 0.1) }
+        if running() { signal(SIGKILL) }
     }
 }

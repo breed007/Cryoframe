@@ -47,6 +47,17 @@ private func busy(_ seconds: Double) -> [String] {
         #expect(kill(child, 0) != 0, "the tool's child is still running")
     }
 
+    // The watchdog stops a tool by its process group, so the group must be the
+    // tool's own: one it leads, never the one the app (or this test) is in.
+    @Test func aToolLeadsAProcessGroupOfItsOwn() throws {
+        let r = try ProcessCommandRunner(quietLimit: 5).run("/bin/sh", ["-c", "echo $$ $(ps -o pgid= -p $$)"])
+        let f = r.stdout.split(separator: " ").compactMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        try #require(f.count == 2, "\(r.stdout)")
+        #expect(f[1] == f[0], "the tool \(f[0]) is in group \(f[1])")
+        #expect(f[1] != getpgrp())
+        #expect(ToolWatchdog.ownGroup(of: getpid()) == nil, "this process's own group counted as a tool's")
+    }
+
     // Working and silent (rsync prints nothing without -v), slow and printing, or
     // working through a child: all left alone, however long past the quiet limit.
     @Test func aToolThatIsWorkingIsNeverStopped() throws {
