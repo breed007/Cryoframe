@@ -49,8 +49,11 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
     /// destinations that are connected; changes nothing. `jobs`: every saved job (whose
     /// a folder an earlier version of Cryoframe made is). `pending`: the interrupted
     /// transfers recorded (a folder one still writes into isn't renamed until it's done).
+    /// `lastRun`: when the job last ran, for when its next backup is (see
+    /// BackupJob.nextBackup): what that backup deletes is counted at that date.
     public static func of(draft: BackupJob, base: BackupJob?, jobs: [BackupJob] = [], volumes: VolumeTable = SystemVolumeTable(),
-                          checks: [HealthRecord] = [], pending: [PendingTransfer] = [], now: Date = Date()) -> JobEditImpact {
+                          checks: [HealthRecord] = [], pending: [PendingTransfer] = [], lastRun: Date? = nil,
+                          now: Date = Date()) -> JobEditImpact {
         var lines: [Line] = []
         var deletes = 0
         var consents: [AdoptionConsent] = []
@@ -61,6 +64,10 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
         func name(_ t: Target) -> String { labels[t.id] ?? t.displayName }
         let pendingDirs = pending.map { URL(fileURLWithPath: $0.targetDir, isDirectory: true) }
         let others = jobs.filter { $0.id != draft.id }.map { resolver.resolve($0).job }
+        let upcoming = draft.nextBackup(lastRun: lastRun, now: now)
+        // the go-ahead already given that still holds under the draft's Keep rule
+        var given = draft
+        given.adoptionConsents = base?.adoptionConsents
 
         // taken out of the job: nothing is deleted
         if let base {
@@ -141,28 +148,30 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
                 let (shelf, _) = JobExecutor.nextShelf(job: draft, library: lib, in: here, jobs: others)
                 let transferring = JobExecutor.transferring(draft, [t.id: [lib.id: shelf.folder]], records: { pending }, volumes: volumes)
                 let after = JobExecutor.prunePlan(shelves: [shelf], policy: draft.retention, checks: checks,
-                                                  transferring: transferring, upcoming: now)
-                // adopted, and not yet let follow the Keep rule: this save says yes
-                let asked = Set(shelf.entries.map(\.lastPathComponent)).intersection(shelf.adopted)
-                    .filter { shelf.identity?.holds($0) != true && base?.confirmsAdoption(of: $0, target: t.id, library: lib.id) != true }
-                if !asked.isEmpty {
-                    let n = asked.count
-                    let gone = after.versions.filter { asked.contains($0.url.lastPathComponent) }.count
-                    let unfinished = after.husks.filter { asked.contains($0.lastPathComponent) }.count
+                                                  transferring: transferring, upcoming: upcoming)
+                // adopted, and not yet let follow this Keep rule as far as the next backup
+                // takes it: this save says yes to exactly what's said here
+                if let q = JobExecutor.adoptionQuestion(shelf, policy: draft.retention, checks: checks, transferring: transferring, upcoming: upcoming,
+                                                        shown: { given.hasShownAdoption(of: $0, target: t.id, library: lib.id) },
+                                                        confirmed: { given.confirmsAdoption(of: $0, target: t.id, library: lib.id) }) {
+                    let n = q.versions.count
+                    let gone = q.deletes.count
+                    let unfinished = q.unfinished.count
                     deletes += gone
                     var text = "At \(name(t)), \(n) earlier backup\(n == 1 ? "" : "s") of \(lib.displayName) that this job didn't make "
                         + "(in “\(shelf.folder.lastPathComponent)”) now follow\(n == 1 ? "s" : "") its Keep rule: "
                         + (gone == 0 ? "none are deleted at the next backup" : "\(gone) \(gone == 1 ? "is" : "are") deleted at the next backup")
                     if unfinished > 0 { text += "; \(unfinished) that never finished \(unfinished == 1 ? "is" : "are") deleted too" }
                     say(gone > 0 || unfinished > 0 ? .deletes : .keeps, text + ".")
-                    consents.append(AdoptionConsent(targetID: t.id, libraryID: lib.id, versions: asked.sorted(),
-                                                    deletes: gone + unfinished, confirmedAt: now))
+                    consents.append(q.consent(target: t.id, library: lib.id, rule: draft.retention, at: now))
                 }
                 // a Keep rule that keeps fewer, over the job's own versions
                 guard let base, before != nil, old != nil, draft.retention != base.retention else { continue }
-                let own = after.versions.filter { !asked.contains($0.url.lastPathComponent) }
+                let own = after.versions.filter { !shelf.adopted.contains($0.url.lastPathComponent) }
                 let was = JobExecutor.prunePlan(shelves: [shelf], policy: base.retention, checks: checks, transferring: transferring,
-                                                upcoming: now, confirmed: { _, v in base.confirmsAdoption(of: v, target: t.id, library: lib.id) })
+                                                upcoming: upcoming,
+                                                confirmed: { _, v in base.confirmsAdoption(of: v, target: t.id, library: lib.id) },
+                                                shown: { _, v in base.hasShownAdoption(of: v, target: t.id, library: lib.id) })
                 if own.count > was.versions.count {
                     deletes += own.count
                     let n = own.count

@@ -70,7 +70,7 @@ private func check(_ kind: String, library: String = "Photos", passed: [Int] = [
             try Data("{}".utf8).write(to: v.appendingPathComponent(ArchiveManifest.sidecarName))
         }
         let checks = [check("drill", library: name, failed: [8, 7, 6, 5], at: 8), check("drill", library: name, passed: [2], at: 2)]
-        let failures = JobExecutor.pruneVersions(target: base, libraries: [.photos], policy: .keepLast(2), checks: checks)
+        let failures = JobExecutor.pruneVersions(target: base, libraries: [.photos], policy: .keepLast(2), checks: checks, confirmed: { _, _ in true })
         #expect(failures.isEmpty)
         let left = try fm.contentsOfDirectory(atPath: lib.path).sorted()
         #expect(left == [2, 7, 8].map { VersionStamp.string(day($0)) })

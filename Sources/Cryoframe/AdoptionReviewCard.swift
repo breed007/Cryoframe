@@ -28,9 +28,11 @@ struct AdoptionReviewCard: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer(minLength: 8)
-                        Button(buttonTitle(review)) { model.confirm(review) }
-                            .controlSize(.small)
-                            .help(review.effect)
+                        if isCurrent(review) {
+                            Button(buttonTitle(review)) { model.confirm(review) }
+                                .controlSize(.small)
+                                .help(review.effect)
+                        }
                     }
                 }
             }
@@ -48,7 +50,14 @@ struct AdoptionReviewCard: View {
     }
 
     private func detail(_ r: AdoptionReview) -> String {
-        "This job didn't make \(r.versions.count == 1 ? "it" : "them"), so its Keep rule doesn't apply yet. " + r.effect
+        let why = "This job didn't make \(r.versions.count == 1 ? "it" : "them"), so its Keep rule doesn't apply yet. "
+        guard isCurrent(r) else { return why + "Its Keep rule changed since \(r.versions.count == 1 ? "it was" : "they were") counted; its next backup counts again." }
+        return why + r.effect
+    }
+
+    /// counted under the job's Keep rule as it is now: only then can it be said yes to
+    private func isCurrent(_ r: AdoptionReview) -> Bool {
+        model.jobs.first { $0.id == r.jobID }?.retention == r.rule
     }
 
     private func buttonTitle(_ r: AdoptionReview) -> String {

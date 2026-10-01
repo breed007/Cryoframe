@@ -119,7 +119,7 @@ private func run(_ job: BackupJob, at: Date, library: String, bytes: UInt64) -> 
         mirror.format = .sealedZip; mirror.retention = .keepLast(1)
         let now = try LibraryFolders.prepare(job: mirror, library: photos, in: dest, jobs: [mirror, paused], isOpen: { _ in false }).folder
         try archive(in: now, bundle: "Photos Library.photoslibrary", version: v3)
-        JobExecutor.pruneVersions(folders: JobExecutor.prunable(mirror, ["d": [photos.id: now]]), policy: mirror.retention)
+        JobExecutor.pruneVersions(folders: JobExecutor.prunable(mirror, ["d": [photos.id: now]]), policy: mirror.retention, confirmed: { _, _ in true })
         let kept = [v1, v2].filter { v in FileManager.default.fileExists(atPath: legacy.appendingPathComponent(v).path)
             || (try? FileManager.default.contentsOfDirectory(atPath: dest.path))?.contains { FileManager.default.fileExists(atPath: dest.appendingPathComponent($0).appendingPathComponent(v).path) } == true }
         #expect(kept == [v1, v2], "the paused job's versions were pruned by the job that was a mirror: \(names(now))")

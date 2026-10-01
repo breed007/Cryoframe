@@ -116,7 +116,7 @@ private func archive(_ kind: SealedArchiveEngine.Sealed, _ lib: URL, to dir: URL
     // … and one empty partial from a failed run (no manifest), which is the newest by name.
     try fm.createDirectory(at: lib.appendingPathComponent("2026-06-25-120000"), withIntermediateDirectories: true)
 
-    JobExecutor.pruneVersions(target: base.appendingPathComponent("target"), libraries: [.photos], policy: .keepLast(2))
+    JobExecutor.pruneVersions(target: base.appendingPathComponent("target"), libraries: [.photos], policy: .keepLast(2), confirmed: { _, _ in true })
 
     let remaining = (try fm.contentsOfDirectory(atPath: lib.path)).sorted()
     // partial swept; the two newest COMPLETE versions kept (not the empty husk).

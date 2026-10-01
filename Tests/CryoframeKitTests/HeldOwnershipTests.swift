@@ -75,7 +75,7 @@ private func versions(_ dir: URL) -> [String] {
         #expect(Set(LibraryFolders.archives(job: a, library: photos, in: dest).compactMap { $0.version.map(VersionStamp.string) }) == [v1, v2],
                 "the job reads its own held versions")
         a.retention = .keepLast(1)
-        JobExecutor.pruneVersions(folders: JobExecutor.prunable(a, ["d": [photos.id: mine]]), policy: a.retention)
+        JobExecutor.pruneVersions(folders: JobExecutor.prunable(a, ["d": [photos.id: mine]]), policy: a.retention, confirmed: { _, _ in true })
         #expect(versions(mine) == [v1, v2], "held: its retention leaves them")
 
         a.format = .liveMirror(sizeGB: 1)

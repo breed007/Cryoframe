@@ -154,7 +154,7 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
         #expect(p.folder.path != theirs.path)
         #expect(names(theirs) == [v1, v2], "\(how): the old job's versions were moved into \(p.folder.lastPathComponent): \(names(p.folder))")
         try archive(in: p.folder, bundle: "Projects", version: v3)
-        JobExecutor.pruneVersions(folders: JobExecutor.prunable(new, ["d": [newLib.id: p.folder]]), policy: new.retention)
+        JobExecutor.pruneVersions(folders: JobExecutor.prunable(new, ["d": [newLib.id: p.folder]]), policy: new.retention, confirmed: { _, _ in true })
         let survivors = [v1, v2].filter { FileManager.default.fileExists(atPath: theirs.appendingPathComponent($0).path)
                                             || FileManager.default.fileExists(atPath: p.folder.appendingPathComponent($0).path) }
         #expect(survivors == [v1, v2], "\(how): the new job's retention deleted the old job's versions")
@@ -189,7 +189,7 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
                                             VerifiedArchive(library: atV2.libraryName, version: date(v2), passed: true, key: atV2.libraryKey)])
         _ = try LibraryFolders.prepare(job: sealed, library: notes, in: dest, jobs: all, isOpen: { _ in false })
         #expect(names(s) == [v1, v2, v3], "v2 moved home")
-        JobExecutor.pruneVersions(folders: [(notes, s)], policy: .keepLast(1), checks: [drill])
+        JobExecutor.pruneVersions(folders: [(notes, s)], policy: .keepLast(1), checks: [drill], confirmed: { _, _ in true })
         #expect(names(s).contains(v2), "the one version that restored was deleted (its check was recorded as \(atV2.libraryKey ?? "nil")'s): \(names(s))")
     }
 

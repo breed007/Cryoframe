@@ -43,6 +43,9 @@ public struct DrivePairing: Sendable, Equatable {
         /// not yet let follow the Keep rule), counted in `deletes`: saying yes lets
         /// the Keep rule apply to them (see AdoptedVersions.swift)
         public var adopted: [String] = []
+        /// of them, those the next backup deletes (finished or not): all saying yes
+        /// lets it delete
+        public var allows: [String] = []
 
         public struct Copy: Sendable, Equatable {
             public var date: Date?
@@ -55,20 +58,24 @@ public struct DrivePairing: Sendable, Equatable {
     public var libraries: [Library]
     /// why it can't be one of this job's drives; nil when it can
     public var refusal: String?
+    /// the Keep rule it was counted under
+    public var rule: RetentionPolicy?
 
     /// What pairing `target` of `job` with the other drive of its name connected at
     /// its folder would do; nil when there is no such drive. `jobs`: every saved job
     /// (whose backups on the drive are whose). `checks`: the archive checks recorded,
     /// for what retention keeps (see KnownGood). Reads the drive; changes nothing.
+    /// `lastRun`: when the job last ran, for when its next backup is (see
+    /// BackupJob.nextBackup): what that backup deletes is counted at that date.
     public static func look(_ target: Target, job: BackupJob, jobs: [BackupJob], volumes: VolumeTable = SystemVolumeTable(),
-                            checks: [HealthRecord] = [], now: Date = Date()) -> DrivePairing? {
+                            checks: [HealthRecord] = [], lastRun: Date? = nil, now: Date = Date()) -> DrivePairing? {
         let resolver = DestinationResolver(volumes: volumes)
         guard let own = target.volume, !own.isShare, case .otherDrive = resolver.locate(target),
               let here = volumes.volume(containing: target.destinationDir), let uuid = here.uuid, uuid != own.uuid,
               !(target.otherVolumes ?? []).contains(where: { $0.uuid == uuid }),
               let drive = resolver.identity(for: target.destinationDir) else { return nil }
         return look(at: target.destinationDir, on: drive, mount: here.mountPoint, target: target, job: job, jobs: jobs,
-                    wholeDrive: false, checks: checks, now: now)
+                    wholeDrive: false, checks: checks, upcoming: job.nextBackup(lastRun: lastRun, now: now))
     }
 
     /// The same, for renaming the drive `uuid` into a destination of its own (see
@@ -80,14 +87,15 @@ public struct DrivePairing: Sendable, Equatable {
     /// drive isn't connected.
     public static func lookBeforeRenaming(_ uuid: String, target: Target, job: BackupJob, jobs: [BackupJob],
                                           volumes: VolumeTable = SystemVolumeTable(), checks: [HealthRecord] = [],
-                                          now: Date = Date()) -> DrivePairing? {
+                                          lastRun: Date? = nil, now: Date = Date()) -> DrivePairing? {
         func same(_ a: String?) -> Bool { a?.caseInsensitiveCompare(uuid) == .orderedSame }
         guard let own = target.volume, !own.isShare, !same(own.uuid),
               let here = volumes.mounted().first(where: { same($0.uuid) }) else { return nil }
         let relative = (target.otherVolumes ?? []).first { same($0.uuid) }?.relativePath ?? own.relativePath
         let folder = relative.isEmpty ? here.mountPoint : here.mountPoint.appendingPathComponent(relative, isDirectory: true)
         return look(at: folder, on: VolumeIdentity(uuid: here.uuid ?? uuid, name: here.name, relativePath: relative),
-                    mount: here.mountPoint, target: target, job: job, jobs: jobs, wholeDrive: true, checks: checks, now: now)
+                    mount: here.mountPoint, target: target, job: job, jobs: jobs, wholeDrive: true, checks: checks,
+                    upcoming: job.nextBackup(lastRun: lastRun, now: now))
     }
 
     /// Whether saying yes costs anything the drive has now: a dated version or an
@@ -96,8 +104,9 @@ public struct DrivePairing: Sendable, Equatable {
 
     /// the go-ahead saying yes gives, for the destination `targetID` (see AdoptedVersions.swift)
     public func consents(targetID: String, at date: Date = Date()) -> [AdoptionConsent] {
-        libraries.filter { !$0.adopted.isEmpty }.map {
-            AdoptionConsent(targetID: targetID, libraryID: $0.libraryID, versions: $0.adopted, deletes: $0.deletes + $0.unfinished, confirmedAt: date)
+        guard let rule else { return [] }
+        return libraries.filter { !$0.adopted.isEmpty }.map {
+            AdoptionConsent(targetID: targetID, libraryID: $0.libraryID, versions: $0.adopted, allows: $0.allows, rule: rule, confirmedAt: date)
         }
     }
 
@@ -105,7 +114,7 @@ public struct DrivePairing: Sendable, Equatable {
     /// shown is still what happens.
     public func saysTheSame(as other: DrivePairing) -> Bool {
         drive.uuid.caseInsensitiveCompare(other.drive.uuid) == .orderedSame && drive.relativePath == other.drive.relativePath
-            && refusal == other.refusal && libraries == other.libraries
+            && refusal == other.refusal && libraries == other.libraries && rule == other.rule
     }
 
     /// the backups of anything but `job` in `entries` (by their identity files), as a
@@ -125,7 +134,7 @@ public struct DrivePairing: Sendable, Equatable {
     }
 
     static func look(at dir: URL, on drive: VolumeIdentity, mount: URL, target: Target, job: BackupJob, jobs: [BackupJob],
-                     wholeDrive: Bool, checks: [HealthRecord], now: Date) -> DrivePairing {
+                     wholeDrive: Bool, checks: [HealthRecord], upcoming: Date) -> DrivePairing {
         let entries = LibraryFolders.listing(dir)
 
         // backups of anything but this job, by identity: not one of its drives
@@ -164,6 +173,7 @@ public struct DrivePairing: Sendable, Equatable {
             var replacesCopy = false
             var unfinished = 0
             var asked: [String] = []
+            var allows: [String] = []
             if !adopted && legacy != nil {
                 effects.append("The folder there isn't only this job's to take, so it stays as it is and the next backup makes a new one beside it.")
             }
@@ -175,10 +185,14 @@ public struct DrivePairing: Sendable, Equatable {
                     effects.append("\(n) dated version\(n == 1 ? "" : "s") of it in \(from) move\(n == 1 ? "s" : "") into its own folder.")
                 }
                 // saying yes lets the Keep rule apply to what the run adopts (and to what
-                // was adopted before and never let)
-                let plan = JobExecutor.prunePlan(shelves: [shelf], policy: job.retention, checks: checks, upcoming: now)
-                asked = Set(shelf.entries.map(\.lastPathComponent)).intersection(shelf.adopted)
-                    .filter { shelf.identity?.holds($0) != true && !job.confirmsAdoption(of: $0, target: target.id, library: lib.id) }.sorted()
+                // was adopted before and never let), deleting what's said here and no more
+                let plan = JobExecutor.prunePlan(shelves: [shelf], policy: job.retention, checks: checks, upcoming: upcoming)
+                if let q = JobExecutor.adoptionQuestion(shelf, policy: job.retention, checks: checks, upcoming: upcoming,
+                                                        shown: { job.hasShownAdoption(of: $0, target: target.id, library: lib.id) },
+                                                        confirmed: { job.confirmsAdoption(of: $0, target: target.id, library: lib.id) }) {
+                    asked = q.versions
+                    allows = q.deletes + q.unfinished
+                }
                 if adopted || n > 0 {
                     deletes = plan.versions.count
                     let counted = adopted ? versions.count : n
@@ -204,9 +218,9 @@ public struct DrivePairing: Sendable, Equatable {
             }
             return Library(name: lib.displayName, copy: copy, versions: versions, versionBytes: versionBytes,
                            deletes: deletes, replacesCopy: replacesCopy, unfinished: unfinished, effects: effects,
-                           libraryID: lib.id, adopted: asked)
+                           libraryID: lib.id, adopted: asked, allows: allows)
         }
-        return DrivePairing(drive: drive, libraries: libraries, refusal: nil)
+        return DrivePairing(drive: drive, libraries: libraries, refusal: nil, rule: job.retention)
     }
 
     static func modified(_ url: URL) -> Date? {

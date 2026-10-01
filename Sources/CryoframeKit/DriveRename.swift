@@ -305,7 +305,8 @@ public enum DriveRename {
                               isOpen: (URL) -> Bool = { LibraryFolders.anyImageAttached(under: $0) },
                               now: Date = Date()) throws -> Outcome {
         guard let before = drive(uuid, runner: runner) else { throw Refusal.notConnected("The drive") }
-        let jobs = store.load().jobs
+        let state = store.load()
+        let jobs = state.jobs
         guard let job = jobs.first(where: { $0.id == jobID }), let target = job.targets.first(where: { $0.id == targetID }),
               let own = target.volume, own.uuid.caseInsensitiveCompare(uuid) != .orderedSame else {
             throw Refusal.unchecked("the job, or its destination, isn't what it was")
@@ -328,7 +329,7 @@ public enum DriveRename {
                   volumes: volumes, runner: runner, isOpen: isOpen)
         // whose backups are on it, and what the next backup does to them
         guard let look = DrivePairing.lookBeforeRenaming(uuid, target: target, job: job, jobs: jobs, volumes: volumes,
-                                                         checks: checks, now: now) else {
+                                                         checks: checks, lastRun: state.lastRun[jobID], now: now) else {
             throw Refusal.unchecked("what's on \(before.name) can't be looked at")
         }
         if let why = look.refusal { throw Refusal.notThisJobsDrive(why) }

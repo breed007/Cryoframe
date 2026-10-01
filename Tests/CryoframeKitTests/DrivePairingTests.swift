@@ -88,7 +88,7 @@ private func mirrorTop(in dir: URL) throws {
         #expect(folder.path == legacy.path)
         try version(in: folder, now)
         let before = LibraryFolders.versionNames(in: folder).count
-        JobExecutor.pruneVersions(folders: [(papers, folder)], policy: j.retention)
+        JobExecutor.pruneVersions(folders: [(papers, folder)], policy: j.retention, confirmed: { _, _ in true })
         #expect(before - LibraryFolders.versionNames(in: folder).count == lib.deletes)
     }
 

@@ -36,8 +36,10 @@ public enum JobEdit {
         out.enabled = stored.enabled
         out.createdAt = stored.createdAt
         out.encrypted = stored.encrypted
-        // said yes to on the dashboard, a rename, or an earlier save (see AdoptedVersions.swift)
-        out.adoptionConsents = stored.adoptionConsents
+        // said yes to on the dashboard, a rename, or an earlier save (see AdoptedVersions.swift),
+        // while it still holds: one given under another Keep rule is asked again
+        let held = (stored.adoptionConsents ?? []).filter { $0.holds(under: draft.retention) }
+        out.adoptionConsents = held.isEmpty ? nil : held
         out.targets = draft.targets.map { t in
             guard let s = stored.targets.first(where: { $0.id == t.id }),
                   let b = base.targets.first(where: { $0.id == t.id }) else { return t }

@@ -69,7 +69,7 @@ private func versions(_ dir: URL) -> [String] {
         try mirrorTop(in: mine)
         _ = try LibraryFolders.prepare(job: b, library: photos, in: dest, jobs: [a, b], isOpen: { _ in false })
         try version(in: theirs, v3)
-        JobExecutor.pruneVersions(folders: JobExecutor.prunable(b, ["d": [photos.id: theirs]]), policy: b.retention)
+        JobExecutor.pruneVersions(folders: JobExecutor.prunable(b, ["d": [photos.id: theirs]]), policy: b.retention, confirmed: { _, _ in true })
         #expect(versions(mine) == [v1, v2], "taken after the changed job ran")
         #expect(versions(theirs) == [v3])
         #expect(!LibraryFolders.archives(job: b, library: photos, in: dest).contains { [v1, v2].contains($0.dir.lastPathComponent) },
@@ -101,7 +101,7 @@ private func versions(_ dir: URL) -> [String] {
         for d in [1, 2] {
             try version(in: legacy, at(d))
             _ = try LibraryFolders.prepare(job: m, library: photos, in: dest, jobs: [m, s], isOpen: { _ in false })
-            JobExecutor.pruneVersions(folders: [(photos, legacy)], policy: m.retention)
+            JobExecutor.pruneVersions(folders: [(photos, legacy)], policy: m.retention, confirmed: { _, _ in true })
         }
         #expect(versions(legacy) == [v1, v2, at(2)], "its own older version is pruned, the held ones stay")
         #expect(LibraryIdentity.read(in: legacy)?.heldVersions == [v1, v2], "held still, after runs as a sealed job")

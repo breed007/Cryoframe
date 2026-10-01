@@ -146,8 +146,10 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
         let folder = try LibraryFolders.prepare(job: saved, library: papers, in: dest, jobs: [saved], isOpen: { _ in false }).folder
         try version(in: folder, now)
         let before = LibraryFolders.versionNames(in: folder).count
+        // as a run does: what was shown takes its place, and only what was said to go goes
         JobExecutor.pruneVersions(folders: [(papers, folder)], policy: saved.retention,
-                                  confirmed: { _, v in saved.confirmsAdoption(of: v, target: t.id, library: papers.id) })
+                                  confirmed: { _, v in saved.confirmsAdoption(of: v, target: t.id, library: papers.id) },
+                                  shown: { _, v in saved.hasShownAdoption(of: v, target: t.id, library: papers.id) })
         #expect(before - LibraryFolders.versionNames(in: folder).count == 3)
         // without the yes, nothing it adopted goes
         let again = scratch("save-no")
@@ -160,18 +162,123 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
         #expect(LibraryFolders.versionNames(in: f2).count == 5)
     }
 
-    // Saving an edit keeps every yes already given; a new one is added.
-    @Test func saveKeepsTheYesesAlreadyGiven() {
+    // Saving an edit keeps every yes already given that still holds. A yes lets go
+    // only what it was told goes; a new one for the same folder replaces it; one
+    // given under another Keep rule no longer holds.
+    @Test func saveKeepsTheYesesThatStillHold() {
         let dest = URL(fileURLWithPath: "/Volumes/T7/Backups")
-        var stored = job([dest])
-        stored.adoptionConsents = [AdoptionConsent(targetID: dest.path, libraryID: "papers", versions: ["a"], deletes: 1, confirmedAt: start)]
         let base = job([dest])
-        var draft = base; draft.retention = .keepLast(3)
-        let merged = JobEdit.merge(draft: draft, base: base, stored: stored)
+        var stored = base
+        stored.adoptionConsents = [AdoptionConsent(targetID: dest.path, libraryID: "papers", versions: ["a", "b"], allows: ["a"],
+                                                   rule: base.retention, confirmedAt: start)]
+        var renamed = base; renamed.name = "Papers 2"
+        let merged = JobEdit.merge(draft: renamed, base: base, stored: stored)
         #expect(merged?.adoptionConsents == stored.adoptionConsents)
-        let more = merged?.adding([AdoptionConsent(targetID: dest.path, libraryID: "papers", versions: ["b"], deletes: 0, confirmedAt: start)])
-        #expect(more?.confirmsAdoption(of: "a", target: dest.path, library: "papers") == true)
+        #expect(merged?.confirmsAdoption(of: "a", target: dest.path, library: "papers") == true)
+        #expect(merged?.confirmsAdoption(of: "b", target: dest.path, library: "papers") == false, "a yes deletes only what it said")
+        #expect(merged?.hasShownAdoption(of: "b", target: dest.path, library: "papers") == true)
+        #expect(merged?.confirmsAdoption(of: "a", target: "other", library: "papers") == false)
+
+        // a new yes for the same folder replaces the old; one for another is added
+        let more = merged?.adding([AdoptionConsent(targetID: dest.path, libraryID: "papers", versions: ["b", "c"], allows: ["b"],
+                                                   rule: base.retention, confirmedAt: start),
+                                   AdoptionConsent(targetID: "other", libraryID: "papers", versions: ["x"], allows: ["x"],
+                                                   rule: base.retention, confirmedAt: start)])
         #expect(more?.confirmsAdoption(of: "b", target: dest.path, library: "papers") == true)
-        #expect(more?.confirmsAdoption(of: "b", target: "other", library: "papers") == false)
+        #expect(more?.confirmsAdoption(of: "a", target: dest.path, library: "papers") == false)
+        #expect(more?.confirmsAdoption(of: "x", target: "other", library: "papers") == true)
+
+        // another Keep rule: the yes given under the old one no longer holds
+        var lowered = base; lowered.retention = .keepLast(1)
+        let changed = JobEdit.merge(draft: lowered, base: base, stored: stored)
+        #expect(changed?.adoptionConsents == nil)
+        #expect(changed?.confirmsAdoption(of: "a", target: dest.path, library: "papers") == false)
+        #expect(changed?.adding(stored.adoptionConsents ?? []).adoptionConsents == nil)
+        var kept = stored; kept.retention = .keepLast(1)
+        #expect(!kept.confirmsAdoption(of: "a", target: dest.path, library: "papers"), "a yes under keepLast(2) was used under keepLast(1)")
+    }
+
+    // The next backup is placed where the schedule puts it, not at the moment of
+    // counting: one that runs only when asked, is paused, or is overdue runs now.
+    @Test func theNextBackupIsWhenItsScheduled() {
+        var daily = job([URL(fileURLWithPath: "/Volumes/T7/Backups")])
+        daily.frequency = .everyHours(24)
+        let ran = start.addingTimeInterval(10 * day)
+        #expect(daily.nextBackup(lastRun: ran, now: ran) == ran.addingTimeInterval(day))
+        #expect(daily.nextBackup(lastRun: ran, now: ran.addingTimeInterval(2 * day)) == ran.addingTimeInterval(2 * day))
+        #expect(daily.nextBackup(lastRun: nil, now: start) == start.addingTimeInterval(day))
+        var paused = daily; paused.enabled = false
+        #expect(paused.nextBackup(lastRun: ran, now: ran) == ran)
+        #expect(job([URL(fileURLWithPath: "/Volumes/T7/Backups")]).nextBackup(lastRun: ran, now: ran) == ran)     // manual
+    }
+
+    // A daily job's card under a GFS rule, counted right after a run, says what the
+    // next day's backup deletes: no fewer (the person isn't asked again for nothing)
+    // and no more.
+    @Test func aGFSCardCountsTheNextScheduledBackup() throws {
+        let base = scratch("gfs-card")
+        let dest = base.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let legacy = dest.appendingPathComponent("Papers", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        for d in [7.0, 8, 9] { try version(in: legacy, start.addingTimeInterval(d * day)) }
+        var daily = job([dest], retention: .gfs(daily: 3, weekly: 0, monthly: 0))
+        daily.frequency = .everyHours(24)
+        let store = JobStore(url: base.appendingPathComponent("jobs.json"))
+        store.upsert(daily)
+        let t = daily.targets[0]
+        let ran = start.addingTimeInterval(10 * day)
+        let folder = try LibraryFolders.prepare(job: daily, library: papers, in: dest, jobs: [daily], isOpen: { _ in false }).folder
+        try version(in: folder, ran)
+        let made = JobExecutor.adoptionReviews(daily, [t.id: [papers.id: folder]], checks: [], transferring: { _ in false },
+                                               confirmed: { _, _ in false }, now: ran)
+        store.recordAdoptionReviews(jobID: daily.id, made, reached: [t.id])
+        let card = try #require(store.load().adoptionReviews[daily.id]?.first)
+        #expect(card.deletes == 2, "counted as if the next backup shared the day of the one just made")
+        #expect(store.confirm(card, at: ran))
+
+        let now = try #require(store.load().jobs.first)
+        let before = LibraryFolders.versionNames(in: folder)
+        try version(in: folder, ran.addingTimeInterval(day))
+        JobExecutor.pruneVersions(folders: [(papers, folder)], policy: now.retention,
+                                  confirmed: { _, v in now.confirmsAdoption(of: v, target: t.id, library: papers.id) },
+                                  shown: { _, v in now.hasShownAdoption(of: v, target: t.id, library: papers.id) })
+        let gone = before.subtracting(LibraryFolders.versionNames(in: folder))
+        #expect(gone == Set(card.allows), "said \(card.allows.sorted()), deleted \(gone.sorted())")
+    }
+
+    // A card counted under one Keep rule can't be said yes to under another, nor once
+    // a run has counted again: nothing is recorded, and the card stays to be counted again.
+    @Test func aCardThatNoLongerHoldsIsRefused() throws {
+        let base = scratch("refused")
+        let dest = base.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        _ = try legacyFolder(in: dest, versions: 3)
+        let store = JobStore(url: base.appendingPathComponent("jobs.json"))
+        let saved = job([dest], retention: .keepLast(5))
+        store.upsert(saved)
+        let t = saved.targets[0]
+        let folder = try LibraryFolders.prepare(job: saved, library: papers, in: dest, jobs: [saved], isOpen: { _ in false }).folder
+        let ran = start.addingTimeInterval(10 * day)
+        try version(in: folder, ran)
+        let made = JobExecutor.adoptionReviews(saved, [t.id: [papers.id: folder]], checks: [], transferring: { _ in false },
+                                               confirmed: { _, _ in false }, now: ran)
+        store.recordAdoptionReviews(jobID: saved.id, made, reached: [t.id])
+        let card = try #require(store.load().adoptionReviews[saved.id]?.first)
+        #expect(card.deletes == 0)
+
+        // a run counted again: one more of its own, so one of them goes now
+        try version(in: folder, ran.addingTimeInterval(day))
+        let again = JobExecutor.adoptionReviews(saved, [t.id: [papers.id: folder]], checks: [], transferring: { _ in false },
+                                                confirmed: { _, _ in false }, now: ran.addingTimeInterval(day))
+        store.recordAdoptionReviews(jobID: saved.id, again, reached: [t.id])
+        #expect(!store.confirm(card), "a yes to an older count was taken")
+
+        // the Keep rule changed since
+        let fresh = try #require(store.load().adoptionReviews[saved.id]?.first)
+        store.update { s in s.jobs[0].retention = .keepLast(1) }
+        #expect(!store.confirm(fresh), "a yes to a count under another Keep rule was taken")
+        #expect(store.load().jobs.first?.adoptionConsents == nil)
+        #expect(store.load().adoptionReviews[saved.id]?.isEmpty == false)
     }
 }

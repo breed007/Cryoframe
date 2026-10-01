@@ -54,7 +54,7 @@ private func nextBackup(_ j: BackupJob, at dest: URL, jobs: [BackupJob], now: Da
     let folder = try LibraryFolders.prepare(job: j, library: papers, in: dest, jobs: jobs, isOpen: { _ in false }).folder
     try version(in: folder, now)
     let before = LibraryFolders.versionNames(in: folder).count
-    JobExecutor.pruneVersions(folders: [(papers, folder)], policy: j.retention)
+    JobExecutor.pruneVersions(folders: [(papers, folder)], policy: j.retention, confirmed: { _, _ in true })
     return (folder, before - LibraryFolders.versionNames(in: folder).count)
 }
 

@@ -84,7 +84,7 @@ private func versions(_ dir: URL) -> [String] {
         }
         #expect(read(a, dest) == [a1], "stage 2: A reads only its own")
         #expect(read(b, dest).contains(b1) && !read(b, dest).contains(a1), "stage 2: B reads b1, not a1")
-        JobExecutor.pruneVersions(folders: JobExecutor.prunable(a, ["d": [photos.id: mine]]), policy: a.retention)
+        JobExecutor.pruneVersions(folders: JobExecutor.prunable(a, ["d": [photos.id: mine]]), policy: a.retention, confirmed: { _, _ in true })
         #expect(versions(mine) == [b1, a1].sorted(), "stage 2: nothing of B's pruned")
 
         // 3. mirror again; 1.5.6 writes b2
@@ -102,7 +102,7 @@ private func versions(_ dir: URL) -> [String] {
         #expect(read(a, dest) == [a1], "stage 4: A reads \(read(a, dest).sorted())")
         let seen4 = read(b, dest)
         #expect(seen4.isSuperset(of: [b1, b2]) && !seen4.contains(a1), "stage 4: B reads \(seen4.sorted())")
-        JobExecutor.pruneVersions(folders: JobExecutor.prunable(a, ["d": [photos.id: mine]]), policy: a.retention)
+        JobExecutor.pruneVersions(folders: JobExecutor.prunable(a, ["d": [photos.id: mine]]), policy: a.retention, confirmed: { _, _ in true })
         #expect(versions(mine) == [a1, b1, b2].sorted(), "stage 4: nothing pruned")
 
         // B's own run: nothing of A's taken, B's still readable

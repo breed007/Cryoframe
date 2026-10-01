@@ -44,3 +44,15 @@ public enum BackupFrequency: Codable, Sendable, Equatable {
         }
     }
 }
+
+extension BackupJob {
+    /// When the job's next backup runs, as far as can be told at `now`: its next
+    /// scheduled time after its last run (`lastRun`; nil: it hasn't run), or `now`
+    /// when that time has passed (the next scheduled pass runs it), the job is
+    /// paused, or it runs only when asked. What a count of what the next backup
+    /// deletes places that backup at.
+    public func nextBackup(lastRun: Date?, now: Date, calendar: Calendar = .current) -> Date {
+        guard enabled, let next = frequency.nextFireDate(after: lastRun ?? createdAt, calendar: calendar), next > now else { return now }
+        return next
+    }
+}

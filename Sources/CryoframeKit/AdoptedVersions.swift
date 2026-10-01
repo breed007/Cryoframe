@@ -12,8 +12,14 @@
 //  LibraryIdentity.adoptedVersions), and retention leaves them alone until the
 //  person has been shown what applying the Keep rule to them deletes, and said yes:
 //  in the save summary, when pairing a drive, when renaming one, or on the
-//  dashboard. The go-ahead is kept on the job, version by version. A version adopted
-//  without one is left as it is, and every run says so, whichever path led there.
+//  dashboard. The go-ahead is kept on the job, version by version: it names the
+//  versions the person was shown and, of them, exactly those they were told the
+//  next backup deletes, under the Keep rule they were counted with. A run deletes
+//  an adopted version only when a go-ahead names it as deleted and the Keep rule
+//  wants it gone, so it never deletes more than the person was told, whatever the
+//  date it runs. Once the job's Keep rule changes, a go-ahead given under the old
+//  one no longer holds, and the person is asked again. A version adopted without
+//  one is left as it is, and every run says so, whichever path led there.
 //
 
 import Foundation
@@ -23,15 +29,41 @@ import Foundation
 public struct AdoptionConsent: Codable, Sendable, Equatable {
     public var targetID: String
     public var libraryID: String
-    /// the version folders' names
+    /// the version folders' names the person was shown: under `rule`, they take
+    /// their places among the versions the Keep rule keeps
     public var versions: [String]
-    /// how many of them the person was told the next backup deletes
-    public var deletes: Int
+    /// of them, those the person was told the next backup deletes (finished or
+    /// not): the only ones the Keep rule may delete
+    public var allows: [String]
+    /// the Keep rule they were counted under: once the job's is another, this
+    /// go-ahead no longer holds
+    public var rule: RetentionPolicy
     public var confirmedAt: Date
 
-    public init(targetID: String, libraryID: String, versions: [String], deletes: Int, confirmedAt: Date) {
+    /// how many of them the person was told the next backup deletes
+    public var deletes: Int { allows.count }
+
+    public init(targetID: String, libraryID: String, versions: [String], allows: [String], rule: RetentionPolicy, confirmedAt: Date) {
         self.targetID = targetID; self.libraryID = libraryID; self.versions = versions
-        self.deletes = deletes; self.confirmedAt = confirmedAt
+        self.allows = allows; self.rule = rule; self.confirmedAt = confirmedAt
+    }
+
+    /// whether it still holds for a job keeping by `policy`
+    public func holds(under policy: RetentionPolicy) -> Bool { rule == policy }
+}
+
+/// What to ask about the versions one library folder adopted: every one of them
+/// there, and of them those the next backup deletes once the Keep rule applies.
+public struct AdoptionQuestion: Sendable, Equatable {
+    public var versions: [String]
+    /// finished versions the Keep rule deletes
+    public var deletes: [String]
+    /// dated folders that never finished, deleted then too
+    public var unfinished: [String]
+
+    /// the go-ahead saying yes gives, for `library` at `target` under `rule`
+    func consent(target: String, library: String, rule: RetentionPolicy, at date: Date) -> AdoptionConsent {
+        AdoptionConsent(targetID: target, libraryID: library, versions: versions, allows: deletes + unfinished, rule: rule, confirmedAt: date)
     }
 }
 
@@ -51,18 +83,31 @@ public struct AdoptionReview: Codable, Sendable, Equatable, Identifiable {
     public var deletes: Int
     /// of them, dated folders that never finished, deleted then too
     public var unfinished: Int
+    /// the names of those counted in `deletes` and `unfinished`: all saying yes lets
+    /// the Keep rule delete
+    public var allows: [String]
+    /// the Keep rule they were counted under
+    public var rule: RetentionPolicy
     public var foundAt: Date
 
     public init(jobID: String, targetID: String, libraryID: String, destination: String, library: String,
-                versions: [String], deletes: Int, unfinished: Int, foundAt: Date) {
+                question: AdoptionQuestion, rule: RetentionPolicy, foundAt: Date) {
         self.jobID = jobID; self.targetID = targetID; self.libraryID = libraryID
-        self.destination = destination; self.library = library; self.versions = versions
-        self.deletes = deletes; self.unfinished = unfinished; self.foundAt = foundAt
+        self.destination = destination; self.library = library; self.versions = question.versions
+        self.deletes = question.deletes.count; self.unfinished = question.unfinished.count
+        self.allows = question.deletes + question.unfinished; self.rule = rule; self.foundAt = foundAt
     }
 
     /// the go-ahead saying yes records
     public func consent(at date: Date) -> AdoptionConsent {
-        AdoptionConsent(targetID: targetID, libraryID: libraryID, versions: versions, deletes: deletes + unfinished, confirmedAt: date)
+        AdoptionConsent(targetID: targetID, libraryID: libraryID, versions: versions, allows: allows, rule: rule, confirmedAt: date)
+    }
+
+    /// whether `other` asks the same: the same versions, the same of them deleted,
+    /// under the same Keep rule (when it was found aside)
+    public func asksTheSame(as other: AdoptionReview) -> Bool {
+        id == other.id && versions == other.versions && allows == other.allows && rule == other.rule
+            && deletes == other.deletes && unfinished == other.unfinished
     }
 
     /// what the run and the dashboard say of it
@@ -81,18 +126,36 @@ public struct AdoptionReview: Codable, Sendable, Equatable, Identifiable {
 }
 
 extension BackupJob {
-    /// whether the person has let the Keep rule apply to `version`, adopted by the
-    /// folder of `libraryID` at `targetID`
-    public func confirmsAdoption(of version: String, target targetID: String, library libraryID: String) -> Bool {
-        (adoptionConsents ?? []).contains { $0.targetID == targetID && $0.libraryID == libraryID && $0.versions.contains(version) }
+    /// the go-ahead given for the versions the folder of `libraryID` at `targetID`
+    /// adopted that still holds under the job's Keep rule
+    public func adoptionConsents(target targetID: String, library libraryID: String) -> [AdoptionConsent] {
+        (adoptionConsents ?? []).filter { $0.targetID == targetID && $0.libraryID == libraryID && $0.holds(under: retention) }
     }
 
-    /// this job with `consents` added
+    /// whether the person was told the next backup deletes `version`, adopted by the
+    /// folder of `libraryID` at `targetID`, and said yes, under the job's Keep rule:
+    /// the only adopted versions retention may delete
+    public func confirmsAdoption(of version: String, target targetID: String, library libraryID: String) -> Bool {
+        adoptionConsents(target: targetID, library: libraryID).contains { $0.allows.contains(version) }
+    }
+
+    /// whether the person was shown `version` under the job's Keep rule and said yes:
+    /// it takes its place among the versions the rule keeps, deleted or not
+    public func hasShownAdoption(of version: String, target targetID: String, library libraryID: String) -> Bool {
+        adoptionConsents(target: targetID, library: libraryID).contains { $0.versions.contains(version) }
+    }
+
+    /// This job with `consents` added. One given for a folder replaces any earlier one
+    /// for it (they share a version), and none given under another Keep rule than the
+    /// job's is kept: it no longer holds.
     public func adding(_ consents: [AdoptionConsent]) -> BackupJob {
-        guard !consents.isEmpty else { return self }
         var j = self
-        j.adoptionConsents = (adoptionConsents ?? []) + consents.filter { !$0.versions.isEmpty }
-        if j.adoptionConsents?.isEmpty == true { j.adoptionConsents = nil }
+        var list = (adoptionConsents ?? []).filter { $0.holds(under: retention) }
+        for c in consents where !c.versions.isEmpty && c.holds(under: retention) {
+            list.removeAll { $0.targetID == c.targetID && $0.libraryID == c.libraryID && !Set($0.versions).isDisjoint(with: c.versions) }
+            list.append(c)
+        }
+        j.adoptionConsents = list.isEmpty ? nil : list
         return j
     }
 }
@@ -110,11 +173,14 @@ extension JobStore {
     }
 
     /// Say yes to `review`: the job's Keep rule applies to those versions from its
-    /// next backup. False when the job is gone.
+    /// next backup, deleting no more of them than it said. False, and nothing
+    /// changed, when the job is gone, or `review` is no longer what there is to ask:
+    /// the job's Keep rule changed since it was counted, or a run counted again.
     @discardableResult
     public func confirm(_ review: AdoptionReview, at date: Date = Date()) -> Bool {
         update { s in
-            guard let j = s.jobs.firstIndex(where: { $0.id == review.jobID }) else { return false }
+            guard let j = s.jobs.firstIndex(where: { $0.id == review.jobID }), s.jobs[j].retention == review.rule,
+                  (s.adoptionReviews[review.jobID] ?? []).contains(where: { $0.asksTheSame(as: review) }) else { return false }
             s.jobs[j] = s.jobs[j].adding([review.consent(at: date)])
             let rest = (s.adoptionReviews[review.jobID] ?? []).filter { $0.id != review.id }
             s.adoptionReviews[review.jobID] = rest.isEmpty ? nil : rest

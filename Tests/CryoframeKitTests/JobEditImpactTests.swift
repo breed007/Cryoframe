@@ -57,7 +57,7 @@ private func folder(_ j: BackupJob, in dest: URL) throws -> URL {
 
         try version(in: f, now)                                                    // the next backup
         let before = LibraryFolders.versionNames(in: f).count
-        JobExecutor.pruneVersions(folders: [(papers, f)], policy: draft.retention)
+        JobExecutor.pruneVersions(folders: [(papers, f)], policy: draft.retention, confirmed: { _, _ in true })
         #expect(before - LibraryFolders.versionNames(in: f).count == impact.deletes)
     }
 

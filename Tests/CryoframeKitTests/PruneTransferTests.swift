@@ -42,7 +42,7 @@ private func version(_ folder: URL, _ stamp: String, manifest: Bool = true) thro
         let husk = try version(folder, "2026-09-29-020000", manifest: false)
         try version(folder, "2026-09-28-020000")
         JobExecutor.pruneVersions(folders: [(papers, folder)], policy: .keepLast(5),
-                                  transferring: { DestinationRules.contains($0, partial) || DestinationRules.contains(partial, $0) })
+                                  transferring: { DestinationRules.contains($0, partial) || DestinationRules.contains(partial, $0) }, confirmed: { _, _ in true })
         #expect(FileManager.default.fileExists(atPath: partial.appendingPathComponent("Papers.zip.part.000").path))
         #expect(!FileManager.default.fileExists(atPath: husk.path))            // a real leftover still goes
     }
@@ -56,7 +56,7 @@ private func version(_ folder: URL, _ stamp: String, manifest: Bool = true) thro
         #expect(plan.versions.map(\.url.lastPathComponent).sorted() ==
                 ["2026-09-01-020000", "2026-09-02-020000", "2026-09-03-020000", "2026-09-04-020000"])
         #expect(FileManager.default.fileExists(atPath: husk.path))            // planning deletes nothing
-        JobExecutor.pruneVersions(folders: [(papers, folder)], policy: .keepLast(2))
+        JobExecutor.pruneVersions(folders: [(papers, folder)], policy: .keepLast(2), confirmed: { _, _ in true })
         let left = ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).sorted()
         #expect(left == ["2026-09-05-020000", "2026-09-06-020000"])
     }

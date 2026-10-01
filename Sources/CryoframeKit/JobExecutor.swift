@@ -258,6 +258,10 @@ public struct JobExecutor: Sendable {
             guard let o = owners[folder.path] else { return false }
             return saved.confirmsAdoption(of: name, target: o.targetID, library: o.libraryID)
         }
+        let adoptionShown: (URL, String) -> Bool = { folder, name in
+            guard let o = owners[folder.path] else { return false }
+            return saved.hasShownAdoption(of: name, target: o.targetID, library: o.libraryID)
+        }
 
         onStage(.preparing)
 
@@ -429,7 +433,7 @@ public struct JobExecutor: Sendable {
             pass.builds.forEach(cleanupBuild)
             if sealed != nil {
                 Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords(),
-                                   transferring: stillTransferring, confirmed: adoptionConfirmed)
+                                   transferring: stillTransferring, confirmed: adoptionConfirmed, shown: adoptionShown)
             }
             return .cancelled
         }
@@ -521,12 +525,12 @@ public struct JobExecutor: Sendable {
         var pruneFailures: [String] = []
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
             pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords(),
-                                               transferring: stillTransferring, confirmed: adoptionConfirmed)
+                                               transferring: stillTransferring, confirmed: adoptionConfirmed, shown: adoptionShown)
         }
         // what was left alone for the person to say yes to, said in the run's warning
         // and kept for the dashboard
         let reviews = sealed == nil ? [] : Self.adoptionReviews(job, folderOf, checks: healthRecords(), transferring: stillTransferring,
-                                                                 confirmed: adoptionConfirmed, now: now)
+                                                                 confirmed: adoptionConfirmed, shown: adoptionShown, now: now)
         jobStore?.recordAdoptionReviews(jobID: job.id, reviews, reached: Set(folderOf.keys))
         // the note on how to restore without Cryoframe, brought up to date in each
         // destination this run reached; a note that can't be written is logged, never
@@ -565,25 +569,28 @@ public struct JobExecutor: Sendable {
     /// destination keeps growing while the app, and the storage-pressure warning,
     /// both go on believing the job is bounded. A share that dropped, a file still
     /// held open, a permissions change — all silent before 1.5.2.
-    @discardableResult
     ///
     /// The version of each library last known to restore (a passed drill, else a
     /// passed checksum check, in `checks`) is never deleted, whatever the policy says.
+    /// `confirmed`: see prunePlan; there is no default, so no caller deletes adopted
+    /// versions without saying which it may.
+    @discardableResult
     static func pruneVersions(target: URL, libraries: [ContentType], policy: RetentionPolicy,
-                              checks: [HealthRecord] = []) -> [String] {
+                              checks: [HealthRecord] = [], confirmed: @escaping (URL, String) -> Bool) -> [String] {
         pruneVersions(folders: libraries.map { ($0, target.appendingPathComponent($0.displayName, isDirectory: true)) },
-                      policy: policy, checks: checks)
+                      policy: policy, checks: checks, confirmed: confirmed)
     }
 
     /// the same, for each library's own folder (see LibraryFolders): only a folder a
     /// run writes to is pruned, never a 1.5 folder left for reading. `transferring`:
     /// whether an interrupted transfer is still to finish into a folder (see prunePlan).
-    /// `confirmed`: see prunePlan. A run always passes it.
+    /// `confirmed`, `shown`: see prunePlan. `confirmed` has no default: nothing
+    /// deletes an adopted version unless its caller says which it may.
     @discardableResult
     static func pruneVersions(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
                               checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false },
-                              confirmed: ((URL, String) -> Bool)? = nil) -> [String] {
-        let plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring, confirmed: confirmed)
+                              confirmed: @escaping (URL, String) -> Bool, shown: ((URL, String) -> Bool)? = nil) -> [String] {
+        let plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring, confirmed: confirmed, shown: shown)
         let fm = FileManager.default
         for husk in plan.husks { try? fm.removeItem(at: husk) }        // junk from a failed/canceled run
         var failures: [String] = []
@@ -651,36 +658,44 @@ public struct JobExecutor: Sendable {
     /// adds, counted by the policy (it takes a place) but not itself in the plan, for
     /// saying what the next run deletes before it has run.
     ///
-    /// `confirmed`: whether the person has let the Keep rule apply to a version a
-    /// folder adopted (the folder, the version's name; see AdoptedVersions.swift). One
-    /// they haven't is left out altogether, as a held one is: never deleted, taking
-    /// no place. nil: every adopted version counts, which is what a run does once the
-    /// person says yes to what they were shown.
+    /// `confirmed`: whether the person was told the next backup deletes a version a
+    /// folder adopted, and said yes (the folder, the version's name; see
+    /// AdoptedVersions.swift): only such a one is ever deleted. `shown`: whether they
+    /// were shown it at all (nil: the same as `confirmed`). One they were shown takes
+    /// its place among the versions the rule keeps; one they weren't is left out
+    /// altogether, as a held one is: never deleted, taking no place. `confirmed` nil:
+    /// every adopted version counts and may go, for counting what saying yes deletes.
     static func prunePlan(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
                           checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false },
-                          upcoming: Date? = nil, confirmed: ((URL, String) -> Bool)? = nil) -> PrunePlan {
+                          upcoming: Date? = nil, confirmed: ((URL, String) -> Bool)? = nil,
+                          shown: ((URL, String) -> Bool)? = nil) -> PrunePlan {
         prunePlan(shelves: folders.map { shelf($0.library, $0.folder) }, policy: policy, checks: checks,
-                  transferring: transferring, upcoming: upcoming, confirmed: confirmed)
+                  transferring: transferring, upcoming: upcoming, confirmed: confirmed, shown: shown)
     }
 
     static func prunePlan(shelves: [Shelf], policy: RetentionPolicy, checks: [HealthRecord] = [],
                           transferring: (URL) -> Bool = { _ in false }, upcoming: Date? = nil,
-                          confirmed: ((URL, String) -> Bool)? = nil) -> PrunePlan {
+                          confirmed: ((URL, String) -> Bool)? = nil, shown: ((URL, String) -> Bool)? = nil) -> PrunePlan {
         let fm = FileManager.default
         var plan = PrunePlan()
         for shelf in shelves {
             let identity = shelf.identity
-            var complete: [(url: URL, date: Date)] = []
+            var complete: [(url: URL, date: Date, mayGo: Bool)] = []
             for e in shelf.entries {
                 let name = e.lastPathComponent
                 // held versions aren't provably this library's (see heldVersions)
                 guard (try? e.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
                       let d = VersionStamp.date(name), identity?.holds(name) != true else { continue }
-                // adopted, and no one has said yes to the Keep rule applying to it
-                if let confirmed, shelf.adopted.contains(name), !confirmed(shelf.folder, name) { continue }
+                var mayGo = true
+                if let confirmed, shelf.adopted.contains(name) {
+                    // adopted, and never shown to the person under this rule
+                    guard (shown ?? confirmed)(shelf.folder, name) else { continue }
+                    // shown: kept unless they were told the next backup deletes it
+                    mayGo = confirmed(shelf.folder, name)
+                }
                 if fm.fileExists(atPath: e.appendingPathComponent(ArchiveManifest.sidecarName).path) {
-                    complete.append((e, d))
-                } else if !transferring(e) {
+                    complete.append((e, d, mayGo))
+                } else if mayGo, !transferring(e) {
                     plan.husks.append(e)
                 }
             }
@@ -689,7 +704,7 @@ public struct JobExecutor: Sendable {
                                           among: complete.map(\.date), records: checks)
             let prune = retentionPrune(complete.map(\.date) + [upcoming].compactMap { $0 }, policy: policy,
                                        keeping: Set([known].compactMap { $0 }))
-            for v in complete where prune.contains(v.date) {
+            for v in complete where v.mayGo && prune.contains(v.date) {
                 plan.versions.append(.init(library: shelf.library.displayName, url: v.url, date: v.date))
             }
         }
@@ -733,25 +748,43 @@ public struct JobExecutor: Sendable {
         }
     }
 
-    /// The adopted versions in `job`'s folders (`folderOf`) no one has let the Keep
-    /// rule apply to yet (`confirmed`), and what saying yes deletes at the next run.
-    /// None under a rule that keeps everything: nothing is deleted either way.
+    /// What to ask about the versions `shelf` adopted, under `policy` with the next
+    /// backup at `upcoming`: every one of them there, and of them what saying yes lets
+    /// that backup delete, counted with every one of them in its place. nil when
+    /// there's nothing to ask: each was shown to the person under this rule (`shown`,
+    /// by name), and the next backup deletes none they weren't told it would
+    /// (`confirmed`).
+    static func adoptionQuestion(_ shelf: Shelf, policy: RetentionPolicy, checks: [HealthRecord] = [],
+                                 transferring: (URL) -> Bool = { _ in false }, upcoming: Date,
+                                 shown: (String) -> Bool, confirmed: (String) -> Bool) -> AdoptionQuestion? {
+        let waiting = Set(shelf.entries.map(\.lastPathComponent)).intersection(shelf.adopted).filter { shelf.identity?.holds($0) != true }
+        guard !waiting.isEmpty else { return nil }
+        let yes = prunePlan(shelves: [shelf], policy: policy, checks: checks, transferring: transferring, upcoming: upcoming)
+        let gone = Set(yes.versions.map(\.url.lastPathComponent)).intersection(waiting)
+        let unfinished = Set(yes.husks.map(\.lastPathComponent)).intersection(waiting)
+        if waiting.allSatisfy(shown), gone.union(unfinished).allSatisfy(confirmed) { return nil }
+        return AdoptionQuestion(versions: waiting.sorted(), deletes: gone.sorted(), unfinished: unfinished.sorted())
+    }
+
+    /// What there is to ask about the versions `job`'s folders (`folderOf`) adopted
+    /// (see adoptionQuestion), with what the person said yes to (`confirmed`, and
+    /// `shown`: nil, the same) and the next backup at `upcoming` (nil: when it's
+    /// scheduled after a run at `now`). None under a rule that keeps everything:
+    /// nothing is deleted either way.
     static func adoptionReviews(_ job: BackupJob, _ folderOf: [String: [String: URL]], checks: [HealthRecord],
-                                transferring: (URL) -> Bool, confirmed: (URL, String) -> Bool, now: Date) -> [AdoptionReview] {
+                                transferring: (URL) -> Bool, confirmed: (URL, String) -> Bool,
+                                shown: ((URL, String) -> Bool)? = nil, now: Date, upcoming: Date? = nil) -> [AdoptionReview] {
         guard job.format.isSealed, job.retention != .keepAll else { return [] }
+        let next = upcoming ?? job.nextBackup(lastRun: now, now: now)
         var out: [AdoptionReview] = []
         for t in job.targets {
             for lib in job.libraries {
-                guard let folder = folderOf[t.id]?[lib.id] else { continue }
-                let s = shelf(lib, folder)
-                let waiting = Set(s.entries.map(\.lastPathComponent)).intersection(s.adopted)
-                    .filter { s.identity?.holds($0) != true && !confirmed(folder, $0) }
-                guard !waiting.isEmpty else { continue }
-                let yes = prunePlan(shelves: [s], policy: job.retention, checks: checks, transferring: transferring, upcoming: now)
+                guard let folder = folderOf[t.id]?[lib.id],
+                      let q = adoptionQuestion(shelf(lib, folder), policy: job.retention, checks: checks, transferring: transferring,
+                                               upcoming: next, shown: { shown?(folder, $0) ?? confirmed(folder, $0) },
+                                               confirmed: { confirmed(folder, $0) }) else { continue }
                 out.append(AdoptionReview(jobID: job.id, targetID: t.id, libraryID: lib.id, destination: t.displayName,
-                                          library: lib.displayName, versions: waiting.sorted(),
-                                          deletes: yes.versions.filter { waiting.contains($0.url.lastPathComponent) }.count,
-                                          unfinished: yes.husks.filter { waiting.contains($0.lastPathComponent) }.count, foundAt: now))
+                                          library: lib.displayName, question: q, rule: job.retention, foundAt: now))
             }
         }
         return out

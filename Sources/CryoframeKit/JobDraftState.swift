@@ -422,6 +422,12 @@ public struct JobDraftState: Sendable, Equatable {
             let stored = s.jobs.first { $0.id == jobID }
             guard let job = JobEdit.merge(draft: draft, base: base, stored: stored)?.adding(consents) else { return .deleted }
             if let i = s.jobs.firstIndex(where: { $0.id == jobID }) { s.jobs[i] = job } else { s.jobs.append(job) }
+            // a dashboard review this save answered, or counted under a Keep rule the job
+            // no longer has, is gone: the next backup asks again if there's anything to ask
+            let reviews = (s.adoptionReviews[jobID] ?? []).filter { r in
+                r.rule == job.retention && !consents.contains { $0.targetID == r.targetID && $0.libraryID == r.libraryID }
+            }
+            s.adoptionReviews[jobID] = reviews.isEmpty ? nil : reviews
             return .saved(job)
         }
     }

@@ -82,7 +82,7 @@ private func archive(_ name: String, _ format: ArchiveFormat, version: Date?, pa
         let found = RestoreDiscovery.scan(dest)
         #expect(found.count == 1 && RestoreDiscovery.libraries(in: found) == ["Photos"])
         let photos = ContentType.genericFolder(id: "p", displayName: "Photos", path: .absolute("/nowhere"))
-        #expect(JobExecutor.pruneVersions(target: dest, libraries: [photos], policy: .keepLast(1)).isEmpty)
+        #expect(JobExecutor.pruneVersions(target: dest, libraries: [photos], policy: .keepLast(1), confirmed: { _, _ in true }).isEmpty)
         #expect(FileManager.default.fileExists(atPath: note.path))
     }
 

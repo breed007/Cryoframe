@@ -441,9 +441,14 @@ final class AppModel: ObservableObject {
         }
     }
     /// Let the Keep rule apply to the earlier backups `review` names, from the job's
-    /// next backup on.
+    /// next backup on. Refused, with nothing changed, when the job changed since
+    /// they were counted: the next backup counts them again.
     func confirm(_ review: AdoptionReview) {
-        if !store.confirm(review) { log("⚠︎ The job was deleted, so nothing was changed") }
+        if !store.confirm(review) {
+            log(store.load().jobs.contains { $0.id == review.jobID }
+                ? "⚠︎ The job changed since those earlier backups were counted, so nothing was changed. Its next backup counts them again."
+                : "⚠︎ The job was deleted, so nothing was changed")
+        }
         jobs = store.load().jobs
         reloadHistory()
     }
@@ -452,16 +457,19 @@ final class AppModel: ObservableObject {
 
     /// what saving `draft` does at the next backup (see JobEditImpact)
     nonisolated func impact(of draft: JobDraftState) async -> JobEditImpact {
-        let (jobs, checks) = await MainActor.run { (self.jobs, healthRecords) }
+        let (jobs, checks, store) = await MainActor.run { (self.jobs, healthRecords, self.store) }
         return await Task.detached {
-            JobEditImpact.of(draft: draft.makeJob(), base: draft.base, jobs: jobs, checks: checks, pending: PendingTransferStore.standard().all())
+            JobEditImpact.of(draft: draft.makeJob(), base: draft.base, jobs: jobs, checks: checks, pending: PendingTransferStore.standard().all(),
+                             lastRun: store.load().lastRun[draft.jobID])
         }.value
     }
 
     /// what taking turns with the other drive of `target`'s name does (see DrivePairing)
     nonisolated func pairing(_ target: Target, of job: BackupJob) async -> DrivePairing? {
-        let (jobs, checks) = await MainActor.run { (self.jobs, healthRecords) }
-        return await Task.detached { DrivePairing.look(target, job: job, jobs: jobs, checks: checks) }.value
+        let (jobs, checks, store) = await MainActor.run { (self.jobs, healthRecords, self.store) }
+        return await Task.detached {
+            DrivePairing.look(target, job: job, jobs: jobs, checks: checks, lastRun: store.load().lastRun[job.id])
+        }.value
     }
 
     /// what `job` has on its destinations (see JobFootprint)
@@ -473,12 +481,12 @@ final class AppModel: ObservableObject {
     /// backup to do there (see DrivePairing.lookBeforeRenaming); nil when it isn't
     /// connected. What the person confirms is handed back to renameDrive.
     nonisolated func renameLook(_ uuid: String, target: Target, of job: BackupJob) async -> DrivePairing? {
-        let (jobs, checks) = await MainActor.run { (self.jobs, healthRecords) }
+        let (jobs, checks, store) = await MainActor.run { (self.jobs, healthRecords, self.store) }
         // as saved: what the rename looks at again
         let saved = jobs.first { $0.id == job.id } ?? job
         let t = saved.targets.first { $0.id == target.id } ?? target
         return await Task.detached {
-            DrivePairing.lookBeforeRenaming(uuid, target: t, job: saved, jobs: jobs, checks: checks)
+            DrivePairing.lookBeforeRenaming(uuid, target: t, job: saved, jobs: jobs, checks: checks, lastRun: store.load().lastRun[saved.id])
         }.value
     }
 

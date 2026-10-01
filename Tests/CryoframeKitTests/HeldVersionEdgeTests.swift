@@ -101,7 +101,7 @@ private func secondRunWrites(_ lib: URL, in base: URL, cloneByCp: Bool = false) 
         for d in 1...3 {
             _ = try LibraryFolders.prepare(job: a, library: photos, in: dest, jobs: [a], isOpen: { _ in false })
             try version(in: mine, at(d))
-            JobExecutor.pruneVersions(folders: JobExecutor.prunable(a, ["d": [photos.id: mine]]), policy: a.retention)
+            JobExecutor.pruneVersions(folders: JobExecutor.prunable(a, ["d": [photos.id: mine]]), policy: a.retention, confirmed: { _, _ in true })
         }
         #expect(versions(mine) == [v1, v2, at(3)], "held versions stay, the job's new ones are pruned")
         let found = Set(RestoreDiscovery.scan(dest).compactMap { $0.version.map(VersionStamp.string) })
@@ -152,7 +152,7 @@ private func secondRunWrites(_ lib: URL, in base: URL, cloneByCp: Bool = false) 
         _ = try LibraryFolders.prepare(job: s, library: photos, in: dest, jobs: [s], isOpen: { _ in false })
         let id = try #require(LibraryIdentity.read(in: f))
         #expect(id.heldVersions == nil && id.mirror == nil)
-        JobExecutor.pruneVersions(folders: JobExecutor.prunable(s, ["d": [photos.id: f]]), policy: s.retention)
+        JobExecutor.pruneVersions(folders: JobExecutor.prunable(s, ["d": [photos.id: f]]), policy: s.retention, confirmed: { _, _ in true })
         #expect(versions(f) == [v2])
     }
 

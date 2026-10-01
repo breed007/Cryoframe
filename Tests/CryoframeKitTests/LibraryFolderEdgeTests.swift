@@ -238,7 +238,7 @@ private func versions(_ archives: [RestorableArchive]) -> [String] {
         for j in [a, b] {
             let p = try LibraryFolders.prepare(job: j, library: docs, in: dest, jobs: [a, b], isOpen: { _ in false })
             try archive(in: p.folder, bundle: "Documents", version: v3)
-            let failures = JobExecutor.pruneVersions(folders: JobExecutor.prunable(j, ["d": [docs.id: p.folder]]), policy: .keepLast(1))
+            let failures = JobExecutor.pruneVersions(folders: JobExecutor.prunable(j, ["d": [docs.id: p.folder]]), policy: .keepLast(1), confirmed: { _, _ in true })
             #expect(failures.isEmpty)
         }
         #expect(names(legacy) == [v1, v2, v3])
@@ -273,7 +273,7 @@ private func versions(_ archives: [RestorableArchive]) -> [String] {
         projects.displayName = "Client Work"; j.libraries = [projects]
         let after = try LibraryFolders.prepare(job: j, library: projects, in: dest, jobs: [j], isOpen: { _ in false }).folder
         #expect(after.lastPathComponent == "Client Work")
-        JobExecutor.pruneVersions(folders: [(projects, after)], policy: .keepLast(1), checks: checks)
+        JobExecutor.pruneVersions(folders: [(projects, after)], policy: .keepLast(1), checks: checks, confirmed: { _, _ in true })
         #expect(names(after).contains(v1), "the last version known to restore was deleted after the rename: \(names(after))")
     }
 }
