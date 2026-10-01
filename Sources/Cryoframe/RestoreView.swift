@@ -150,7 +150,8 @@ final class RestoreModel: ObservableObject {
                 stage = ""
             } catch {
                 stage = ""
-                errorMessage = "Couldn't open \(a.bundleName)" + (a.encrypted ? " — check the passphrase." : ".")
+                // only a passphrase the image refused is called a passphrase problem
+                errorMessage = ArchiveOpener.failureText(error, name: a.bundleName, tried: a.encrypted ? 1 : 0)
             }
         }
     }
