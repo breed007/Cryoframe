@@ -74,4 +74,70 @@ private func gone(_ pid: pid_t, within seconds: TimeInterval) -> Bool {
         #expect(gone(late, within: 2), "the child the stopped tool left behind is still running")
         #expect(took < 20, "took \(took) s")
     }
+
+    // Stop (RunControl.cancel) wakes the tool and SIGTERMs the tool alone: never what
+    // it started, and never SIGKILL (333e8de moved only the watchdog off that).
+    // A child of the tool (rsync's, or one a shell leaves running) keeps the tool's
+    // output open after the tool has gone, the watchdog has quit (the tool isn't
+    // running), and the run waits on the output for as long as the child lives, with
+    // its snapshot held and its job locked: here 40 s, on a hung share for good.
+    @Test func stopEndsWhatTheToolStartedToo() throws {
+        let dir = tmp("stopchild"); defer { try? FileManager.default.removeItem(at: dir) }
+        let child = dir.appendingPathComponent("child")
+        defer { if let p = pid(in: child) { kill(p, SIGKILL) } }
+        let control = RunControl(quietLimit: 30)
+        let took = try stopping(control, after: { pid(in: child) != nil }, "/bin/sh", ["-c",
+            "/bin/sh -c \"echo \\$\\$ > \(child.path); exec /bin/sleep 40\" & wait"])
+        let late = try #require(pid(in: child), "the tool never started its child")
+        #expect(gone(late, within: 2), "the tool's child is still running after Stop")
+        #expect(took < 15, "Stop took \(took) s")
+    }
+
+    // Stop on a paused tool: it is woken, then SIGTERMed, and starts a child as it
+    // exits. That child is the late child the watchdog had (it isn't in the tree read
+    // before waking), here through Stop.
+    @Test func stopOnAPausedToolEndsTheChildItLeavesAsItExits() throws {
+        let dir = tmp("stoppaused"); defer { try? FileManager.default.removeItem(at: dir) }
+        let child = dir.appendingPathComponent("child"), ready = dir.appendingPathComponent("ready")
+        defer { if let p = pid(in: child) { kill(p, SIGKILL) } }
+        let control = RunControl(quietLimit: 30)
+        let took = try stopping(control, after: {
+            guard pid(in: ready) != nil else { return false }
+            return control.pause()
+        }, "/bin/sh", ["-c",
+            "trap '/bin/sh -c \"echo \\$\\$ > \(child.path); exec /bin/sleep 40\" & exit 0' TERM; echo $$ > \(ready.path); while :; do /bin/sleep 0.1; done"])
+        let late = try #require(pid(in: child), "the tool never started its child")
+        #expect(gone(late, within: 2), "the child the stopped tool left is still running after Stop")
+        #expect(took < 15, "Stop took \(took) s")
+    }
+}
+
+/// Run `tool` under `control` on a thread of its own, Stop it once `when` says so,
+/// and return how long the run took from the Stop to returning (it must say Cancelled).
+private func stopping(_ control: RunControl, after when: @escaping () -> Bool, _ tool: String, _ args: [String]) throws -> TimeInterval {
+    let finished = DispatchSemaphore(value: 0)
+    let outcome = Outcome()
+    Thread.detachNewThread {
+        do { _ = try ProcessCommandRunner(control: control).run(tool, args); outcome.set("finished") }
+        catch is CancelledError { outcome.set("cancelled") }
+        catch { outcome.set("\(error)") }
+        finished.signal()
+    }
+    let deadline = uptime() + 10
+    while !when(), uptime() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+    try #require(uptime() < deadline, "the tool never got going")
+    Thread.sleep(forTimeInterval: 0.3)
+    let stoppedAt = uptime()
+    control.cancel()
+    _ = finished.wait(timeout: .now() + 60)
+    let took = uptime() - stoppedAt
+    #expect(outcome.value == "cancelled", "\(outcome.value ?? "still running")")
+    return took
+}
+
+private final class Outcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v: String?
+    func set(_ s: String) { lock.lock(); v = s; lock.unlock() }
+    var value: String? { lock.lock(); defer { lock.unlock() }; return v }
 }

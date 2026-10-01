@@ -111,29 +111,80 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
         #expect(LibraryFolders.versionNames(in: folder).count == 4)
     }
 
-    // A card left unanswered blocks only the version it asks about: the job's own
-    // versions go on being pruned to the Keep rule, and the waiting one stays.
+    // A card left unanswered blocks only the versions it asks about: the job's own
+    // versions go on being pruned to the Keep rule, and the waiting ones stay.
+    //
+    // Under a day/week/month rule a yes covers only the next backup (which goes later
+    // depends on when backups run), so the versions later backups push out are asked
+    // about again. Under keepLast one yes now names every adopted version the rule
+    // pushes out (3e0f793), so there is nothing left for a later card to block there;
+    // this ran under keepLast(3) until then.
     @Test func anUnansweredCardBlocksOnlyTheVersionItAsksAbout() throws {
         let base = scratch("unanswered")
         let dest = base.appendingPathComponent("dest")
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         _ = try legacyFolder(in: dest, days: [0, 1, 2])
         let store = JobStore(url: base.appendingPathComponent("jobs.json"))
-        store.upsert(job([dest], retention: .keepLast(3)))
+        store.upsert(job([dest], retention: .gfs(daily: 3, weekly: 0, monthly: 0)))
         let first = try #require(store.load().jobs.first)
         let folder = try LibraryFolders.prepare(job: first, library: papers, in: dest, jobs: [first], isOpen: { _ in false }).folder
-        // the first card answered, the later ones left alone
-        try backUp(first, into: folder, at: start.addingTimeInterval(10 * day), store: store)
-        #expect(store.confirm(try #require(store.load().adoptionReviews[first.id]?.first)))
+        let stamp = { (d: Double) in VersionStamp.string(start.addingTimeInterval(d * day)) }
+        // the first card answered: it names day 0 alone, the one the next backup deletes
+        let asked = try backUp(first, into: folder, at: start.addingTimeInterval(10 * day), store: store)
+        let card = try #require(store.load().adoptionReviews[first.id]?.first)
+        #expect(asked.count == 1 && card.allows == [stamp(0)] && card.later == 0, "\(card.allows) later \(card.later): \(card.effect)")
+        #expect(store.confirm(card))
+        // the later ones left alone
         for n in 1..<6 {
             try backUp(try #require(store.load().jobs.first), into: folder, at: start.addingTimeInterval(Double(10 + n) * day), store: store)
         }
         let left = LibraryFolders.versionNames(in: folder)
-        let own = (0..<6).map { VersionStamp.string(start.addingTimeInterval(Double(10 + $0) * day)) }
+        let own = (0..<6).map { stamp(Double(10 + $0)) }
         #expect(left.isSuperset(of: own.suffix(3)), "the job's newest three were deleted: \(left.sorted())")
         #expect(left.intersection(own.prefix(3)).isEmpty, "the job's own older versions weren't pruned: \(left.sorted())")
-        #expect(left.contains(VersionStamp.string(start.addingTimeInterval(2 * day))), "the waiting version was deleted unasked")
-        #expect(store.load().adoptionReviews[first.id]?.first?.versions == [VersionStamp.string(start.addingTimeInterval(2 * day))])
+        #expect(!left.contains(stamp(0)), "the version the yes named wasn't deleted: \(left.sorted())")
+        #expect(left.isSuperset(of: [stamp(1), stamp(2)]), "a waiting version was deleted unasked: \(left.sorted())")
+        let waiting = store.load().adoptionReviews[first.id]?.first
+        #expect(waiting?.versions == [stamp(1), stamp(2)], "\(String(describing: waiting?.versions))")
+        #expect(waiting?.deletes == 2, "the card doesn't say the Keep rule deletes them: \(waiting?.effect ?? "no card")")
+    }
+
+    // What a yes under keepLast says, backup by backup: the next backup deletes the
+    // number it said, then each backup after it deletes one more of those it named,
+    // oldest first, until the "more" it said are gone, and no card or warning comes
+    // back. Nothing it didn't name goes.
+    @Test func whatAKeepLastYesSaysIsWhatEachBackupDeletes() throws {
+        let base = scratch("wording")
+        let dest = base.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        _ = try legacyFolder(in: dest, days: [0, 1, 2, 3, 4, 5])
+        let store = JobStore(url: base.appendingPathComponent("jobs.json"))
+        store.upsert(job([dest], retention: .keepLast(4)))
+        let first = try #require(store.load().jobs.first)
+        let folder = try LibraryFolders.prepare(job: first, library: papers, in: dest, jobs: [first], isOpen: { _ in false }).folder
+        let adopted = Set((0..<6).map { VersionStamp.string(start.addingTimeInterval(Double($0) * day)) })
+
+        try backUp(first, into: folder, at: start.addingTimeInterval(10 * day), store: store)
+        let card = try #require(store.load().adoptionReviews[first.id]?.first)
+        #expect(LibraryFolders.versionNames(in: folder).isSuperset(of: adopted), "deleted before the yes")
+        #expect(card.effect == "Keep last 4 then applies to them: 4 are deleted at the next backup; 2 more are deleted one at a time as new backups are made.",
+                "\(card.effect)")
+        #expect(Set(card.allows) == adopted)
+        #expect(store.confirm(card))
+
+        var gone: [[String]] = []
+        var before = LibraryFolders.versionNames(in: folder)
+        for n in 1..<6 {
+            let cards = try backUp(try #require(store.load().jobs.first), into: folder, at: start.addingTimeInterval(Double(10 + n) * day), store: store)
+            #expect(cards.isEmpty, "asked again at backup \(n + 1): \(cards.first?.effect ?? "")")
+            let now = LibraryFolders.versionNames(in: folder)
+            gone.append(before.subtracting(now).intersection(adopted).sorted())
+            before = now
+        }
+        let said = gone.map(\.count)
+        #expect(said == [4, 1, 1, 0, 0], "adopted versions deleted per backup: \(said)")
+        #expect(gone.flatMap { $0 } == adopted.sorted(), "not oldest first: \(gone)")
+        #expect(LibraryFolders.versionNames(in: folder).count == 4)
     }
 
     // Two destinations holding the same 1.5 run (1.5 stamped each version once, the
