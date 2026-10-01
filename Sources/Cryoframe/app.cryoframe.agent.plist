@@ -15,8 +15,11 @@
     <!-- wake hourly to run due jobs; the Scheduler decides what actually fires -->
     <key>StartInterval</key>
     <integer>3600</integer>
-    <!-- Standard, not left unset: launchd throttles an agent without a ProcessType,
-         and a backup tool starved of CPU looks stalled to the watchdog -->
+    <!-- Standard, stated so it is never changed to Background: launchd runs a
+         Background agent at priority 4, and a backup tool starved of CPU looks
+         stalled to the watchdog. Standard is the same as leaving it unset (measured:
+         spawn type daemon, priority 20, either way), so an agent registered by an
+         older version needs no reload to match. -->
     <key>ProcessType</key>
     <string>Standard</string>
     <!-- ride the app's Full Disk Access grant -->
