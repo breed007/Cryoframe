@@ -18,6 +18,7 @@ final class FindFileModel: ObservableObject {
     @Published var query = ""
     @Published private(set) var results: [VersionSearchResult] = []
     @Published private(set) var running = false
+    /// what the last search looked for, said under its answer (see ContentsQuery.searched)
     @Published private(set) var searchedFor: String?
     @Published private(set) var total = 0
     @Published private(set) var stopped = false
@@ -30,13 +31,19 @@ final class FindFileModel: ObservableObject {
         let name: String
         let root: URL
         let reveal: URL?
+        let warning: String?
     }
 
     /// keys derived during this sheet's searches, in memory only (see ContentsKeyring)
     private let keyring = ContentsKeyring()
     private var control: RunControl?
     private var task: Task<Void, Never>?
-    private var opened: OpenedArchive?
+    /// the version opened to look inside; closed when the sheet goes, even mid-open
+    private let opener = ArchiveOpener()
+
+    // A sheet closed while a version is opening: the open is stopped, and what it
+    // still opens is closed when it lands (see ArchiveOpener)
+    deinit { opener.close() }
 
     /// the passphrases to try on a version: the one typed in, and the one saved on
     /// this Mac for the job the list (or the version's folder) says made it
@@ -52,7 +59,7 @@ final class FindFileModel: ObservableObject {
         let versions = ContentsSearch.versions(archives)
         let control = RunControl()
         self.control = control
-        results = []; total = versions.count; stopped = false; searchedFor = q.text; running = true
+        results = []; total = versions.count; stopped = false; searchedFor = q.searched; running = true
         let search = ContentsSearch(keyring: keyring)
         task = Task {
             for v in versions {
@@ -81,29 +88,26 @@ final class FindFileModel: ObservableObject {
         let candidates = a.encrypted ? Self.passphrases(typed: passphrase, jobID: job) : [""]
         if a.encrypted, candidates.isEmpty { errorMessage = "Enter the passphrase for \(a.displayName) first."; return }
         opening = a.bundleName
-        let result = a.archiveResult()
-        Task {
-            let o: OpenedArchive? = await Task.detached {
-                for pass in candidates {
-                    if let o = try? ArchiveReader().open(result, passphrase: a.encrypted ? pass : nil) { return o }
-                }
-                return nil
-            }.value
-            opening = nil
-            guard let o else {
-                errorMessage = "Couldn't open \(a.bundleName)" + (a.encrypted ? ". Check the passphrase." : ".")
-                return
+        let opener = self.opener
+        // weak: a sheet closed mid-open lets its model go, whose deinit stops the open
+        Task { [weak self] in
+            let outcome = await opener.open(a, passphrases: candidates)
+            guard let self else { return }
+            self.opening = nil
+            switch outcome {
+            case .opened(let o):
+                self.browsing = Browse(name: a.bundleName, root: o.root,
+                                       reveal: path.map { ArchiveLayout.item($0, in: o.root, for: a) }, warning: o.warning)
+            case .failed(let why):
+                self.errorMessage = why
+            case .canceled:
+                break
             }
-            closeBrowse()
-            opened = o
-            browsing = Browse(name: a.bundleName, root: o.root,
-                              reveal: path.map { ArchiveLayout.item($0, in: o.root, for: a) })
         }
     }
 
     func closeBrowse() {
-        opened?.close()
-        opened = nil
+        opener.close()
         browsing = nil
     }
 
@@ -137,7 +141,7 @@ struct FindFileView: View {
         .onDisappear { f.stop() }
         .sheet(item: $f.browsing) { b in
             // the archive is closed when its browser goes, however it goes
-            FileBrowserView(archiveName: b.name, root: b.root, reveal: b.reveal) { f.closeBrowse() }
+            FileBrowserView(archiveName: b.name, root: b.root, warning: b.warning, reveal: b.reveal) { f.closeBrowse() }
                 .onDisappear { f.closeBrowse() }
         }
         .alert("Find a File", isPresented: Binding(get: { f.errorMessage != nil }, set: { if !$0 { f.errorMessage = nil } })) {
@@ -197,7 +201,7 @@ struct FindFileView: View {
     private func versionHeader(_ r: VersionSearchResult) -> some View {
         HStack(spacing: 6) {
             Text(r.archive.libraryName).font(.callout.weight(.semibold))
-            Text(r.archive.version.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "Current mirror")
+            Text(versionName(r.archive))
                 .font(.caption).foregroundStyle(.secondary)
             if r.archive.encrypted {
                 Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("encrypted")
@@ -209,7 +213,14 @@ struct FindFileView: View {
         switch r.answer {
         case .listed(let hits, let more, let partial):
             ForEach(hits, id: \.path) { hit in hitRow(hit, in: r.archive) }
-            if hits.isEmpty || more || partial {
+            if partial {
+                // an incomplete list can miss it: the version itself can't
+                HStack(spacing: 8) {
+                    Text(r.summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    lookInside(r.archive)
+                }
+            } else if hits.isEmpty || more {
                 Text(r.summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         case .noList:
@@ -217,10 +228,19 @@ struct FindFileView: View {
                 Image(systemName: "questionmark.folder").foregroundStyle(.secondary).accessibilityHidden(true)
                 Text(r.summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
-                Button("Look inside…") { f.open(r.archive, at: nil, passphrase: restore.passphrase) }
-                    .disabled(f.opening != nil)
+                lookInside(r.archive)
             }
         }
+    }
+
+    private func versionName(_ a: RestorableArchive) -> String {
+        a.version.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "Current mirror"
+    }
+
+    private func lookInside(_ a: RestorableArchive) -> some View {
+        Button("Look inside…") { f.open(a, at: nil, passphrase: restore.passphrase) }
+            .disabled(f.opening != nil)
+            .accessibilityLabel("Look inside \(a.libraryName), \(versionName(a))")
     }
 
     private func hitRow(_ hit: ContentsEntry, in a: RestorableArchive) -> some View {
@@ -251,8 +271,11 @@ struct FindFileView: View {
             if let name = f.opening {
                 ProgressView().controlSize(.small)
                 Text("Opening \(name)…").font(.caption).foregroundStyle(.secondary)
-            } else if f.searchedFor != nil, !f.running || !f.results.isEmpty {
-                Text(f.summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if let searched = f.searchedFor, !f.running || !f.results.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(f.summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(searched).font(.caption2).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
         }
