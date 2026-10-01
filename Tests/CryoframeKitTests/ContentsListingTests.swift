@@ -137,6 +137,36 @@ private func rerecord(_ a: inout RestorableArchive) throws {
         #expect(search("strasse", a)?.hits.count == 1)
     }
 
+    // A path copied back out of Terminal (spaces and other characters escaped with
+    // a backslash) or pasted in quotes finds the file it names.
+    @Test func aTerminalEscapedOrQuotedPathFindsTheFile() throws {
+        let base = folder("paste")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let a = try version(base, entries: [("Taxes", .folder), ("Taxes/W-2 form (2024).pdf", .file), ("Taxes/a\\b.txt", .file)])
+        for q in ["/Users/b/Taxes/W-2\\ form\\ \\(2024\\).pdf", "'/Users/b/Taxes/W-2 form (2024).pdf'",
+                  "\"/Users/b/Taxes/W-2 form (2024).pdf\"", "“~/Taxes/W-2 form (2024).pdf”", "  '~/Taxes/W-2\\ form\\ \\(2024\\).pdf'  "] {
+            #expect(search(q, a)?.hits.map(\.path) == ["Taxes/W-2 form (2024).pdf"], "\(q)")
+        }
+        // a backslash before an ordinary character is part of the name
+        #expect(search("/Users/b/Taxes/a\\b.txt", a)?.hits.map(\.path) == ["Taxes/a\\b.txt"])
+        #expect(ContentsQuery("'unclosed")?.text == "'unclosed")
+    }
+
+    // Only a path from outside the library (from "/", "~" or a file URL) also
+    // matches the items its end names; a typed relative path is just a substring.
+    @Test func onlyAnOutsidePathMatchesByItsEnd() throws {
+        let base = folder("suffix")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let a = try version(base, entries: [("notes.txt", .file), ("Work", .folder), ("Work/Other", .folder),
+                                            ("Work/Other/notes.txt", .file)])
+        #expect(search("Other/notes.txt", a)?.hits.map(\.path) == ["Work/Other/notes.txt"])
+        #expect(search("./Other/notes.txt", a)?.hits.map(\.path) == ["Work/Other/notes.txt"])
+        #expect(search("/Volumes/Old/notes.txt", a)?.hits.map(\.path) == ["notes.txt"])
+        #expect(search("file:///Volumes/Old/notes.txt", a)?.hits.map(\.path) == ["notes.txt"])
+        #expect(search("~/notes.txt", a)?.hits.map(\.path) == ["notes.txt"])
+        #expect(ContentsQuery("Other/notes.txt")?.searched == "Searched each file list for paths containing “Other/notes.txt”.")
+    }
+
     // Past its cap the list stops and says so: matches are shown, and no match is
     // never "not in this version".
     @Test func aListPastItsCapIsPartialAndNeverSaysNotThere() throws {

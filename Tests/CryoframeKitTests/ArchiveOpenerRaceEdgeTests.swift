@@ -129,9 +129,7 @@ private func entry(_ p: String, _ k: ContentsEntry.Kind = .file) -> ContentsEntr
         // queries: this fails, drop the withKnownIssue.
         let rel = try #require(ContentsQuery("Other/notes.txt"))
         #expect(rel.matches(entry("Deep/Other/notes.txt")))
-        withKnownIssue("a typed relative path also matches a top-level name that is its last part") {
-            #expect(!rel.matches(entry("notes.txt")))
-        }
+        #expect(!rel.matches(entry("notes.txt")))
     }
 
     @Test func oddQueries() throws {

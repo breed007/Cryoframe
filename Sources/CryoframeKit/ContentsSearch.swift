@@ -23,30 +23,68 @@ public struct ContentsQuery: Sendable, Equatable {
     let folded: [UInt8]
     /// a query with a "/" in it is looked for in whole paths; otherwise in names
     public let matchesPaths: Bool
-    /// a path query as a path: folded, without empty or "." parts. An item whose
-    /// path from the library's top is the end of it matches too, so a path pasted
-    /// whole ("Copy as Pathname" in Finder) finds the item it names.
+    /// a path from outside the library (starting at "/" or "~", or a file URL) as a
+    /// path: folded, without empty or "." parts. An item whose path from the
+    /// library's top is the end of it matches too, so a path pasted whole ("Copy as
+    /// Pathname" in Finder) finds the item it names. Empty for any other query: a
+    /// typed "Taxes/W-2.pdf" already finds every real hit as it is.
     let wholePath: [UInt8]
 
     /// nil for a query of nothing but spaces, or a path that names nothing (only
     /// slashes, "." and ".."): it couldn't be told apart from a miss
     public init?(_ text: String) {
-        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var t = Self.unquoted(text.trimmingCharacters(in: .whitespacesAndNewlines))
         // a file's URL pasted ("file:///Users/…/W-2%20form.pdf"): the path it names
-        if t.lowercased().hasPrefix("file://"), let url = URL(string: t), url.isFileURL { t = url.path }
+        if t.lowercased().hasPrefix("file://"), let url = URL(string: t), url.isFileURL {
+            t = url.path
+        } else if t.hasPrefix("/") || t.hasPrefix("~") {
+            // a path dragged into Terminal and copied back ("/Users/b/W-2\ form.pdf")
+            t = Self.shellUnescaped(t)
+        }
         guard !t.isEmpty else { return nil }
         let parts = t.split(separator: "/").filter { $0 != "." }
         if t.contains("/"), !parts.contains(where: { $0 != ".." && $0 != "~" }) { return nil }
+        // "./Taxes" names Taxes at the library's top
+        while t.hasPrefix("./") { t = String(t.dropFirst(2).drop(while: { $0 == "/" })) }
+        let outside = t.hasPrefix("/") || t.hasPrefix("~")
         self.text = t
         folded = Array(Self.fold(t).utf8)
         matchesPaths = t.contains("/")
-        wholePath = matchesPaths ? Array(Self.fold(parts.joined(separator: "/")).utf8) : []
+        wholePath = matchesPaths && outside ? Array(Self.fold(parts.joined(separator: "/")).utf8) : []
     }
 
     /// what was looked for, for saying beside the answer
     public var searched: String {
-        matchesPaths ? "Searched each file list for paths that contain “\(text)”, or that it ends with."
-                     : "Searched each file list for names containing “\(text)”."
+        if !wholePath.isEmpty { return "Searched each file list for paths that contain “\(text)”, or that it ends with." }
+        return matchesPaths ? "Searched each file list for paths containing “\(text)”."
+                            : "Searched each file list for names containing “\(text)”."
+    }
+
+    /// `s` without one pair of quotes around all of it, as some apps copy a path
+    static func unquoted(_ s: String) -> String {
+        for (open, close) in [("\"", "\""), ("'", "'"), ("“", "”"), ("‘", "’")]
+            where s.count >= 2 && s.hasPrefix(open) && s.hasSuffix(close) {
+            return String(s.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return s
+    }
+
+    /// characters a shell escapes with a backslash (Terminal does when a file is
+    /// dragged in). A backslash before anything else is part of the name.
+    private static let shellEscaped = Set(" !\"#$&'()*,;<=>?[\\]^`{|}~")
+
+    /// `s` with each shell escape ("\ ", "\(") replaced by the character it escapes
+    static func shellUnescaped(_ s: String) -> String {
+        guard s.contains("\\") else { return s }
+        var out = "", chars = Array(s), i = 0
+        while i < chars.count {
+            if chars[i] == "\\", i + 1 < chars.count, shellEscaped.contains(chars[i + 1]) {
+                out.append(chars[i + 1]); i += 2
+            } else {
+                out.append(chars[i]); i += 1
+            }
+        }
+        return out
     }
 
     /// one form for comparing: canonical composition, then case folding, then
