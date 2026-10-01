@@ -134,9 +134,11 @@ struct FindFileView: View {
             footer
         }
         .frame(width: 640, height: 560)
-        .onDisappear { f.tearDown() }
+        .onDisappear { f.stop() }
         .sheet(item: $f.browsing) { b in
+            // the archive is closed when its browser goes, however it goes
             FileBrowserView(archiveName: b.name, root: b.root, reveal: b.reveal) { f.closeBrowse() }
+                .onDisappear { f.closeBrowse() }
         }
         .alert("Find a File", isPresented: Binding(get: { f.errorMessage != nil }, set: { if !$0 { f.errorMessage = nil } })) {
             Button("OK") { f.errorMessage = nil }
