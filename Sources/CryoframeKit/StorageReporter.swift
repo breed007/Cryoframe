@@ -30,6 +30,8 @@ public struct JobStorage: Sendable, Identifiable {
     public var archives: [ArchiveSize]  // per-version breakdown, newest first
     public var volumeFree: UInt64?
     public var volumeTotal: UInt64?
+    /// the destination's id in its job ("" when built without one)
+    public var targetID: String = ""
 
     public init(jobID: String, jobName: String, targetName: String, targetPath: String,
                 archiveBytes: UInt64, versionCount: Int, archives: [ArchiveSize], volumeFree: UInt64?, volumeTotal: UInt64?) {
@@ -61,10 +63,12 @@ public enum StorageReporter {
                 }
                 let v = volume(of: t.destinationDir)
                 let name = job.targets.count > 1 ? "\(job.name) → \(t.displayName)" : job.name
-                return JobStorage(jobID: job.id, jobName: name, targetName: t.displayName,
-                                  targetPath: t.destinationDir.path,
-                                  archiveBytes: archives.reduce(0) { $0 + $1.bytes }, versionCount: archives.count,
-                                  archives: archives, volumeFree: v.free, volumeTotal: v.total)
+                var row = JobStorage(jobID: job.id, jobName: name, targetName: t.displayName,
+                                     targetPath: t.destinationDir.path,
+                                     archiveBytes: archives.reduce(0) { $0 + $1.bytes }, versionCount: archives.count,
+                                     archives: archives, volumeFree: v.free, volumeTotal: v.total)
+                row.targetID = t.id
+                return row
             }
         }
     }

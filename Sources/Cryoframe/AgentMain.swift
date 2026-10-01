@@ -106,6 +106,9 @@ enum AgentMain {
                                                    startedAt: started, finishedAt: Date(), trigger: "scheduled")
                     }
                     historyStore.append(record)
+                    // each destination's trend, and a cloud run's versions for the upload check
+                    RunFollowUp.record(record, job: current, health: .standard(), uploads: .standard(),
+                                       lastCheck: HealthStore.standard().latest(forJob: current.id))
                     lease.release()                                 // the run is over once it's recorded
                     await RemoteAlert.deliver(for: record)          // nobody is watching the screen
                     limit.signal()

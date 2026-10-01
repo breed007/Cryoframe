@@ -889,16 +889,23 @@ final class AppModel: ObservableObject {
             // the log doesn't accumulate a timestamp-less "▶ JobName" beside every
             // completed run — which reads like a run that started and never came back.
             log(Self.startedLine(job.name))
+            let record: RunRecord
             do {
                 let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date(), control: control,
                     onStage: { s in Task { @MainActor in self.jobStage[id] = s } },
                     onLibrary: { lib in Task { @MainActor in self.jobLibrary[id] = lib; self.log("  ▸ \(lib)") } },
                     onProgress: { p in Task { @MainActor in self.jobProgress[id] = p } })
-                apply(RunRecord.make(job: current, outcome: outcome, startedAt: startedAt, finishedAt: Date(), trigger: "manual"))
+                record = RunRecord.make(job: current, outcome: outcome, startedAt: startedAt, finishedAt: Date(), trigger: "manual")
             } catch {
-                apply(RunRecord.failure(job: current, error: error.localizedDescription,
-                                        startedAt: startedAt, finishedAt: Date(), trigger: "manual"))
+                record = RunRecord.failure(job: current, error: error.localizedDescription,
+                                           startedAt: startedAt, finishedAt: Date(), trigger: "manual")
             }
+            apply(record)
+            // each destination's trend, and a cloud run's versions for the upload check
+            await Task.detached {
+                RunFollowUp.record(record, job: current, health: .standard(), uploads: .standard(),
+                                   lastCheck: HealthStore.standard().latest(forJob: current.id))
+            }.value
             lease.release()
             jobs = store.load().jobs
             revalidate()
