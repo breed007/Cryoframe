@@ -345,13 +345,11 @@ private func archiveIn(_ dest: URL) throws -> RestorableArchive {
         #expect(Checksum.byteSize(of: zip) > 1 << 32, "the zip didn't pass 4 GiB")
         let dates = try #require(ZipFolderDates.read(zip))
         #expect(dates.contains { $0.path == "Photos/A/" && $0.seconds == Int64(t) }, "\(dates)")
-        withKnownIssue("ArchiveReader.unpackedSize relies on zipinfo, which can't read a ditto zip over 4 GiB") {
-            #expect(ArchiveReader.unpackedSize(of: zip, runner: ProcessCommandRunner()) != nil)
-            try ArchiveManifest.write(try ArchiveManifest.build(for: result), toDir: out)
-            let archive = try #require(RestoreDiscovery.archive(at: out))
-            let restored = try RestoreEngine().restore(archive, to: base.appendingPathComponent("restored"))
-            #expect(Checksum.byteSize(of: restored.appendingPathComponent("A/big.bin")) == 4_400_000_000)
-            #expect(mtime(restored.appendingPathComponent("A")) == t)
-        }
+        #expect(ArchiveReader.unpackedSize(of: zip) != nil)
+        try ArchiveManifest.write(try ArchiveManifest.build(for: result), toDir: out)
+        let archive = try #require(RestoreDiscovery.archive(at: out))
+        let restored = try RestoreEngine().restore(archive, to: base.appendingPathComponent("restored"))
+        #expect(Checksum.byteSize(of: restored.appendingPathComponent("A/big.bin")) == 4_400_000_000)
+        #expect(mtime(restored.appendingPathComponent("A")) == t)
     }
 }

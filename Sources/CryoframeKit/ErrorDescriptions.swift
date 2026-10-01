@@ -136,9 +136,9 @@ public enum RestoreFailureText {
         return "not enough room on \(volume): this restore needs about \(size(needed)) free and there is \(size(free)). Nothing was written; free up space, or choose a folder on another drive."
     }
 
-    /// a zip Cryoframe won't unpack, because what that takes can't be known
-    static func unpackedSizeMessage(_ zip: String) -> String {
-        "couldn't read the list of what \(zip) holds, so how much room unpacking it takes on the startup disk can't be known, and it wasn't unpacked. Nothing was written. The zip may be damaged; its checksum says whether it is. To unpack it by hand, double-click it in Finder or use ditto -x -k on a drive with room."
+    /// a zip unpacked without knowing beforehand what that takes (see ArchiveReader)
+    static func unpackedSizeWarning(_ zip: String) -> String {
+        "Cryoframe couldn't read the list of what \(zip) holds, so it unpacked it on the startup disk without first checking that there was room. The zip may be damaged; its checksum says whether it is."
     }
 
     /// why one archive failed to restore, for the Restore window's result list.
@@ -150,7 +150,6 @@ public enum RestoreFailureText {
         case .noManifest:                return "no checksum manifest beside the archive"
         case .notEnoughRoom(let needed, let free, let volume, let inPlace):
             return roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
-        case .unpackedSizeUnknown(let zip): return unpackedSizeMessage(zip)
         case .none: break
         }
         // an ArchiveError surfaces when the archive itself won't open. Its raw
@@ -187,7 +186,6 @@ public enum RestoreFailureText {
             case .noManifest:                return "no checksum manifest beside the archive"
             case .notEnoughRoom(let needed, let free, let volume, let inPlace):
                 return roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
-            case .unpackedSizeUnknown(let zip): return unpackedSizeMessage(zip)
             }
         }
         if let a = e as? ArchiveError {
@@ -223,7 +221,6 @@ extension RestoreError: LocalizedError {
         case .noManifest:                     return "no checksum manifest beside the archive"
         case .notEnoughRoom(let needed, let free, let volume, let inPlace):
             return RestoreFailureText.roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
-        case .unpackedSizeUnknown(let zip):   return RestoreFailureText.unpackedSizeMessage(zip)
         }
     }
 }

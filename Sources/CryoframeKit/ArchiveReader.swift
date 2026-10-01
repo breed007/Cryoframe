@@ -8,11 +8,15 @@
 //
 
 import Foundation
+import os
 
 public struct OpenedArchive: Sendable {
     public let root: URL                 // the mounted/extracted tree to read from
     let work: URL                        // temp scratch to delete on close
     let teardownFn: @Sendable () -> Void
+    /// what the caller should say about how it was opened: a zip unpacked without
+    /// knowing beforehand whether the startup disk had room for it (nil: nothing)
+    public var warning: String? = nil
 
     /// the file in the work dir naming the process that has the archive open.
     static let ownerFileName = "owner.json"
@@ -96,6 +100,7 @@ public enum ArchiveBookkeeping {
 }
 
 public struct ArchiveReader: Sendable {
+    static let log = Logger(subsystem: "app.cryoframe", category: "archive-reader")
     let runner: CommandRunner
     let workBase: URL
     let transientSettle: TimeInterval
@@ -178,15 +183,21 @@ public struct ArchiveReader: Sendable {
                 let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
                 // a zip is unpacked whole into the work folder (on the startup disk)
                 // before anything is copied out of it
-                guard let unpacked = Self.unpackedSize(of: zip, runner: runner.forTeardown) else {
-                    throw RestoreError.unpackedSizeUnknown(zip.lastPathComponent)
-                }
-                try checkRoom(unpacked, in: work, doing: "unpacked")
+                // A size that can't be read doesn't stop the open: refusing a restore
+                // over a size nobody can tell is worse than the risk it guards against,
+                // and an unpack that runs out of room fails, saying so, and is cleaned up.
+                let unpacked = Self.unpackedSize(of: zip)
+                if let unpacked { try checkRoom(unpacked, in: work, doing: "unpacked") }
                 let ex = work.appendingPathComponent("extract"); try fm.createDirectory(at: ex, withIntermediateDirectories: true)
                 try exec(Command("/usr/bin/ditto", ["-x", "-k", zip.path, ex.path]))
                 // ditto dates some folders at the unpack (see ZipFolderDates)
                 ZipFolderDates.restore(from: zip, into: ex)
-                return OpenedArchive(root: ex, work: work) {}
+                var opened = OpenedArchive(root: ex, work: work) {}
+                if unpacked == nil {
+                    opened.warning = RestoreFailureText.unpackedSizeWarning(zip.lastPathComponent)
+                    Self.log.notice("unpacked \(zip.lastPathComponent, privacy: .public) without a room check: its directory couldn't be read")
+                }
+                return opened
             }
         } catch {
             // may be a no-op; cheap either way. A failed attach's own devices were
@@ -283,20 +294,18 @@ public struct ArchiveReader: Sendable {
         }
     }
 
-    /// What a zip takes on disk once unpacked, from its own directory (zipinfo): its
-    /// bytes, and a whole block for every entry. A file takes at least one 4 KB block
-    /// however few bytes it holds, so a zip of many small files takes many times its
-    /// byte count: 72,000 files of 16 bytes are 12.9 MB in the zip's total and took
-    /// 295 MB unpacked. Rounding every entry up to a block is at most a block too many
-    /// each. nil if the listing can't be read: a zip can unpack to any size, and its
-    /// own size says nothing about that.
-    static func unpackedSize(of zip: URL, runner: CommandRunner) -> UInt64? {
-        guard let r = try? runner.run("/usr/bin/zipinfo", ["-t", zip.path], stdin: nil), r.ok,
-              let b = r.stdout.range(of: #"[0-9]+ bytes uncompressed"#, options: .regularExpression),
-              let bytes = UInt64(r.stdout[b].split(separator: " ").first ?? ""),
-              let n = r.stdout.range(of: #"^[0-9]+ files?"#, options: .regularExpression),
-              let entries = UInt64(r.stdout[n].split(separator: " ").first ?? "") else { return nil }
-        return bytes + entries * blockSize
+    /// What a zip takes on disk once unpacked, from its own directory (see
+    /// ZipDirectory): its bytes, and a whole block for every entry. A file takes at
+    /// least one 4 KB block however few bytes it holds, so a zip of many small files
+    /// takes many times its byte count: 72,000 files of 16 bytes are 12.9 MB in the
+    /// zip's total and took 295 MB unpacked. Rounding every entry up to a block is at
+    /// most a block too many each. nil if the directory can't be read: a zip can
+    /// unpack to any size, and its own size says nothing about that.
+    ///
+    /// zipinfo used to be asked. It can't read a zip ditto made past 4 GiB (see
+    /// ZipDirectory) and failed, so every such zip was refused.
+    static func unpackedSize(of zip: URL) -> UInt64? {
+        ZipDirectory.unpackedSize(zip, blockSize: blockSize)
     }
 
     /// the file system block every unpacked file takes at least one of (APFS)

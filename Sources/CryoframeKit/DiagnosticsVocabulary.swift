@@ -245,6 +245,7 @@ different
 differs
 digits
 dir
+directory
 disk
 diskimages
 diskutil
@@ -707,6 +708,7 @@ reachable
 reached
 read
 readable
+reader
 reading
 readonly
 ready
@@ -920,7 +922,6 @@ umount
 unattended
 unavailable
 unchanged
-uncompressed
 undone
 unfinished
 unlock
@@ -929,7 +930,6 @@ unmount
 unmounted
 unpack
 unpacked
-unpacking
 unpacks
 unreadable
 until
@@ -1022,7 +1022,6 @@ yyyy
 z'
 za
 zip
-zipinfo
 zs
 """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init))
 }

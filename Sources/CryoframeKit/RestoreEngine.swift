@@ -24,9 +24,6 @@ public enum RestoreError: Error, Equatable {
     /// names the drive; `inPlace`: a restore over the live library, which keeps its
     /// space in the Trash.
     case notEnoughRoom(needed: UInt64, free: UInt64, volume: String, inPlace: Bool)
-    /// a zip whose listing couldn't be read, so the room unpacking it takes on the
-    /// startup disk can't be known; the zip's file name
-    case unpackedSizeUnknown(String)
 }
 
 /// What to do when the restored item's name is already taken in the destination.

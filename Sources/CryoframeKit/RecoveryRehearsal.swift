@@ -255,8 +255,6 @@ public struct RecoveryRehearsal: Sendable {
             case .notEnoughRoom(let needed, let free, let volume, _):
                 let f = ByteCountFormatter()
                 return "not enough room on \(volume) to rehearse the restore: it needs about \(f.string(fromByteCount: Int64(clamping: needed))) free and has \(f.string(fromByteCount: Int64(clamping: free)))"
-            case .unpackedSizeUnknown(let zip):
-                return "wouldn't unpack — the list of what \(zip) holds couldn't be read"
             }
         }
         if let copy = RestoreFailureText.copyFailure(e) { return copy }

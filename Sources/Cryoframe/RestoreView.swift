@@ -25,6 +25,7 @@ final class RestoreModel: ObservableObject {
     @Published var pendingDelete: RestorableArchive?     // awaiting the delete-version confirmation
     @Published var errorMessage: String?
     @Published var browsingName: String?                 // an archive is mounted for in-app browsing
+    @Published var browseWarning: String?                 // said in the browser: how the archive was opened
     @Published var browseRoot: URL?                       // the opened tree to browse, drives the sheet
     private var opened: OpenedArchive?
 
@@ -145,6 +146,7 @@ final class RestoreModel: ObservableObject {
                 opened = o
                 browsingName = a.bundleName
                 browseRoot = o.root
+                browseWarning = o.warning
                 stage = ""
             } catch {
                 stage = ""
@@ -157,6 +159,7 @@ final class RestoreModel: ObservableObject {
         opened?.close()
         opened = nil
         browsingName = nil
+        browseWarning = nil
         browseRoot = nil
     }
 
@@ -274,7 +277,7 @@ struct RestoreView: View {
         .onDisappear { r.endBrowse() }
         .sheet(isPresented: Binding(get: { r.browseRoot != nil }, set: { if !$0 { r.endBrowse() } })) {
             if let root = r.browseRoot {
-                FileBrowserView(archiveName: r.browsingName ?? "archive", root: root) { r.endBrowse() }
+                FileBrowserView(archiveName: r.browsingName ?? "archive", root: root, warning: r.browseWarning) { r.endBrowse() }
             }
         }
         .alert("Replace your live library?",

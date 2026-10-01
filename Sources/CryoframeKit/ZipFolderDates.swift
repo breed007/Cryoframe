@@ -12,6 +12,8 @@
 //  deepest folder first. A zip without them, or one this can't read, is left as
 //  ditto unpacked it.
 //
+//  The directory reader (ZipDirectory) also sizes a zip's unpack for ArchiveReader.
+//
 
 import Foundation
 
@@ -19,26 +21,14 @@ enum ZipFolderDates {
     /// the folders in `zip` and the modification date it holds for each, as paths
     /// relative to where it is unpacked; nil if its directory can't be read
     static func read(_ zip: URL) -> [(path: String, seconds: Int64)]? {
-        guard let handle = try? FileHandle(forReadingFrom: zip) else { return nil }
-        defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd(), let (offset, length) = directory(handle, size: size),
-              offset + length <= size else { return nil }
-        var reader = Reader(handle: handle, at: offset, end: offset + length)
         var out: [(path: String, seconds: Int64)] = []
-        // read to the directory's end, not for its entry count: ditto writes the count
-        // modulo 65,536 (measured: 132,006 entries recorded as 934)
-        while !reader.isDone {
-            guard let fixed = reader.take(46), fixed.u32(0) == 0x0201_4b50 else { return nil }
-            let nameLength = Int(fixed.u16(28)), extraLength = Int(fixed.u16(30)), commentLength = Int(fixed.u16(32))
-            let mode = fixed.u32(38) >> 16
-            guard let name = reader.take(nameLength), let extra = reader.take(extraLength),
-                  reader.take(commentLength) != nil else { return nil }
-            guard let path = String(data: name, encoding: .utf8) else { continue }
-            let isFolder = path.hasSuffix("/") || (mode & UInt32(S_IFMT)) == UInt32(S_IFDIR)
-            guard isFolder, !path.hasPrefix("__MACOSX/"), let seconds = unixModified(extra) else { continue }
+        let read = ZipDirectory.forEach(zip) { entry in
+            guard let path = String(data: entry.name, encoding: .utf8) else { return }
+            let isFolder = path.hasSuffix("/") || (entry.mode & UInt32(S_IFMT)) == UInt32(S_IFDIR)
+            guard isFolder, !path.hasPrefix("__MACOSX/"), let seconds = unixModified(entry.extra) else { return }
             out.append((path: path, seconds: seconds))
         }
-        return out
+        return read == nil ? nil : out
     }
 
     /// Set the dates `zip` holds on its folders unpacked under `root`, deepest first.
@@ -71,6 +61,97 @@ enum ZipFolderDates {
             i = body + size
         }
         return found
+    }
+}
+
+/// A zip's central directory, read entry by entry, for what ditto writes as well as
+/// what other tools do.
+///
+/// ditto writes no Zip64 records at all (measured on macOS 27, 2026-10-01): past
+/// 4 GiB, every size and offset it records, and the end record's directory offset,
+/// is the true value modulo 2^32. zipinfo and unzip then report "4294967296 extra
+/// bytes" and fail. So the directory is found from where its end record sits (see
+/// `directory`), and read to its end rather than for its entry count.
+enum ZipDirectory {
+    /// one entry, as the central directory records it
+    struct Entry {
+        var name: Data
+        var extra: Data
+        /// the Unix mode, from the upper half of the external attributes
+        var mode: UInt32
+        /// sizes as recorded, or from the entry's Zip64 extra field when it has one;
+        /// a ditto entry past 4 GiB holds only the low 32 bits
+        var compressed: UInt64
+        var uncompressed: UInt64
+    }
+
+    /// Call `each` for every entry in `zip`'s central directory, in order. Returns
+    /// where the directory starts in the file (where the last entry's data ends), or
+    /// nil if it can't be read.
+    @discardableResult
+    static func forEach(_ zip: URL, _ each: (Entry) -> Void) -> UInt64? {
+        guard let handle = try? FileHandle(forReadingFrom: zip) else { return nil }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), let (offset, length) = directory(handle, size: size),
+              offset + length <= size else { return nil }
+        var reader = Reader(handle: handle, at: offset, end: offset + length)
+        // read to the directory's end, not for its entry count: ditto writes the count
+        // modulo 65,536 (measured: 132,006 entries recorded as 934)
+        while !reader.isDone {
+            guard let fixed = reader.take(46), fixed.u32(0) == 0x0201_4b50 else { return nil }
+            let nameLength = Int(fixed.u16(28)), extraLength = Int(fixed.u16(30)), commentLength = Int(fixed.u16(32))
+            guard let name = reader.take(nameLength), let extra = reader.take(extraLength),
+                  reader.take(commentLength) != nil else { return nil }
+            var entry = Entry(name: name, extra: extra, mode: fixed.u32(38) >> 16,
+                              compressed: UInt64(fixed.u32(20)), uncompressed: UInt64(fixed.u32(24)))
+            zip64Sizes(extra, into: &entry)
+            each(entry)
+        }
+        return offset
+    }
+
+    /// What `zip` takes on disk once unpacked: the bytes its entries hold, and a whole
+    /// block for every entry (see ArchiveReader.unpackedSize); nil if its directory
+    /// can't be read.
+    ///
+    /// Where ditto's 32-bit fields wrapped, the bytes are worked out from where the
+    /// entries sit. The directory starts where the last entry's data ends, a position
+    /// known exactly, so the gap between it and what the recorded sizes and headers
+    /// add up to is the 4 GiB multiples the compressed sizes lost (the local headers'
+    /// own extra fields and data descriptors are far smaller). An entry that lost
+    /// 4 GiB of compressed bytes holds at least that many more uncompressed, since
+    /// deflate never grows data by more than a fraction of a percent. An entry that
+    /// compresses well and unpacks past 4 GiB with its compressed size under it can't
+    /// be told from the directory at all: the count is then low by a multiple of
+    /// 4 GiB, and an unpack that runs out of room fails and is cleaned up.
+    static func unpackedSize(_ zip: URL, blockSize: UInt64) -> UInt64? {
+        var bytes: UInt64 = 0, entries: UInt64 = 0, laidOut: UInt64 = 0
+        guard let start = forEach(zip, { entry in
+            bytes &+= entry.uncompressed
+            entries += 1
+            laidOut &+= 30 + UInt64(entry.name.count) + entry.compressed
+        }), start >= laidOut else { return nil }
+        let lost = (start - laidOut) / (1 << 32) * (1 << 32)
+        return bytes &+ lost &+ entries * blockSize
+    }
+
+    /// The 64-bit sizes in an entry's Zip64 extra field (0x0001), which holds, in
+    /// order, only the fields recorded as 0xFFFFFFFF.
+    private static func zip64Sizes(_ extra: Data, into entry: inout Entry) {
+        let full: UInt64 = 0xFFFF_FFFF
+        guard entry.uncompressed == full || entry.compressed == full else { return }
+        var i = 0
+        while i + 4 <= extra.count {
+            let id = extra.u16(i), size = Int(extra.u16(i + 2))
+            guard i + 4 + size <= extra.count else { return }
+            if id == 0x0001 {
+                var at = i + 4
+                if entry.uncompressed == full, at + 8 <= i + 4 + size { entry.uncompressed = extra.u64(at); at += 8 }
+                if entry.compressed == full, at + 8 <= i + 4 + size { entry.compressed = extra.u64(at) }
+                return
+            }
+            i += 4 + size
+        }
     }
 
     /// The central directory's offset and length, from its end record, or the Zip64

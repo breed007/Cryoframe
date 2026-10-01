@@ -187,7 +187,7 @@ private func report(error: String) -> String {
             for i in 0..<720 { try Data("0123456789abcdef".utf8).write(to: dir.appendingPathComponent("f\(i).txt")) }
         }
         let result = try SealedArchiveEngine(.zip).archive(ArchiveSource(name: "Notes", root: lib), to: base.appendingPathComponent("out"))
-        let asked = try #require(ArchiveReader.unpackedSize(of: result.artifacts[0], runner: ProcessCommandRunner()))
+        let asked = try #require(ArchiveReader.unpackedSize(of: result.artifacts[0]))
         let takes = RestoreRoom.bytes(of: [lib])
         #expect(RestoreRoom.needed(for: asked) >= takes, "asks for \(RestoreRoom.needed(for: asked)) bytes to unpack what takes \(takes)")
     }

@@ -94,33 +94,46 @@ private final class Calls: @unchecked Sendable {
 
     // MARK: a zip whose listing can't be read
 
-    // A zip can unpack to any size; its own size is no bound. When zipinfo can't read
-    // the listing it isn't unpacked on a guess.
-    @Test func aZipWhoseListingCantBeReadIsRefusedPlainly() throws {
+    // A zip whose directory can't be read is still unpacked: what that takes on the
+    // startup disk can't be known, so it isn't checked, and the open says so. Refusing
+    // over "unknown" kept a 4 GiB zip from ever being restored.
+    @Test func aZipWhoseListingCantBeReadIsStillOpenedWithAWarning() throws {
         let base = folder("zipinfo")
         defer { try? FileManager.default.removeItem(at: base) }
         let zip = base.appendingPathComponent("Notes.zip")
         try Data("PK not really".utf8).write(to: zip)
+        #expect(ArchiveReader.unpackedSize(of: zip) == nil)
         let calls = Calls()
         let runner = ScriptedCommandRunner { tool, args in
             calls.add(([tool] + args).joined(separator: " "))
-            return tool.hasSuffix("zipinfo") ? CommandResult(status: 9, stdout: "", stderr: "cannot find zipfile directory")
-                                             : CommandResult(status: 0, stdout: "", stderr: "")
+            return CommandResult(status: 0, stdout: "", stderr: "")
         }
-        let reader = ArchiveReader(runner: runner, workBase: base, freeSpace: { _ in 1 << 40 })
-        #expect(throws: RestoreError.unpackedSizeUnknown("Notes.zip")) {
-            let opened = try reader.open(ArchiveResult(artifacts: [zip], format: .sealedZip))
-            opened.close()
-        }
-        #expect(!calls.all.contains { $0.hasPrefix("/usr/bin/ditto") }, "unpacked anyway: \(calls.all)")
-        #expect(RestoreFailureText.restoreMessage(RestoreError.unpackedSizeUnknown("Notes.zip"), encrypted: false).contains("Notes.zip"))
+        let reader = ArchiveReader(runner: runner, workBase: base, freeSpace: { _ in 1 })
+        let opened = try reader.open(ArchiveResult(artifacts: [zip], format: .sealedZip))
+        defer { opened.close() }
+        #expect(calls.all.contains { $0.hasPrefix("/usr/bin/ditto -x -k") }, "not unpacked: \(calls.all)")
+        #expect(opened.warning?.contains("Notes.zip") == true, "\(opened.warning ?? "nil")")
     }
 
-    @Test func theUnpackBudgetCountsABlockForEveryEntry() {
-        let runner = ScriptedCommandRunner { _, _ in
-            CommandResult(status: 0, stdout: "144100 files, 12900000 bytes uncompressed, 3000000 bytes compressed:  76.7%\n", stderr: "")
+    // Counted from the zip's own directory, checked against zipinfo where zipinfo can
+    // read it: every entry's bytes, and a block for each.
+    @Test func theUnpackBudgetCountsABlockForEveryEntry() throws {
+        let base = folder("budget")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let lib = base.appendingPathComponent("Notes")
+        for i in 0..<5 {
+            let f = lib.appendingPathComponent("d\(i % 2)/f\(i).txt")
+            try FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(String(repeating: "n", count: 100 * (i + 1)).utf8).write(to: f)
         }
-        #expect(ArchiveReader.unpackedSize(of: URL(fileURLWithPath: "/x.zip"), runner: runner) == 12_900_000 + 144_100 * 4096)
+        let zip = base.appendingPathComponent("Notes.zip")
+        let made = try ProcessCommandRunner().run("/usr/bin/ditto", ["-c", "-k", "--keepParent", lib.path, zip.path])
+        try #require(made.ok, "\(made.stderr)")
+        let listed = try ProcessCommandRunner().run("/usr/bin/zipinfo", ["-t", zip.path])
+        let words = listed.stdout.split(separator: " ")
+        let files = try #require(UInt64(words.first ?? "")), bytes = try #require(UInt64(words.count > 2 ? words[2] : ""))
+        #expect(files > 5)
+        #expect(ArchiveReader.unpackedSize(of: zip) == bytes + files * 4096, "\(listed.stdout)")
     }
 
     // MARK: the key check when hdiutil can't be asked

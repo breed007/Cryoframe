@@ -15,6 +15,8 @@ import CryoframeKit
 struct FileBrowserView: View {
     let archiveName: String
     let root: URL
+    /// how the archive was opened, when that needs saying (see OpenedArchive.warning)
+    var warning: String? = nil
     var onClose: () -> Void
 
     @State private var path: [URL] = []          // breadcrumb below root
@@ -44,6 +46,11 @@ struct FileBrowserView: View {
                 onClose()
             }
             .disabled(extracting)
+            if let warning {
+                Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.cryoWarn)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal).padding(.vertical, 6)
+            }
             Divider()
             breadcrumb
             Divider()
