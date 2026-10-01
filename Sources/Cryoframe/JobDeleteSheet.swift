@@ -128,8 +128,8 @@ struct JobDeleteSheet: View {
         let bytes = files.reduce(UInt64(0)) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size]) as? UInt64 ?? 0) }
         let n = files.count
         return VStack(alignment: .leading, spacing: 3) {
-            Label("\(n) archive\(n == 1 ? "" : "s") waiting to upload", systemImage: "trash").font(.callout.weight(.semibold))
-            Text("An earlier version of Cryoframe built \(n == 1 ? "this archive" : "these archives") (\(size(bytes))) for the interrupted upload\(n == 1 ? "" : "s") in your scratch location. \(n == 1 ? "It is" : "They are") deleted with the job.")
+            Label("\(n) backup file\(n == 1 ? "" : "s") waiting to upload", systemImage: "trash").font(.callout.weight(.semibold))
+            Text("An earlier version of Cryoframe made \(n == 1 ? "this backup file" : "these backup files") (\(size(bytes))) for the interrupted upload\(n == 1 ? "" : "s") in your scratch location. \(n == 1 ? "It is" : "They are") deleted with the job.")
                 .font(.caption).fixedSize(horizontal: false, vertical: true)
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(files) }.buttonStyle(.link).font(.caption)
         }
