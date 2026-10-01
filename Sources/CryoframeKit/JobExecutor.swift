@@ -357,16 +357,18 @@ public struct JobExecutor: Sendable {
                     continue
                 }
                 // hdiutil stops and waits for an administrator's password when it meets
-                // some of these, and hdiutil and ditto both wait forever on a named pipe:
-                // an unattended run waited all night with its snapshot held. Name them
-                // now instead.
-                if sealed != nil, !stats.dmgBlockers.isEmpty {
-                    let why = stats.dmgBlockers.explanation(library: library.displayName, zip: sealed == .zip)
+                // some of these: an unattended run waited all night with its snapshot
+                // held. Name them now instead.
+                if sealed != nil, !stats.dmgBlockers.refusing.isEmpty {
+                    let why = stats.dmgBlockers.refusing.explanation(library: library.displayName)
                     for d in dests {
                         results.append(.failed(library: library.displayName, destination: d.target.displayName, error: why))
                     }
                     continue
                 }
+                // What's left are named pipes, sockets and devices, on which hdiutil and
+                // ditto both hang or fail: the build reads a copy without them.
+                let filtered = sealed != nil && !stats.dmgBlockers.isEmpty
                 onStage(.archiving)
 
                 if let sealed {
@@ -383,11 +385,12 @@ public struct JobExecutor: Sendable {
                     }
                     let live = reachable.filter { folderOf[$0.id]?[library.id] != nil }
                     if live.isEmpty { continue }
-                    let needed = sourceSize + sourceSize / 20
-                    if (Self.freeSpace(for: self.scratchBase) ?? .max) < needed {
+                    // a filtered build holds the copy and the archive at once
+                    let room = Self.scratchRoom(sourceSize, filtered: filtered)
+                    if (Self.freeSpace(for: self.scratchBase) ?? .max) < room.needed {
                         for t in live {
                             results.append(.failed(library: library.displayName, destination: t.displayName,
-                                error: "not enough space on the scratch volume: needs ~\(Self.human(sourceSize)), only \(Self.human(Self.freeSpace(for: self.scratchBase) ?? 0)) free"))
+                                error: "not enough space on the scratch volume: needs ~\(Self.human(room.said)), only \(Self.human(Self.freeSpace(for: self.scratchBase) ?? 0)) free"))
                         }
                         continue
                     }
@@ -395,9 +398,12 @@ public struct JobExecutor: Sendable {
                     let poller = self.archivePoller(total: sourceSize, outputDir: buildDir, idx: idx, count: count, onProgress: onProgress)
                     do {
                         builds.append(try self.buildSealed(job: job, library: library, index: idx, source: source,
-                                                           sealed: sealed, buildDir: buildDir, dests: live,
+                                                           sealed: sealed, filtered: filtered, buildDir: buildDir, dests: live,
                                                            runner: runner, passphrase: passphrase, onStage: onStage))
                         poller.cancel()
+                        if filtered, let note = stats.dmgBlockers.leftOutOfSealed(library: library.displayName, zip: sealed == .zip) {
+                            notes.append(note)
+                        }
                     } catch is CancelledError { poller.cancel(); cancelled = true; break }
                     catch {
                         poller.cancel()
@@ -886,6 +892,9 @@ public struct JobExecutor: Sendable {
             }
             defer { lease?.release() }
             for libDir in libDirs {
+                // a filtered copy (see FilteredCopy) is never referenced: a crash
+                // mid-build left it, and it holds a whole copy of the library
+                FilteredCopy.remove(in: libDir, runner: ProcessCommandRunner())
                 let artifacts = (try? fm.contentsOfDirectory(at: libDir, includingPropertiesForKeys: nil)) ?? []
                 if !artifacts.contains(where: { referenced.contains($0.path) }) { try? fm.removeItem(at: libDir) }
             }
@@ -961,7 +970,17 @@ public struct JobExecutor: Sendable {
             var lastTime = start
             var rate: Double?                            // bytes/sec, EWMA-smoothed
             while !Task.isCancelled {
-                let written = Self.directorySize(outputDir)
+                // a sealed build's copy of the library without its pipes and sockets
+                // (see FilteredCopy) isn't the archive: measured apart, and while it is
+                // all there is, said instead of a bar that doesn't move
+                let written = Self.directorySize(outputDir, skipping: FilteredCopy.folderName)
+                if written == 0, FileManager.default.fileExists(atPath: outputDir.appendingPathComponent(FilteredCopy.folderName).path) {
+                    onProgress(RunProgress(stage: .archiving, libraryIndex: idx, libraryCount: count, fraction: nil,
+                                           detail: "Copying the folder without its named pipes and sockets",
+                                           elapsed: Date().timeIntervalSince(start)))
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    continue
+                }
                 let now = Date()
                 let dt = now.timeIntervalSince(lastTime)
                 if dt >= 0.1 {
@@ -1032,6 +1051,27 @@ public struct JobExecutor: Sendable {
 
     public static func directorySize(_ url: URL) -> UInt64 { directoryStats(url).bytes }
 
+    /// what the files under `url` take, less anything in its child folder `skipped`
+    static func directorySize(_ url: URL, skipping skipped: String) -> UInt64 {
+        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey]
+        guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: keys) else { return 0 }
+        var bytes: UInt64 = 0
+        for case let u as URL in e {
+            if e.level == 1, u.lastPathComponent == skipped { e.skipDescendants(); continue }
+            guard let v = try? u.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }
+            bytes += UInt64(v.totalFileAllocatedSize ?? v.fileAllocatedSize ?? 0)
+        }
+        return bytes
+    }
+
+    /// the room a sealed build takes on the scratch volume: the archive, which can
+    /// be as big as the library, and 5% over; a filtered build (see FilteredCopy)
+    /// holds a copy of the library as well. `said`: the size a refusal names.
+    static func scratchRoom(_ sourceSize: UInt64, filtered: Bool) -> (needed: UInt64, said: UInt64) {
+        let said = filtered ? sourceSize * 2 : sourceSize
+        return (said + sourceSize / 20, said)
+    }
+
     /// what a failed library says on the job row, in History, and in alerts. Every
     /// Kit error is a LocalizedError with a sentence written for this; String(describing:)
     /// printed the enum case instead ("toolFailed(tool: \"hdiutil\", status: 1, …)"),
@@ -1047,13 +1087,26 @@ public struct JobExecutor: Sendable {
 
     /// compress a library into one sealed artifact in scratch (unsplit), verifying it
     /// once. The distribution step copies/ships it to each destination afterward.
+    /// `filtered`: the library holds named pipes, sockets or devices, so the build
+    /// reads a copy of it without them (see FilteredCopy), removed once it is built.
     private func buildSealed(job: BackupJob, library: ContentType, index: Int, source: ArchiveSource,
-                             sealed: SealedArchiveEngine.Sealed, buildDir: URL, dests: [Target], runner: CommandRunner,
-                             passphrase: String?, onStage: @escaping @Sendable (BackupStage) -> Void) throws -> SealedBuild {
+                             sealed: SealedArchiveEngine.Sealed, filtered: Bool, buildDir: URL, dests: [Target],
+                             runner: CommandRunner, passphrase: String?,
+                             onStage: @escaping @Sendable (BackupStage) -> Void) throws -> SealedBuild {
         let fm = FileManager.default
+        FilteredCopy.remove(in: buildDir, runner: runner.forTeardown)
         try? fm.removeItem(at: buildDir)
         try fm.createDirectory(at: buildDir, withIntermediateDirectories: true)
-        let archive = try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase).archive(source, to: buildDir)
+        let archive: ArchiveResult = try {
+            guard filtered else {
+                return try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase).archive(source, to: buildDir)
+            }
+            // removed however the build ends, Stop included, before anything reads the archive
+            defer { FilteredCopy.remove(in: buildDir, runner: runner.forTeardown) }
+            let copy = try FilteredCopy.make(of: source.root, name: source.name, in: buildDir, runner: runner).copy
+            return try SealedArchiveEngine(sealed, split: .none, runner: runner, passphrase: passphrase)
+                .archive(ArchiveSource(name: source.name, root: copy, sizeHint: source.sizeHint), to: buildDir)
+        }()
         guard let file = archive.artifacts.first,
               let size = (try? fm.attributesOfItem(atPath: file.path)[.size]) as? UInt64 else {
             throw ArchiveError.noArtifactProduced(buildDir)
@@ -1094,6 +1147,7 @@ public struct JobExecutor: Sendable {
     }
 
     private func cleanupBuild(_ b: SealedBuild) {
+        FilteredCopy.remove(in: b.buildDir, runner: ProcessCommandRunner())
         try? FileManager.default.removeItem(at: b.buildDir)
         for d in b.dests { pendingStore?.remove(jobID: "\(b.jobID):\(Self.safe(d.id)):\(b.library.id)") }
     }

@@ -93,8 +93,8 @@ private func unlock(_ dir: URL) {
     }
 
     // A socket makes hdiutil and ditto both fail ("Operation not supported on
-    // socket"), a named pipe makes both wait forever. Either is named for either
-    // sealed format, and zip isn't offered as the way out: it can't hold them either.
+    // socket"), a named pipe makes both wait forever. Either is found for either
+    // sealed format, refuses neither, and is named as left out (see FilteredCopy).
     @Test func pipesAndSocketsAreNamedForBothSealedFormats() throws {
         // a short path: a socket's path must fit in 104 bytes
         let lib = URL(fileURLWithPath: "/private/tmp/cf-sk-\(UUID().uuidString.prefix(8))")
@@ -114,12 +114,11 @@ private func unlock(_ dir: URL) {
         for zip in [false, true] {
             let found = JobExecutor.directoryStats(lib, forDMG: !zip, forZip: zip).dmgBlockers
             #expect(found.counts[.special] == 2 && found.counts.count == 1, "\(found.counts)")
-            let text = found.explanation(library: "Projects", zip: zip)
-            #expect(text.hasPrefix("Projects holds 2 named pipes, sockets or devices ("), "\(text)")
+            #expect(found.refusing.isEmpty, "\(found.refusing.counts)")
+            let text = try #require(found.leftOutOfSealed(library: "Projects", zip: zip))
+            #expect(text.hasPrefix("Projects: left 2 named pipes, sockets or devices out of \(zip ? "the zip" : "the disk image") ("), "\(text)")
             #expect(text.contains("(agent.sock, build.pipe)") || text.contains("(build.pipe, agent.sock)"), "\(text)")
-            #expect(text.contains(zip ? "which a sealed zip can't hold: ditto waits" : "which a sealed disk image can't hold: hdiutil waits"), "\(text)")
-            #expect(text.hasSuffix("move them out of the folder (or the program that makes them), or back the folder up as a live mirror, which leaves them out."), "\(text)")
-            #expect(!text.contains("sealed zip format"), "\(text)")
+            #expect(text.hasSuffix("hold no data; a restore doesn't need them."), "\(text)")
         }
         // a folder backed up as a mirror isn't looked at
         #expect(JobExecutor.directoryStats(lib).dmgBlockers.isEmpty)
@@ -150,6 +149,8 @@ private func unlock(_ dir: URL) {
         try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
         try Data("x".utf8).write(to: lib.appendingPathComponent("secret.txt"))
         chmod(lib.appendingPathComponent("secret.txt").path, 0o200)
+        // a pipe beside it, which alone would be left out, doesn't let the run past it
+        try #require(mkfifo(lib.appendingPathComponent("build.pipe").path, 0o644) == 0)
         let dest = base.appendingPathComponent("dest")
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         let papers = ContentType.genericFolder(id: "papers", displayName: "Papers", path: .absolute(lib.path))
@@ -164,5 +165,7 @@ private func unlock(_ dir: URL) {
             Issue.record("expected a failed library, got \(outcome)"); return
         }
         #expect(why.contains("secret.txt") && why.contains("administrator's password"), "\(why)")
+        #expect(results.count == 1 && !FileManager.default.fileExists(atPath: base.appendingPathComponent("scratch/\(job.id)/build").path),
+                "a build was started: \(results)")
     }
 }

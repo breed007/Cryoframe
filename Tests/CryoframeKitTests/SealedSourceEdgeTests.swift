@@ -72,21 +72,12 @@ private func sh(_ cmd: String, in dir: URL) throws {
     }
 
     // A named pipe in a sealed-DMG library: hdiutil create -srcfolder opens it and
-    // waits for a writer forever (measured: 40 s, 0.02 s of CPU, until killed). The
-    // watchdog now stops it after 15 minutes and blames a drive or share that stopped
-    // responding, and every run of the job does the same. The pipe is in the library,
-    // and the run should say so up front, as it does for the other things that stop
-    // hdiutil.
-    @Test func aNamedPipeInASealedDMGLibraryIsNamedUpFront() async throws {
-        try await sealedRunNamesThePipe(.sealedDMG)
-    }
-
-    // The same for the sealed zip format: ditto -c -k hangs on the pipe the same way.
-    @Test func aNamedPipeInASealedZipLibraryIsNamedUpFront() async throws {
-        try await sealedRunNamesThePipe(.sealedZip)
-    }
-
-    private func sealedRunNamesThePipe(_ format: FormatChoice) async throws {
+    // waits for a writer forever (measured: 40 s, 0.02 s of CPU, until killed), and
+    // refuses a socket. The run builds from a copy without them (see FilteredCopy),
+    // says what it left out, and the version restores without them: plain, encrypted,
+    // and as a zip (ditto -c -k hangs on the pipe the same way).
+    @Test(arguments: [(FormatChoice.sealedDMG, false), (.sealedDMG, true), (.sealedZip, false)])
+    func aSealedRunLeavesPipesAndSocketsOut(_ format: FormatChoice, _ encrypted: Bool) async throws {
         let base = folder("pipe")
         defer { unlock(base); try? FileManager.default.removeItem(at: base) }
         // the library on a non-APFS volume, so the run reads it where it is (the fake
@@ -105,23 +96,83 @@ private func sh(_ cmd: String, in dir: URL) throws {
         let lib = mnt.appendingPathComponent("Projects")
         try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
         try Data("notes".utf8).write(to: lib.appendingPathComponent("notes.txt"))
+        try sh("mkdir tools && ln notes.txt tools/notes-link.txt", in: lib)
         try #require(mkfifo(lib.appendingPathComponent("build.pipe").path, 0o644) == 0)
+        let bound = try ProcessCommandRunner().run("/bin/sh", ["-c", "cd '\(lib.path)/tools' && /usr/bin/python3 -c \"import socket; socket.socket(socket.AF_UNIX).bind('agent.sock')\""])
+        try #require(bound.ok, "couldn't make a socket: \(bound.stderr)")
         let dest = base.appendingPathComponent("dest")
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         let projects = ContentType.genericFolder(id: "projects", displayName: "Projects", path: .absolute(lib.path))
         let job = BackupJob(name: "Projects", libraries: [projects], target: .localVolume(id: "d", name: "Dest", dir: dest),
-                            format: format, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
-        let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(),
-                               scratchBase: base.appendingPathComponent("scratch"))
+                            format: format, frequency: .manual, encrypted: encrypted, createdAt: Date(timeIntervalSince1970: 0))
+        let scratch = base.appendingPathComponent("scratch")
+        let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(), scratchBase: scratch,
+                               passphraseProvider: { _ in encrypted ? "pw" : nil })
         // a short quiet limit, so a hung tool is stopped in seconds rather than 15 minutes
         let control = RunControl(quietLimit: 3)
         let start = ProcessInfo.processInfo.systemUptime
         let outcome = try await exec.run(job, ownerUID: getuid(), now: Date(), control: control)
         #expect(ProcessInfo.processInfo.systemUptime - start < 60)
-        guard case .finished(let results, _) = outcome, case .failed(_, _, let why)? = results.first else {
-            Issue.record("expected a failed library, got \(outcome)"); return
+        guard case .finished(let results, let warning) = outcome, case .completed? = results.first else {
+            Issue.record("expected a completed library, got \(outcome)"); return
         }
-        #expect(why.contains("build.pipe"), "the run didn't name the pipe: \(why)")
-        #expect(!why.contains("made no progress"), "the run blamed a stalled tool, not the pipe: \(why)")
+        let what = format == .sealedZip ? "the zip" : "the disk image"
+        #expect(warning?.contains("Projects: left 2 named pipes, sockets or devices out of \(what) (") == true, "\(warning ?? "no warning")")
+        #expect(warning?.contains("build.pipe") == true && warning?.contains("tools/agent.sock") == true, "\(warning ?? "no warning")")
+        // the copy is gone from scratch once the archive is built
+        let leftovers = (FileManager.default.enumerator(atPath: scratch.path)?.allObjects as? [String] ?? []).filter { $0.contains("filtered") }
+        #expect(leftovers.isEmpty, "\(leftovers)")
+
+        let archive = try #require(RestoreDiscovery.scan(dest, maxDepth: 4).first)
+        let restored = try RestoreEngine().restore(archive, to: base.appendingPathComponent("restored"), passphrase: encrypted ? "pw" : nil)
+        #expect(restored.lastPathComponent == "Projects")
+        #expect(try String(contentsOf: restored.appendingPathComponent("notes.txt"), encoding: .utf8) == "notes")
+        #expect(try String(contentsOf: restored.appendingPathComponent("tools/notes-link.txt"), encoding: .utf8) == "notes")
+        #expect(!FileManager.default.fileExists(atPath: restored.appendingPathComponent("build.pipe").path))
+        #expect(!FileManager.default.fileExists(atPath: restored.appendingPathComponent("tools/agent.sock").path))
+    }
+
+    // Stop while the copy is being made: the run is canceled, and the copy, which
+    // holds a whole copy of the library, isn't left in scratch.
+    @Test func stopWhileTheCopyIsMadeLeavesNoCopy() async throws {
+        let base = folder("stop")
+        defer { unlock(base); try? FileManager.default.removeItem(at: base) }
+        let mnt = base.appendingPathComponent("vol")
+        try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
+        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "200m", "-fs", "HFS+", "-volname", "Src",
+                                                                       base.appendingPathComponent("src.dmg").path])
+        try #require(made.ok, "\(made.stderr)")
+        let attached = try DiskImageGate.serialized {
+            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", base.appendingPathComponent("src.dmg").path,
+                                                                            "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+        }
+        try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
+        defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
+        let lib = mnt.appendingPathComponent("Projects")
+        try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
+        // enough files that the copy takes a while
+        try sh("for d in 1 2 3 4 5 6 7 8; do mkdir d$d; for f in $(seq 1 400); do echo $d$f > d$d/f$f; done; done", in: lib)
+        try #require(mkfifo(lib.appendingPathComponent("build.pipe").path, 0o644) == 0)
+        let dest = base.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let projects = ContentType.genericFolder(id: "projects", displayName: "Projects", path: .absolute(lib.path))
+        let job = BackupJob(name: "Projects", libraries: [projects], target: .localVolume(id: "d", name: "Dest", dir: dest),
+                            format: .sealedDMG, frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
+        let scratch = base.appendingPathComponent("scratch")
+        let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(), scratchBase: scratch)
+        let control = RunControl()
+        let filtered = scratch.appendingPathComponent("\(job.id)/build/projects/filtered")
+        let watcher = Task.detached {
+            while !Task.isCancelled {
+                if FileManager.default.fileExists(atPath: filtered.path) { control.cancel(); return true }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+            return false
+        }
+        let outcome = try await exec.run(job, ownerUID: getuid(), now: Date(), control: control)
+        watcher.cancel()
+        try #require(await watcher.value, "the copy was never started")
+        guard case .cancelled = outcome else { Issue.record("expected a canceled run, got \(outcome)"); return }
+        #expect(!FileManager.default.fileExists(atPath: filtered.path), "the copy was left in scratch")
     }
 }

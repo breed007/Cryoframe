@@ -139,8 +139,8 @@ private final class Moves: @unchecked Sendable {
         #expect(try MirrorCopy.structure(of: next, against: src, previous: nil, control: nil).count == 0)
     }
 
-    // A sealed format still names them up front, now pointing at the mirror; a
-    // mirror's note names five and says there are more.
+    // A sealed format leaves them out too (see FilteredCopy) and says so in the
+    // mirror's words; each note names five and says there are more.
     @Test func theWordsForSealedFormatsAndForManySpecials() throws {
         let base = dir("words")
         defer { try? FileManager.default.removeItem(at: base) }
@@ -148,9 +148,11 @@ private final class Moves: @unchecked Sendable {
         for i in 1...7 { try #require(mkfifo(base.appendingPathComponent("p\(i).pipe").path, 0o644) == 0) }
         for zip in [false, true] {
             let stats = JobExecutor.directoryStats(base, forDMG: !zip, forZip: zip)
-            let why = stats.dmgBlockers.explanation(library: "Projects", zip: zip)
-            #expect(why.contains("7 named pipes, sockets or devices") && why.contains("live mirror, which leaves them out")
-                    && why.contains("Nothing was backed up"), "\(why)")
+            #expect(stats.dmgBlockers.refusing.isEmpty)
+            let why = try #require(stats.dmgBlockers.leftOutOfSealed(library: "Projects", zip: zip))
+            #expect(why.contains("left 7 named pipes, sockets or devices out of \(zip ? "the zip" : "the disk image") (")
+                    && why.contains(", …).") && !why.contains("Nothing was backed up"), "\(why)")
+            #expect(why.components(separatedBy: ".pipe").count - 1 == DMGBlockers.examplesKept, "\(why)")
         }
         let note = try #require(JobExecutor.directoryStats(base, forMirror: true).dmgBlockers.leftOutOfMirror(library: "Projects"))
         #expect(note.contains("left 7 named pipes, sockets or devices out of the mirror (") && note.contains(", …)."), "\(note)")

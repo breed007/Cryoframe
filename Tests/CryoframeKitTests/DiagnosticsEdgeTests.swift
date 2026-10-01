@@ -62,8 +62,8 @@ private func leaked(_ words: [String], in report: String) -> [String] {
         #expect(text.contains("didn't read back the same as the library"), "what a fix needs went too:\n\(text)")
     }
 
-    // A sealed run refused up front names the items it can't read and the pipes in
-    // the library, by their path in it.
+    // A sealed run refused up front names the items it can't read, and one that
+    // leaves out pipes warns naming them, by their path in the library.
     @Test func aSealedRunNamingWhatItCantReadLeavesNoWordOfIt() throws {
         let base = folder("blockers")
         defer {
@@ -76,9 +76,12 @@ private func leaked(_ words: [String], in report: String) -> [String] {
         try Data("draft".utf8).write(to: locked)
         #expect(chmod(locked.path, 0) == 0)
         try #require(mkfifo(lib.appendingPathComponent("Custody Notes Helper.pipe").path, 0o644) == 0)
-        let why = JobExecutor.directoryStats(lib, forDMG: true).dmgBlockers.explanation(library: "Work")
+        let blockers = JobExecutor.directoryStats(lib, forDMG: true).dmgBlockers
+        let why = blockers.refusing.explanation(library: "Work")
         try #require(why.contains("Settlement"), "the fixture didn't produce the message: \(why)")
-        let text = report(error: why)
+        let note = try #require(blockers.leftOutOfSealed(library: "Work", zip: false))
+        try #require(note.contains("Custody"), "the fixture didn't produce the note: \(note)")
+        let text = report(error: why, warning: note)
         let found = leaked(["Acme", "Merger", "Divorce", "Settlement", "Draft", "Custody", "Notes"], in: text)
         #expect(found.isEmpty, "\(found) in the report:\n\(text)")
     }

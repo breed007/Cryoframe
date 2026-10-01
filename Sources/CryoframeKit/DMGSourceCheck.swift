@@ -11,6 +11,10 @@
 //  on it all night, with its snapshot held. The run's walk of the library for its size
 //  looks for all three, and the run fails up front naming them.
 //
+//  It also finds what neither sealed format can hold (named pipes, sockets, devices).
+//  Those don't fail the run: a sealed build of such a folder reads a copy of it
+//  without them (see FilteredCopy), and the run says what was left out.
+//
 
 import Foundation
 
@@ -19,7 +23,8 @@ public struct DMGBlockers: Sendable, Equatable {
     /// hold. Measured: `hdiutil create -srcfolder` and `ditto -c -k` both open a named
     /// pipe and wait for a writer forever, and both refuse a socket ("Operation not
     /// supported on socket"). Devices can't be made without root to measure; neither
-    /// tool can recreate one as the user, so they are named too.
+    /// tool can recreate one as the user. These are left out of a sealed build (see
+    /// FilteredCopy), not refused; the other kinds refuse it.
     public enum Kind: Sendable, CaseIterable { case unreadable, foreign, setgid, special }
 
     /// how many examples of each kind are kept to name
@@ -32,6 +37,13 @@ public struct DMGBlockers: Sendable, Equatable {
 
     public var isEmpty: Bool { counts.isEmpty }
     public var total: Int { counts.values.reduce(0, +) }
+
+    /// what stops a sealed build: everything but the items it leaves out
+    public var refusing: DMGBlockers {
+        var out = self
+        out.counts[.special] = nil; out.examples[.special] = nil
+        return out
+    }
 
     mutating func note(_ kind: Kind, _ rel: String) {
         counts[kind, default: 0] += 1
@@ -94,15 +106,25 @@ public struct DMGBlockers: Sendable, Equatable {
     /// What a live mirror run says about the named pipes, sockets and devices it
     /// left out (MirrorCopy.isLeftOut), or nil if there were none. Not a failure:
     /// they hold no data.
-    public func leftOutOfMirror(library: String) -> String? {
-        guard let n = counts[.special], n > 0 else { return nil }
-        let shown = examples[.special] ?? []
-        return "\(library): left \(n) named pipe\(n == 1 ? "" : "s"), socket\(n == 1 ? "" : "s") or device\(n == 1 ? "" : "s") out of the mirror (\(shown.joined(separator: ", "))\(n > shown.count ? ", …" : "")). These are connections a running program makes and hold no data; a restore doesn't need them."
+    public func leftOutOfMirror(library: String) -> String? { leftOut(library: library, of: "the mirror") }
+
+    /// The same for a sealed run, which builds from a copy without them (see
+    /// FilteredCopy).
+    public func leftOutOfSealed(library: String, zip: Bool) -> String? {
+        leftOut(library: library, of: zip ? "the zip" : "the disk image")
     }
 
-    /// What the run reports: which items, and what to do about them. `zip`: the
-    /// sealed zip format, which only `special` items stop.
-    public func explanation(library: String, zip: Bool = false) -> String {
+    private func leftOut(library: String, of what: String) -> String? {
+        guard let n = counts[.special], n > 0 else { return nil }
+        let shown = examples[.special] ?? []
+        return "\(library): left \(n) named pipe\(n == 1 ? "" : "s"), socket\(n == 1 ? "" : "s") or device\(n == 1 ? "" : "s") out of \(what) (\(shown.joined(separator: ", "))\(n > shown.count ? ", …" : "")). These are connections a running program makes and hold no data; a restore doesn't need them."
+    }
+
+    /// What the run reports when a sealed disk image can't be built unattended:
+    /// which items, and what to do about them. Named pipes, sockets and devices
+    /// aren't among them: a sealed build leaves them out (see `leftOutOfSealed`).
+    /// A sealed zip is stopped by none of these.
+    public func explanation(library: String) -> String {
         func list(_ kind: Kind, _ one: String, _ many: String) -> String? {
             guard let n = counts[kind], n > 0 else { return nil }
             let shown = examples[kind] ?? []
@@ -117,22 +139,15 @@ public struct DMGBlockers: Sendable, Equatable {
             said.append("\(library) can't be sealed into a disk image unattended: the disk image tool would stop and wait for an administrator's password because of "
                         + found.joined(separator: ", and ") + ".")
         }
-        if let pipes = list(.special, "named pipe, socket or device", "named pipes, sockets or devices") {
-            let tool = zip ? "ditto" : "hdiutil"
-            said.append("\(library) holds \(pipes), which a sealed \(zip ? "zip" : "disk image") can't hold: \(tool) waits on a named pipe forever and refuses a socket.")
-        }
         var fix = "Nothing was backed up."
         if !found.isEmpty {
             fix += " Make these items yours and readable (in Finder, Get Info, then Sharing & Permissions), or move them out of the folder"
-            if counts[.special] == nil, counts[.foreign] != nil || counts[.setgid] != nil {
+            if counts[.foreign] != nil || counts[.setgid] != nil {
                 fix += (counts[.unreadable] == nil ? ", or switch this job to the sealed zip format, which archives them without asking."
                                                    : "; the sealed zip format archives items owned by others, but not ones you can't read.")
             } else {
                 fix += "."
             }
-        }
-        if counts[.special] != nil {
-            fix += " Named pipes and sockets are connections a running program makes and hold no data: move them out of the folder (or the program that makes them), or back the folder up as a live mirror, which leaves them out."
         }
         return said.joined(separator: " ") + " " + fix
     }
