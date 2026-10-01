@@ -254,13 +254,35 @@ public struct JobExecutor: Sendable {
         var folderOwners: [String: (targetID: String, libraryID: String)] = [:]
         for (tid, libs) in folderOf { for (lid, folder) in libs { folderOwners[folder.path] = (tid, lid) } }
         let owners = folderOwners
-        let adoptionConfirmed: (URL, String) -> Bool = { folder, name in
-            guard let o = owners[folder.path] else { return false }
-            return saved.confirmsAdoption(of: name, target: o.targetID, library: o.libraryID)
+        func adoptionConfirmed(_ by: BackupJob) -> (URL, String) -> Bool {
+            { folder, name in owners[folder.path].map { by.confirmsAdoption(of: name, target: $0.targetID, library: $0.libraryID) } ?? false }
         }
-        let adoptionShown: (URL, String) -> Bool = { folder, name in
-            guard let o = owners[folder.path] else { return false }
-            return saved.hasShownAdoption(of: name, target: o.targetID, library: o.libraryID)
+        func adoptionShown(_ by: BackupJob) -> (URL, String) -> Bool {
+            { folder, name in owners[folder.path].map { by.hasShownAdoption(of: name, target: $0.targetID, library: $0.libraryID) } ?? false }
+        }
+        // The Keep rule and the go-aheads as saved when retention runs, not when the run
+        // began: a yes given on the dashboard while the run went on is counted (or the
+        // run put the card just answered back), and a Keep rule raised meanwhile is
+        // what the run prunes by. Read under the store's lock, as a yes is written.
+        let jobStore = self.jobStore
+        func keepingNow() -> BackupJob {
+            var j = job
+            if let stored = jobStore?.update({ s in s.jobs.first { $0.id == saved.id } }) {
+                j.retention = stored.retention; j.adoptionConsents = stored.adoptionConsents
+            }
+            return j
+        }
+        // and before each deletion, that both still hold: one changed while retention
+        // ran stops it there, and the next run prunes by what is saved then
+        func stillKeeping(_ by: BackupJob) -> () -> Bool {
+            {
+                guard let jobStore else { return true }
+                return jobStore.update { s in
+                    guard let stored = s.jobs.first(where: { $0.id == saved.id }) else { return true }
+                    return stored.retention == by.retention
+                        && (by.adoptionConsents ?? []).allSatisfy { (stored.adoptionConsents ?? []).contains($0) }
+                }
+            }
         }
 
         onStage(.preparing)
@@ -432,8 +454,10 @@ public struct JobExecutor: Sendable {
         if pass.cancelled {
             pass.builds.forEach(cleanupBuild)
             if sealed != nil {
-                Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords(),
-                                   transferring: stillTransferring, confirmed: adoptionConfirmed, shown: adoptionShown)
+                let keeping = keepingNow()
+                Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: keeping.retention, checks: healthRecords(),
+                                   transferring: stillTransferring, confirmed: adoptionConfirmed(keeping), shown: adoptionShown(keeping),
+                                   proceed: stillKeeping(keeping))
             }
             return .cancelled
         }
@@ -523,15 +547,18 @@ public struct JobExecutor: Sendable {
         }
 
         var pruneFailures: [String] = []
+        let keeping = keepingNow()
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
-            pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: job.retention, checks: healthRecords(),
-                                               transferring: stillTransferring, confirmed: adoptionConfirmed, shown: adoptionShown)
+            pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: keeping.retention, checks: healthRecords(),
+                                               transferring: stillTransferring, confirmed: adoptionConfirmed(keeping),
+                                               shown: adoptionShown(keeping), proceed: stillKeeping(keeping))
         }
         // what was left alone for the person to say yes to, said in the run's warning
-        // and kept for the dashboard
-        let reviews = sealed == nil ? [] : Self.adoptionReviews(job, folderOf, checks: healthRecords(), transferring: stillTransferring,
-                                                                 confirmed: adoptionConfirmed, shown: adoptionShown, now: now)
-        jobStore?.recordAdoptionReviews(jobID: job.id, reviews, reached: Set(folderOf.keys))
+        // and kept for the dashboard: counted with the go-aheads as saved now, and not
+        // one a yes given since has answered
+        let counted = sealed == nil ? [] : Self.adoptionReviews(keeping, folderOf, checks: healthRecords(), transferring: stillTransferring,
+                                                                 confirmed: adoptionConfirmed(keeping), shown: adoptionShown(keeping), now: now)
+        let reviews = jobStore?.recordAdoptionReviews(jobID: job.id, counted, reached: Set(folderOf.keys)) ?? counted
         // the note on how to restore without Cryoframe, brought up to date in each
         // destination this run reached; a note that can't be written is logged, never
         // a failure (see RecoveryNote)
@@ -585,16 +612,22 @@ public struct JobExecutor: Sendable {
     /// run writes to is pruned, never a 1.5 folder left for reading. `transferring`:
     /// whether an interrupted transfer is still to finish into a folder (see prunePlan).
     /// `confirmed`, `shown`: see prunePlan. `confirmed` has no default: nothing
-    /// deletes an adopted version unless its caller says which it may.
+    /// deletes an adopted version unless its caller says which it may. `proceed`:
+    /// asked before each deletion; once it says no, nothing more is deleted.
     @discardableResult
     static func pruneVersions(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
                               checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false },
-                              confirmed: @escaping (URL, String) -> Bool, shown: ((URL, String) -> Bool)? = nil) -> [String] {
+                              confirmed: @escaping (URL, String) -> Bool, shown: ((URL, String) -> Bool)? = nil,
+                              proceed: () -> Bool = { true }) -> [String] {
         let plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring, confirmed: confirmed, shown: shown)
         let fm = FileManager.default
-        for husk in plan.husks { try? fm.removeItem(at: husk) }        // junk from a failed/canceled run
+        for husk in plan.husks {        // junk from a failed/canceled run
+            guard proceed() else { return [] }
+            try? fm.removeItem(at: husk)
+        }
         var failures: [String] = []
         for v in plan.versions {
+            guard proceed() else { return failures }
             do { try fm.removeItem(at: v.url) }
             catch { failures.append("\(v.library) \(VersionStamp.string(v.date)): \((error as NSError).localizedDescription)") }
         }

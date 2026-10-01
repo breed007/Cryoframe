@@ -312,4 +312,40 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
         #expect(review.later == 3)
         #expect(review.effect == "Keep last 4 then applies to them: 3 are deleted at the next backup; 3 more are deleted one at a time as new backups are made.")
     }
+
+    // A Keep rule raised while a run goes on is the one that run prunes by: the
+    // version the old rule would have deleted stays.
+    @Test func keepRaisedDuringARunIsWhatThatRunPrunesBy() async throws {
+        let base = scratch("raise")
+        let (mnt, src) = try sourceVolume(in: base)
+        defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
+        let dest = base.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let lib = ContentType.genericFolder(id: "papers", displayName: "Papers", path: .absolute(src.path))
+        let store = JobStore(url: base.appendingPathComponent("jobs.json"))
+        store.upsert(job([dest], library: lib, retention: .keepLast(1)))
+        let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(),
+                               scratchBase: base.appendingPathComponent("scratch"), jobStore: store, volumes: FixedVolumeTable([]))
+        let first = try await exec.run(try #require(store.load().jobs.first), ownerUID: getuid(), now: start.addingTimeInterval(10 * day))
+        guard case .finished = first else { Issue.record("\(first)"); return }
+        let second = try await exec.run(try #require(store.load().jobs.first), ownerUID: getuid(), now: start.addingTimeInterval(11 * day),
+                                        onStage: { stage in
+                                            if stage == .archiving { store.update { s in s.jobs[0].retention = .keepLast(5) } }
+                                        })
+        guard case .finished = second else { Issue.record("\(second)"); return }
+        let stored = try #require(store.load().jobs.first)
+        let folder = try #require(LibraryFolders.folders(job: stored, library: lib, in: dest).first)
+        #expect(LibraryFolders.versionNames(in: folder).count == 2, "pruned by the Keep rule the run began with")
+    }
+
+    // Once retention is told to stop, nothing more is deleted.
+    @Test func pruningStopsWhenToldTo() throws {
+        let dest = scratch("stop")
+        let folder = dest.appendingPathComponent("Papers")
+        for d in 0..<4 { try version(in: folder, start.addingTimeInterval(Double(d) * day)) }
+        var asked = 0
+        JobExecutor.pruneVersions(folders: [(papers, folder)], policy: .keepLast(1), confirmed: { _, _ in false },
+                                  proceed: { asked += 1; return asked < 2 })
+        #expect(LibraryFolders.versionNames(in: folder).count == 3)
+    }
 }

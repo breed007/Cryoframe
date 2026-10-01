@@ -175,6 +175,15 @@ extension BackupJob {
         adoptionConsents(target: targetID, library: libraryID).contains { $0.versions.contains(version) }
     }
 
+    /// Whether what `review` asks is already answered: it was counted under another
+    /// Keep rule than the job's now, or the job's go-aheads show every one of its
+    /// versions and let go every one it says the rule deletes.
+    public func hasAnswered(_ review: AdoptionReview) -> Bool {
+        guard review.rule == retention else { return true }
+        return review.versions.allSatisfy { hasShownAdoption(of: $0, target: review.targetID, library: review.libraryID) }
+            && review.allows.allSatisfy { confirmsAdoption(of: $0, target: review.targetID, library: review.libraryID) }
+    }
+
     /// This job with `consents` added. One given for a folder replaces any earlier one
     /// for it (they share a version), and none given under another Keep rule than the
     /// job's is kept: it no longer holds.
@@ -192,13 +201,18 @@ extension BackupJob {
 
 extension JobStore {
     /// Record what a run of `jobID` left alone at the destinations it reached
-    /// (`reached`, by id): the reviews there are replaced by `reviews`.
-    public func recordAdoptionReviews(jobID: String, _ reviews: [AdoptionReview], reached: Set<String>) {
+    /// (`reached`, by id): the reviews there are replaced by `reviews`, less any the
+    /// job as saved now no longer asks (a yes given after they were counted, or a
+    /// Keep rule changed since). Returns those recorded.
+    @discardableResult
+    public func recordAdoptionReviews(jobID: String, _ reviews: [AdoptionReview], reached: Set<String>) -> [AdoptionReview] {
         update { s in
-            guard s.jobs.contains(where: { $0.id == jobID }) else { return }
+            guard let job = s.jobs.first(where: { $0.id == jobID }) else { return [] }
+            let asked = reviews.filter { !job.hasAnswered($0) }
             var list = (s.adoptionReviews[jobID] ?? []).filter { !reached.contains($0.targetID) }
-            list += reviews
+            list += asked
             s.adoptionReviews[jobID] = list.isEmpty ? nil : list
+            return asked
         }
     }
 
