@@ -124,7 +124,7 @@ private func sh(_ cmd: String, in dir: URL) throws {
         #expect(leftovers.isEmpty, "\(leftovers)")
 
         let archive = try #require(RestoreDiscovery.scan(dest, maxDepth: 4).first)
-        let restored = try RestoreEngine().restore(archive, to: base.appendingPathComponent("restored"), passphrase: encrypted ? "pw" : nil)
+        let restored = try restoreOnceFree(archive, to: base.appendingPathComponent("restored"), passphrase: encrypted ? "pw" : nil)
         #expect(restored.lastPathComponent == "Projects")
         #expect(try String(contentsOf: restored.appendingPathComponent("notes.txt"), encoding: .utf8) == "notes")
         #expect(try String(contentsOf: restored.appendingPathComponent("tools/notes-link.txt"), encoding: .utf8) == "notes")

@@ -114,22 +114,34 @@ private func isUnpack(_ tool: String, _ args: [String]) -> Bool { tool.hasSuffix
         let report = RestoreDriller(runner: runner, freeSpace: { _ in 1 << 40 }).drill(job: job)
         #expect(report.canceled)
         #expect(report.checks.isEmpty, "the archive Stop came in was counted: \(report.checks)")
-        // nothing of the drill's is left attached or on disk. macOS attaches a fresh
-        // image by itself for a moment to scan it; that goes, a leftover of ours doesn't.
+        // nothing of the drill's is left attached or on disk. Only the image the drill
+        // opened (Alpha's) is looked for: macOS attaches each fresh image by itself to
+        // scan it, and under load its attach of the others can outlast the test (seen:
+        // Bravo's, never opened by the drill, held by a "system-image" attach). Its scan
+        // of Alpha's goes; a leftover of the drill's doesn't.
+        let opened = base.appendingPathComponent("dest/Alpha/Alpha.dmg").path
         let until = Date().addingTimeInterval(30)
         var info = ""
         repeat {
             info = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["info"]).stdout
-            if !info.contains(base.path) { break }
+            if !info.contains(opened) { break }
             Thread.sleep(forTimeInterval: 1)
         } while Date() < until
-        #expect(!info.contains(base.path), "an image was left attached:\n\(info)")
+        #expect(!info.contains(opened), "the drill's image was left attached:\n\(info)")
         #expect(Set(Self.openWorkDirs()).subtracting(before).isEmpty, "a work folder was left")
     }
 
+    /// this process's open-archive work folders (another process's tests share the folder)
     static func openWorkDirs() -> [String] {
-        ((try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? [])
+        let tmp = FileManager.default.temporaryDirectory
+        return ((try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? [])
             .filter { $0.hasPrefix(OpenedArchive.workPrefix) }
+            .filter { name in
+                let owner = tmp.appendingPathComponent(name).appendingPathComponent(OpenedArchive.ownerFileName)
+                guard let data = try? Data(contentsOf: owner),
+                      let who = try? JSONDecoder().decode(ProcessIdentity.self, from: data) else { return false }
+                return who.pid == getpid()
+            }
     }
 
     // MARK: the checksum check and the rehearsal

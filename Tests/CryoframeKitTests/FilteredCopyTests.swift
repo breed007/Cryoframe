@@ -70,6 +70,21 @@ private func openOnceFree(_ result: ArchiveResult, passphrase: String?) throws -
     }
 }
 
+/// A restore, waiting out a disk-image system kept busy (EAGAIN) by macOS's own scan
+/// of a fresh image or by other tests attaching at the same time. The restore's own
+/// one retry wasn't always enough under a full suite.
+func restoreOnceFree(_ archive: RestorableArchive, to dir: URL, passphrase: String? = nil) throws -> URL {
+    let until = Date().addingTimeInterval(60)
+    while true {
+        do { return try RestoreEngine().restore(archive, to: dir, passphrase: passphrase) }
+        catch let ArchiveError.toolFailed(_, _, stderr) where ProcessCommandRunner.isTransient(stderr) && Date() < until {
+            Thread.sleep(forTimeInterval: 2)
+        } catch let e as DiskImageInUse where e.attachedWithoutMount && Date() < until {
+            Thread.sleep(forTimeInterval: 2)        // an encrypted image the scan holds is refused
+        }
+    }
+}
+
 /// `src` copied into `copy` the way the run copies it, before relinking
 private func copyLikeTheRun(_ src: URL, _ copy: URL) throws {
     try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
@@ -206,7 +221,7 @@ private func differences(_ a: [String: String], _ b: [String: String]) -> [Strin
         FilteredCopy.remove(in: buildDir, runner: ProcessCommandRunner())
         try ArchiveManifest.write(try ArchiveManifest.build(for: result), toDir: out)
         let archive = try #require(RestoreDiscovery.archive(at: out))
-        let restored = try RestoreEngine().restore(archive, to: base.appendingPathComponent("restored"))
+        let restored = try restoreOnceFree(archive, to: base.appendingPathComponent("restored"))
         #expect(restored.lastPathComponent == name)
         #expect(try String(contentsOf: restored.appendingPathComponent("a.txt"), encoding: .utf8) == "one\n")
         #expect(try String(contentsOf: restored.appendingPathComponent("sub/deeper/b-again.txt"), encoding: .utf8) == "two\n")

@@ -118,6 +118,7 @@ called
 came
 can
 can't
+canceled
 capture
 captureone
 cat
@@ -137,6 +138,7 @@ checkmark
 checks
 checksum
 checksums
+chflags
 chmod
 choose
 chose
@@ -181,6 +183,7 @@ copied
 copies
 copy
 copyfile
+copying
 cores
 corrupt
 corrupted
@@ -230,7 +233,6 @@ detached
 details
 dev
 device
-devices
 diagnostics
 did
 didn't
@@ -317,6 +319,7 @@ filesystemtype
 fill
 filled
 fills
+filtered
 final
 finalcut
 find
@@ -336,7 +339,6 @@ follow
 follows
 for
 force
-forever
 fork
 format
 found
@@ -381,6 +383,7 @@ healthy
 helper
 helperversion
 here
+hfs
 hhmmss
 hidden
 history
@@ -477,6 +480,7 @@ lightroom
 lightroomclassiccc
 likely
 limits
+link
 list
 listlocalsnapshots
 lists
@@ -516,6 +520,7 @@ marked
 marks
 master
 match
+matched
 may
 mb
 me
@@ -700,7 +705,6 @@ recovered
 recovery
 rectangle
 refused
-refuses
 rehearsal
 rehearse
 rehearsed
@@ -858,6 +862,7 @@ these
 they
 they're
 this
+those
 through
 tib
 tidied
@@ -942,7 +947,6 @@ volumes
 volumeuuid
 wait
 waiting
-waits
 want
 warning
 was
