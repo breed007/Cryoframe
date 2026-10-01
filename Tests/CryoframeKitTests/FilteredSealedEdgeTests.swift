@@ -6,13 +6,16 @@
 //  pipes or sockets), and of Stop on a check of a job's archives:
 //
 //    - the copy is a plaintext copy of the library, even for an encrypted job, so it
-//      must be gone however the build ends, failure included;
-//    - the room check counts the library's bytes on disk, which an APFS-compressed
-//      file can make far smaller than its copy;
-//    - a file with an "everyone deny delete" access list stops hdiutil, filtered or
-//      not, and the walk before the build doesn't see it;
+//      must be gone however the build ends, a failed hdiutil included;
+//    - the room check, which counted the library's bytes on disk (an APFS-compressed
+//      file can make them far smaller than its copy);
+//    - a file with an "everyone deny delete" access list, which stops hdiutil and is
+//      now refused before any copy is made;
 //    - what a filtered disk image keeps that a direct one does (creation dates and
-//      sub-second modification dates), and what the mirror's copier drops;
+//      sub-second modification dates), and what the mirror's copier keeps of flags
+//      and folder dates as the library's locks come and go;
+//    - what the launch sweep of scratch takes from a folder chosen in Settings;
+//    - a folder date a sealed zip loses when it is unpacked;
 //    - Stop in the middle of a zip drill's unpack, a rehearsal's attach, or a hash.
 //
 //  NEVER let a folder with an unreadable or foreign item reach a real hdiutil
@@ -95,6 +98,7 @@ private struct StopDuring: CommandRunner {
 private final class Count: @unchecked Sendable {
     private let lock = NSLock(); private var n = 0
     func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
 }
 
 /// a job of `names`, each sealed once at <base>/dest/<name>
@@ -120,10 +124,11 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
 
     // MARK: the plaintext copy
 
-    // An encrypted filtered build whose hdiutil fails (a file carrying "everyone deny
-    // delete", which no walk before the build looks for): the run fails, and the
-    // plaintext copy of the library is not left in scratch.
-    @Test func aFailedEncryptedFilteredBuildLeavesNoPlaintextCopy() async throws {
+    // An encrypted job's folder holding a pipe and a file carrying "everyone deny
+    // delete", which makes hdiutil fail: the walk before the build names it, the run
+    // fails pointing at the sealed zip, and no plaintext copy is ever made. (A build
+    // that fails after the copy is made: aFailedEncryptedBuildAfterTheCopyLeavesNoPlaintext.)
+    @Test func aDenyDeleteFileIsRefusedBeforeAnyPlaintextCopy() async throws {
         let base = folder("fail")
         defer { unlock(base); try? FileManager.default.removeItem(at: base) }
         let mnt = base.appendingPathComponent("vol")
@@ -134,7 +139,7 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         try sh("echo secret > plans.txt && echo kept > notes.txt && chmod +a 'everyone deny delete' notes.txt", in: lib)
         try #require(mkfifo(lib.appendingPathComponent("build.pipe").path, 0o644) == 0)
 
-        // the walk sees only the pipe, which a sealed build leaves out
+        // the walk sees the deny-delete file as well as the pipe
         let blockers = JobExecutor.directoryStats(lib, forDMG: true).dmgBlockers
         #expect(!blockers.refusing.isEmpty, "the walk before the build missed the deny-delete file")
 
@@ -160,22 +165,17 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         guard case .finished(let results, _) = outcome, case .failed(_, _, let error)? = results.first else {
             Issue.record("expected a failed library, got \(outcome)"); return
         }
-        // macOS 27's hdiutil prints "could not access <file> - Permission denied" on
-        // stdout, and the run reads only stderr, so the explanation that names the
-        // file and points at the sealed zip never fires there (measured 2026-10-01;
-        // direct builds too). The bare "create failed - Permission denied" is left.
         #expect(error.contains("sealed zip"), "\(error)")
+        #expect(sawCopy.value == 0, "a plaintext copy was made for a build the walk refuses")
         #expect(filteredLeftovers(scratch).isEmpty, "the plaintext copy was left in scratch: \(filteredLeftovers(scratch))")
         // and no image was left half-written beside it
         let images = (FileManager.default.enumerator(atPath: scratch.path)?.allObjects as? [String] ?? []).filter { $0.hasSuffix(".dmg") }
         #expect(images.isEmpty, "\(images)")
     }
 
-    // The copy carries no "don't back up" or "don't index" mark of its own: in the
-    // default scratch (~/Library/Caches) Time Machine and Spotlight already pass it
-    // over, but a scratch location chosen in Settings (another drive, say) gets a
-    // plaintext copy of an encrypted job's library that both may pick up.
-    @Test func theCopyIsNotMarkedToBeLeftOutOfBackupsOrSearch() throws {
+    // The copy's folder carries "don't back up" and "don't index" marks of its own,
+    // so it stays out of Time Machine and Spotlight wherever scratch is.
+    @Test func theCopyIsMarkedToBeLeftOutOfBackupsOrSearch() throws {
         let base = folder("mark")
         defer { unlock(base); try? FileManager.default.removeItem(at: base) }
         let lib = base.appendingPathComponent("Lib")
@@ -193,13 +193,96 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         #expect(neverIndexed, "the copy isn't kept out of Spotlight")
     }
 
+    // An encrypted filtered build whose hdiutil fails after the plaintext copy is
+    // made. The scratch volume, where the image is written, has room for what the
+    // check asks (about the library's few kilobytes) but not for the image (an
+    // encrypted image of a tiny folder is ~140 KB, measured); the copy goes to the
+    // startup disk's scratch, which has room. The run fails, and no plaintext is left
+    // in either place, nor a half-written image.
+    @Test func aFailedEncryptedBuildAfterTheCopyLeavesNoPlaintext() async throws {
+        let base = folder("failbuild")
+        defer { unlock(base); try? FileManager.default.removeItem(at: base) }
+        let mnt = base.appendingPathComponent("vol")
+        try mountedImage(base.appendingPathComponent("src"), at: mnt, size: "40m", fs: "HFS+")
+        defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
+        let lib = mnt.appendingPathComponent("Projects")
+        try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
+        try sh("echo secret > plans.txt", in: lib)
+        try #require(mkfifo(lib.appendingPathComponent("build.pipe").path, 0o644) == 0)
+        #expect(JobExecutor.directoryStats(lib, forDMG: true).dmgBlockers.refusing.isEmpty)
+
+        let scratchVol = base.appendingPathComponent("scratchvol")
+        try mountedImage(base.appendingPathComponent("scr"), at: scratchVol, size: "10m", fs: "HFS+")
+        defer { MountPoint.detach(scratchVol, runner: ProcessCommandRunner()) }
+        let scratch = scratchVol.appendingPathComponent("scratch")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try sh("/usr/sbin/mkfile \(freeBytes(scratchVol) - (48 << 10)) fill", in: scratchVol)
+        let left = freeBytes(scratchVol)
+        try #require(left > 16 << 10 && left < 100 << 10, "\(left) bytes free on the scratch volume")
+
+        let startup = base.appendingPathComponent("startup")
+        let dest = base.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let projects = ContentType.genericFolder(id: "projects", displayName: "Projects", path: .absolute(lib.path))
+        let job = BackupJob(name: "Projects", libraries: [projects], target: .localVolume(id: "d", name: "Dest", dir: dest),
+                            format: .sealedDMG, frequency: .manual, encrypted: true, createdAt: Date(timeIntervalSince1970: 0))
+        let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(), scratchBase: scratch,
+                               plaintextScratch: startup, passphraseProvider: { _ in "pw" })
+        let sawCopy = Count()
+        let copy = startup.appendingPathComponent("\(job.id)/build/projects/filtered/Projects/plans.txt")
+        let watcher = Task.detached {
+            while !Task.isCancelled {
+                if FileManager.default.fileExists(atPath: copy.path) { _ = sawCopy.next(); return }
+                try? await Task.sleep(nanoseconds: 2_000_000)
+            }
+        }
+        let outcome = try await exec.run(job, ownerUID: getuid(), now: Date(), control: RunControl(quietLimit: 20))
+        watcher.cancel()
+        guard case .finished(let results, _) = outcome, case .failed(_, _, let error)? = results.first else {
+            Issue.record("expected a failed library, got \(outcome)"); return
+        }
+        #expect(sawCopy.value > 0, "the copy was never made, so no build failed after it: \(error)")
+        #expect(!error.contains("not enough space on the scratch volume"), "refused up front, not a failed build: \(error)")
+        #expect(filteredLeftovers(startup).isEmpty, "the plaintext copy was left: \(filteredLeftovers(startup))")
+        #expect(filteredLeftovers(scratch).isEmpty, "\(filteredLeftovers(scratch))")
+        #expect(!FileManager.default.fileExists(atPath: startup.appendingPathComponent(job.id).path), "the copy's folders were left")
+        let images = (FileManager.default.enumerator(atPath: scratch.path)?.allObjects as? [String] ?? []).filter { $0.hasSuffix(".dmg") }
+        #expect(images.isEmpty, "a half-written image was left: \(images)")
+    }
+
+    // MARK: the launch sweep
+
+    // The sweep at launch empties every `<scratch>/<anything>/build/<anything>` no
+    // pending transfer names, and a scratch location chosen in Settings is the chosen
+    // folder itself, not a folder of Cryoframe's inside it. Choose ~/Developer, and a
+    // project's build output there (MyApp/build/Release) is gone at the next launch.
+    @Test func theLaunchSweepLeavesWhatIsntCryoframesAlone() throws {
+        let base = folder("sweep")
+        defer { unlock(base); try? FileManager.default.removeItem(at: base) }
+        let chosen = base.appendingPathComponent("Developer")
+        for rel in ["MyApp/build/Release", "Site/build/filtered"] {
+            try FileManager.default.createDirectory(at: chosen.appendingPathComponent(rel), withIntermediateDirectories: true)
+        }
+        try sh("echo src > MyApp/main.c && echo app > MyApp/build/Release/MyApp.txt && echo page > Site/build/filtered/index.html",
+               in: chosen)
+        let store = PendingTransferStore(url: base.appendingPathComponent("pending.json"))
+        JobExecutor.sweepOrphanedScratch(scratchBase: chosen, pendingStore: store,
+                                         locks: RunLocks(directory: base.appendingPathComponent("locks")))
+        let fm = FileManager.default
+        #expect(fm.fileExists(atPath: chosen.appendingPathComponent("MyApp/main.c").path))
+        withKnownIssue("since 1.1.0: the launch sweep takes every <scratch>/*/build/* as Cryoframe's, and a scratch location chosen in Settings is the user's own folder") {
+            #expect(fm.fileExists(atPath: chosen.appendingPathComponent("MyApp/build/Release/MyApp.txt").path), "a project's build output was deleted")
+            #expect(fm.fileExists(atPath: chosen.appendingPathComponent("Site/build/filtered/index.html").path), "a folder named filtered was deleted")
+        }
+    }
+
     // MARK: room
 
-    // The room check counts the library's bytes on disk. A file APFS (or HFS+) keeps
-    // compressed takes a fraction of its size there, and the copy is written out
-    // whole: the check passes, and the copy fills the scratch volume before rsync
-    // fails. The run must fail cleanly, with nothing left in scratch.
-    @Test func aCompressedLibraryCanOutgrowTheRoomCheck() async throws {
+    // A file APFS (or HFS+) keeps compressed takes a fraction of its size on disk,
+    // and the copy is written out whole. The room check counted the bytes on disk, so
+    // it passed and the copy filled the scratch volume; it now counts the copy
+    // written out, so the run is refused up front, and nothing is left in scratch.
+    @Test func aCompressedLibrarysCopyIsRefusedUpFront() async throws {
         let base = folder("room")
         defer { unlock(base); try? FileManager.default.removeItem(at: base) }
         // 150 MB of text, compressed onto an HFS+ source (read live, as the fake
@@ -351,6 +434,87 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         let then = probe(old)
         #expect(now.isEmpty, "\(now)")
         #expect(then.contains("hidden.txt flags dropped") && then.contains("locked.txt flags dropped"), "\(then)")
+    }
+
+    // The mirror's copier run again on its own copy (as the next run updates a clone
+    // of the previous one) after the library takes locks off, deletes locked items,
+    // and rewrites an append-only file shorter: the copy follows, and the read-back
+    // finds nothing to name.
+    @Test func theMirrorCopierFollowsLocksTakenOffAndLockedItemsDeleted() throws {
+        let base = folder("unlocks")
+        defer { unlock(base); try? FileManager.default.removeItem(at: base) }
+        let lib = base.appendingPathComponent("Lib")
+        try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
+        try sh("""
+            mkdir -p Gone && echo a > was-locked.txt && chflags uchg was-locked.txt && echo h > was-hidden.txt && \
+            chflags hidden was-hidden.txt && echo g > gone.txt && chflags uchg gone.txt && echo x > Gone/x.txt && \
+            chflags uchg Gone/x.txt Gone && echo long-long-long > log.txt && chflags uappnd log.txt
+            """, in: lib)
+        let copy = base.appendingPathComponent("copy")
+        try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+        let runner = ProcessCommandRunner()
+        func sync() throws {
+            try MirrorCopy.sync(lib, into: copy, runner: runner) { c in
+                let r = try runner.run(c.tool, c.args)
+                try #require(r.ok, "\(c.tool): \(r.stderr)")
+            }
+        }
+        func flags(_ rel: String) -> UInt32 {
+            var st = stat()
+            return lstat(copy.appendingPathComponent(rel).path, &st) == 0 ? st.st_flags & MirrorCopy.copiedFlags : .max
+        }
+        try sync()
+        try #require(flags("was-locked.txt") & UInt32(UF_IMMUTABLE) != 0 && flags("Gone") & UInt32(UF_IMMUTABLE) != 0
+                     && flags("log.txt") & UInt32(UF_APPEND) != 0, "the first copy wasn't locked as the library is")
+
+        try sh("""
+            chflags nouchg was-locked.txt gone.txt Gone/x.txt Gone && chflags nohidden was-hidden.txt && rm -r gone.txt Gone && \
+            chflags nouappnd log.txt && echo s > log.txt && chflags uappnd log.txt
+            """, in: lib)
+        try sync()
+        #expect(flags("was-locked.txt") == 0, "a lock taken off in the library stayed on in the copy")
+        #expect(flags("was-hidden.txt") == 0, "a hidden flag taken off stayed on")
+        #expect(!FileManager.default.fileExists(atPath: copy.appendingPathComponent("gone.txt").path), "a deleted locked file stayed")
+        #expect(!FileManager.default.fileExists(atPath: copy.appendingPathComponent("Gone").path), "a deleted locked folder stayed")
+        #expect((try? String(contentsOf: copy.appendingPathComponent("log.txt"), encoding: .utf8)) == "s\n")
+        #expect(flags("log.txt") == UInt32(UF_APPEND))
+        let found = try MirrorCopy.structure(of: copy, against: lib, previous: nil, control: nil)
+        #expect(found.count == 0, "\(found.examples)")
+    }
+
+    // MARK: a sealed zip's folder dates
+
+    // A sealed zip unpacked (by a drill, a check, or a restore: ArchiveReader runs
+    // ditto -x) dates a folder holding both a folder and a file at the moment it was
+    // unpacked, not as the library has it. A folder holding only files, or only
+    // folders, keeps its date. Measured on macOS 27; ditto's own doing, and a restore
+    // copies the unpacked date. It is also why FilteredCopyTests' zip parity arms
+    // fail now and then by 1 s on "sub": both sides are an unpack time, and two
+    // unpacks sometimes straddle a second.
+    @Test func aSealedZipKeepsTheDateOfAFolderHoldingAFolderAndAFile() throws {
+        let base = folder("zipdate")
+        defer { unlock(base); try? FileManager.default.removeItem(at: base) }
+        let lib = base.appendingPathComponent("Projects")
+        try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
+        try sh("mkdir -p Both/Inner OnlyFiles && echo f > Both/f.txt && echo f > OnlyFiles/f.txt", in: lib)
+        for rel in ["Both/Inner", "Both", "OnlyFiles"] {
+            var t = [timespec(tv_sec: 1_600_000_000, tv_nsec: 0), timespec(tv_sec: 1_600_000_000, tv_nsec: 0)]
+            try #require(utimensat(AT_FDCWD, lib.appendingPathComponent(rel).path, &t, 0) == 0)
+        }
+        let result = try SealedArchiveEngine(.zip).archive(ArchiveSource(name: "Projects", root: lib), to: base.appendingPathComponent("out"))
+        Thread.sleep(forTimeInterval: 1.1)          // an unpack date can't pass for the library's
+        let opened = try openOnceFree(result)
+        defer { opened.close() }
+        func date(_ rel: String) -> Int {
+            var st = stat()
+            // a zip is unpacked with its top folder (ditto --keepParent)
+            return lstat(opened.root.appendingPathComponent("Projects/" + rel).path, &st) == 0 ? st.st_mtimespec.tv_sec : -1
+        }
+        #expect(date("OnlyFiles") == 1_600_000_000, "\(date("OnlyFiles"))")
+        #expect(date("Both/Inner") == 1_600_000_000, "\(date("Both/Inner"))")
+        withKnownIssue("ditto -x dates a folder holding a folder and a file at the unpack") {
+            #expect(date("Both") == 1_600_000_000, "unpacked dated \(date("Both"))")
+        }
     }
 
     // MARK: Stop on a check
