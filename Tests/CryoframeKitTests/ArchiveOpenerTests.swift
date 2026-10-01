@@ -113,5 +113,38 @@ private let wrongKey = ArchiveError.toolFailed(tool: "/usr/bin/hdiutil", status:
         #expect(why.contains("Resource busy") && !why.contains("passphrase"), "\(why)")
         let missing = ArchiveOpener.failureText(ArchiveError.sourceMissing("Library.dmg.002"), name: "Library.dmg", tried: 1)
         #expect(missing.contains("Library.dmg.002") && !missing.contains("passphrase"), "\(missing)")
+        // the restore window's own open: one passphrase tried, and refused
+        #expect(ArchiveOpener.failureText(wrongKey, name: "Library.dmg", tried: 1)
+                == "Couldn't open Library.dmg: the passphrase didn't unlock it. Check the passphrase.")
+    }
+
+    // The window closes (on the main actor) just as the open lands. The open comes
+    // back on its caller's actor, so the caller either hears it was canceled or gets
+    // an archive that is still open, never one a close() has already closed.
+    @MainActor @Test func aCloseAsTheOpenLandsNeverHandsBackAClosedArchive() async {
+        let opener = ArchiveOpener()
+        let closes = Closes()
+        let started = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        let task = Task { @MainActor () -> (ArchiveOpener.Outcome, Bool) in
+            let outcome = await opener.open(name: "Library.dmg", passphrases: [nil]) { _, _ in
+                started.signal()
+                release.wait()
+                return fakeOpened(closes)
+            }
+            return (outcome, opener.opened != nil)
+        }
+        await Task.detached { block(on: started) }.value
+        release.signal()
+        // hold the main actor until the open has landed (or a second, if landing needs it)
+        let deadline = Date().addingTimeInterval(1)
+        while opener.opened == nil, Date() < deadline { usleep(1_000) }
+        opener.close()
+        let (outcome, stillOpen) = await task.value
+        switch outcome {
+        case .opened: #expect(stillOpen && closes.count == 0, "handed back an archive already closed")
+        case .canceled: #expect(closes.count == 1)
+        case .failed(let why): Issue.record("failed: \(why)")
+        }
+        opener.close()
     }
 }

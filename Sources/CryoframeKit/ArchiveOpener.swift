@@ -37,14 +37,19 @@ public final class ArchiveOpener: @unchecked Sendable {
 
     /// Open `archive`, trying each passphrase in turn on an encrypted one. A wrong
     /// passphrase moves on to the next; any other failure is the answer.
-    public func open(_ archive: RestorableArchive, passphrases: [String]) async -> Outcome {
+    public func open(_ archive: RestorableArchive, passphrases: [String],
+                     isolation: isolated (any Actor)? = #isolation) async -> Outcome {
         let result = archive.archiveResult()
         return await open(name: archive.bundleName, passphrases: archive.encrypted ? passphrases : [nil]) { pass, control in
             try ArchiveReader(runner: ProcessCommandRunner(control: control)).open(result, passphrase: pass)
         }
     }
 
-    public func open(name: String, passphrases: [String?], attempt: @escaping Attempt) async -> Outcome {
+    /// The open runs off the caller's actor; it lands, and comes back, on it. So a
+    /// caller that also calls close() on that actor (a window's model, on the main
+    /// actor) never gets .opened for an archive a close() closed in between.
+    public func open(name: String, passphrases: [String?], isolation: isolated (any Actor)? = #isolation,
+                     attempt: @escaping Attempt) async -> Outcome {
         let control = RunControl()
         let mine = begin(control)
 
@@ -60,12 +65,17 @@ public final class ArchiveOpener: @unchecked Sendable {
             return .failure(last)
         }.value
 
+        // from here to the return, no suspension: a close() on the caller's actor
+        // comes either before the landing (stale) or after the caller has the archive
         let (stale, replaced) = land(mine, tried)
         replaced?.close()
 
         switch tried {
         case .success(let o):
-            if stale { o.close(); return .canceled }
+            if stale {
+                await Task.detached { o.close() }.value
+                return .canceled
+            }
             return .opened(o)
         case .failure(let error):
             if stale || error is CancelledError { return .canceled }
@@ -107,7 +117,7 @@ public final class ArchiveOpener: @unchecked Sendable {
     /// Why `name` didn't open. Only a passphrase the image refused is called a
     /// passphrase problem: a busy disk-image system, a missing part or a full disk
     /// says so instead.
-    static func failureText(_ error: Error, name: String, tried: Int) -> String {
+    public static func failureText(_ error: Error, name: String, tried: Int) -> String {
         if KeyCheck.isWrongKey(error) {
             return "Couldn't open \(name): " + (tried > 1 ? "neither passphrase tried unlocked it." : "the passphrase didn't unlock it.")
                 + " Check the passphrase."
