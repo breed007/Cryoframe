@@ -30,7 +30,7 @@ struct HelpView: View {
                     section("First-time setup") {
                         para("Three one-time steps, shown at the top of the main window:")
                         bullet("Enable the helper. This installs the background service that takes snapshots. Approve it in System Settings ▸ Login Items when asked.")
-                        bullet("Grant Full Disk Access to Cryoframe, then relaunch. The dot turns green once it can read protected libraries.")
+                        bullet("Grant Full Disk Access to Cryoframe, then relaunch. The dot turns green once it can read protected libraries. On a macOS where Cryoframe can't confirm it, a gray question mark shows instead, and a backup that can't read a library says so.")
                         bullet("Enable the schedule if you want jobs to run in the background.")
                     }
 

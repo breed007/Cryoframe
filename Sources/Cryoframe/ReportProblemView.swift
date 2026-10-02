@@ -89,7 +89,7 @@ struct ReportProblemView: View {
         let alertType = pref(Prefs.remoteAlertType, "off")
         let settings: [(String, String)] = [
             ("Helper status", helperState),
-            ("Full Disk Access", model.fullDiskAccess ? "granted" : "not granted"),
+            ("Full Disk Access", model.diskAccess.reportText),
             ("Notifications", pref(Prefs.notifyPolicy, "failure")),
             ("Remote alerts", alertType == "off" ? "off" : "\(alertType), \(pref(Prefs.remoteAlertEvents, "failure"))"),
             ("Archive health", "\(pref(Prefs.healthInterval, "off")), \(pref(Prefs.healthScope, "latest")), \(pref(Prefs.healthDepth, "checksum"))"),

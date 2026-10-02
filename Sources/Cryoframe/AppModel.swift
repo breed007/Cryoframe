@@ -53,7 +53,8 @@ final class AppModel: ObservableObject {
     @Published var jobStage: [String: BackupStage] = [:]
     @Published var jobLibrary: [String: String] = [:]   // job id -> library being archived
     @Published var jobProgress: [String: RunProgress] = [:]
-    @Published var fullDiskAccess = false
+    /// unknown until the first probe; only `.denied` holds validation back.
+    @Published var diskAccess: FullDiskAccess.Status = .unknown
     @Published var libraryValid: [String: Bool] = [:]   // built-in id  -> resolved path exists
     @Published var jobValid: [String: Bool] = [:]       // job id       -> all libraries resolve
     @Published var showHelp = false                     // drives the Help sheet from the in-window button AND the Help menu
@@ -453,12 +454,14 @@ final class AppModel: ObservableObject {
     /// the menu-bar glyph is the dashboard's verdict, so the two can never disagree.
     var menuBarSymbol: String { ProtectionStatus.compute(self).glyph }
 
-    func refreshDiskAccess() { fullDiskAccess = DiskAccess.hasFullDiskAccess() }
+    func refreshDiskAccess() { diskAccess = DiskAccess.status() }
 
     /// re-check that built-in and job library paths resolve. Needs Full Disk
-    /// Access to see protected libraries; without it, validity is left unknown.
+    /// Access to see protected libraries; when it is known to be missing, validity
+    /// is left unknown. When it can't be confirmed either way, check anyway: a
+    /// backup that can't read a library still says so when it runs.
     func revalidate() {
-        guard fullDiskAccess else { libraryValid = [:]; jobValid = [:]; return }
+        guard diskAccess != .denied else { libraryValid = [:]; jobValid = [:]; return }
         let reg = registry
         let locator = ContentLocator()
         libraryValid = Dictionary(uniqueKeysWithValues:

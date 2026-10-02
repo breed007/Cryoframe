@@ -164,18 +164,30 @@ struct ContentView: View {
         }
     }
 
-    private var diskAccessIndicator: some View {
-        HStack(spacing: 6) {
-            Image(systemName: model.fullDiskAccess ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(model.fullDiskAccess ? .cryoGood : .cryoCrit)
-            Text("Full Disk Access").font(.caption)
-            if !model.fullDiskAccess {
+    @ViewBuilder private var diskAccessIndicator: some View {
+        switch model.diskAccess {
+        case .granted:
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.cryoGood)
+                Text("Full Disk Access").font(.caption)
+            }
+            .help("Cryoframe can read protected libraries.")
+        case .denied:
+            HStack(spacing: 6) {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.cryoCrit)
+                Text("Full Disk Access").font(.caption)
                 Button("Grant…") { DiskAccess.openSettings() }.controlSize(.small)
             }
+            .help("Grant Full Disk Access in System Settings, then relaunch Cryoframe.")
+        case .unknown:
+            // not a fault: nothing on this macOS answers the question, and a backup
+            // that can't read a library reports it when it runs
+            HStack(spacing: 6) {
+                Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
+                Text("Full Disk Access not confirmed").font(.caption).foregroundStyle(.secondary)
+            }
+            .help(DiskAccess.unknownNote)
         }
-        .help(model.fullDiskAccess
-              ? "Cryoframe can read protected libraries."
-              : "Grant Full Disk Access in System Settings, then relaunch Cryoframe.")
     }
 
     private func servicePill(_ title: String, status: String, enabled: Bool, register: @escaping () -> Void) -> some View {
@@ -200,7 +212,7 @@ struct ContentView: View {
             // their libraries back, not to set up a backup.
             Button("Already have backups? Recover them…") { model.showRecovery = true }
                 .buttonStyle(.link).font(.callout)
-            if !(model.helper.isEnabled && model.fullDiskAccess) {
+            if !(model.helper.isEnabled && model.diskAccess != .denied) {
                 Button("Setup guide…") { showOnboarding = true }.controlSize(.small)
             }
         }
@@ -357,7 +369,7 @@ private struct JobRow: View {
                 }
             }
         case .none:
-            EmptyView()                       // unknown without Full Disk Access
+            EmptyView()                       // unknown while Full Disk Access is missing
         }
     }
 

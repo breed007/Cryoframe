@@ -31,8 +31,10 @@ struct OnboardingView: View {
             Divider()
 
             step(1, "Grant Full Disk Access",
-                 "Cryoframe needs it to read protected libraries like Photos and Messages. After you add Cryoframe in System Settings, quit and reopen it so the change takes effect.",
-                 done: model.fullDiskAccess,
+                 model.diskAccess == .unknown
+                    ? "Cryoframe needs it to read protected libraries like Photos and Messages. " + DiskAccess.unknownNote
+                    : "Cryoframe needs it to read protected libraries like Photos and Messages. After you add Cryoframe in System Settings, quit and reopen it so the change takes effect.",
+                 done: model.diskAccess != .denied,
                  action: ("Open Settings…", { DiskAccess.openSettings() }))
 
             step(2, "Enable the background helper",
@@ -61,7 +63,7 @@ struct OnboardingView: View {
         .onAppear { model.refreshDiskAccess(); model.helper.refresh(); model.schedule.refresh() }
     }
 
-    private var ready: Bool { model.fullDiskAccess && model.helper.isEnabled }
+    private var ready: Bool { model.diskAccess != .denied && model.helper.isEnabled }
 
     private func finish(startJob: Bool = false) {
         UserDefaults.standard.set(true, forKey: "onboarding.completed")

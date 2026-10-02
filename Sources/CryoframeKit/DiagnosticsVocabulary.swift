@@ -57,6 +57,7 @@ app
 appeared
 append
 apple
+application
 applications
 applies
 apply
@@ -393,6 +394,7 @@ gone
 good
 google
 googledrive
+granted
 group
 gz
 had
@@ -800,6 +802,7 @@ rule
 run
 running
 runs
+safari
 safely
 safer
 same
@@ -889,6 +892,7 @@ string
 subject
 success
 such
+support
 swapped
 switch
 sync
@@ -899,6 +903,7 @@ taken
 takes
 target
 tb
+tcc
 tell
 temp
 temporarily

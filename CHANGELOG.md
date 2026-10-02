@@ -12,6 +12,7 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 - **A resumed upload to a network share or external drive could be marked complete with parts missing,** or with parts from a rebuilt archive mixed in. Each part is now checked by size and hash before an upload counts as finished, and an interrupted upload only resumes on the drive it started on.
 - **Changing a live-mirror job to a sealed format could delete another job's versions.** Another job's versions are now left alone.
 - **On macOS 26, every tool Cryoframe ran leaked file descriptors,** so a Cryoframe process that stayed running long enough (about 125 tool launches) could no longer start anything.
+- **On macOS 27, Full Disk Access always read as missing,** even when it was granted, so the red marker never cleared, setup never finished, and Cryoframe stopped checking that libraries and jobs could be found. Cryoframe now tries several protected locations, and where none of them can answer it says it can't confirm the grant instead of calling it missing. A backup that can't read a library still reports it.
 - **Live mirrors of folders holding read-only files, such as git repositories, failed every run.**
 - **Live mirrors to an external drive with "Ignore ownership on this volume" turned on failed every run.**
 - **Restore refused the intact copy of a mirror after a run that was stopped or failed.**

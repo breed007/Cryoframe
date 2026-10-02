@@ -16,7 +16,7 @@ If the dot stays gray after you approve it, quit and reopen Cryoframe. The helpe
 
 Photos, Apple Music, Messages, and several other libraries live in protected locations. macOS hides them from apps until you grant Full Disk Access, and that includes Cryoframe.
 
-Open System Settings ▸ Privacy & Security ▸ Full Disk Access, turn Cryoframe on, and relaunch the app. The Full Disk Access marker in the top right turns green once the app can read protected libraries. The background helper rides on the same grant, so you only do this once.
+Open System Settings ▸ Privacy & Security ▸ Full Disk Access, turn Cryoframe on, and relaunch the app. The Full Disk Access marker in the top right turns green once the app can read protected libraries. On a macOS where Cryoframe can't confirm the grant, it shows a gray question mark instead; that isn't a fault, and a backup that can't read a library says so when it runs. The background helper rides on the same grant, so you only do this once.
 
 Without Full Disk Access, a job that targets a protected library fails with a read error. Folders you own outside the protected set still work.
 
