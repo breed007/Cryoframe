@@ -181,7 +181,7 @@ final class RestoreModel: ObservableObject {
 
     func scan(_ folder: URL) {
         sourceFolder = folder
-        archives = RestoreDiscovery.scan(folder)
+        archives = RestoreDiscovery.scan(folder, removedItems: true)
         results = []
     }
 

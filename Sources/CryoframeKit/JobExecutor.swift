@@ -354,6 +354,20 @@ public struct JobExecutor: Sendable {
         // an encrypted job's lists are sealed with a key from its passphrase, derived
         // once per run (see ContentsCrypto); without one, its versions get no list
         let listKey = sealed != nil ? passphrase.flatMap { ContentsCrypto.masterKey(passphrase: $0, jobID: job.id) } : nil
+        // Before retention deletes versions of a library that keeps what is deleted
+        // from it, what only those versions hold is saved (see RemovedArchive). Built
+        // in scratch beside the library's own build; an encrypted job's items are
+        // gathered on the startup disk, as its copies are (see plaintextScratch).
+        func keepRemoved(_ lib: ContentType, _ folder: URL, _ going: [URL]) -> RemovedArchive.Outcome {
+            guard let sealed else { return RemovedArchive.Outcome() }
+            let rel = "\(job.id)/build/\(Self.safe(lib.id)).removed"
+            let target = job.targets.first { folderOf[$0.id]?[lib.id] == folder }
+            return RemovedArchive(library: lib, jobID: job.id, sealed: sealed, passphrase: passphrase, listKey: listKey,
+                                  split: target?.constraints.splitPolicy ?? .none,
+                                  buildDir: self.scratchBase.appendingPathComponent(rel, isDirectory: true),
+                                  gatherDir: (passphrase != nil ? self.plaintextScratch : self.scratchBase).appendingPathComponent(rel, isDirectory: true),
+                                  runner: runner, now: now).keep(goingFrom: going, in: folder)
+        }
 
         let coordinator = SnapshotCoordinator(helper: helper)
         let pass = try await Self.withFrozenVolumes(volumes, coordinator: coordinator, ownerUID: ownerUID) { mounts -> SnapshotPass in
@@ -569,7 +583,7 @@ public struct JobExecutor: Sendable {
                 let keeping = keepingNow()
                 Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: keeping.retention, checks: healthRecords(),
                                    transferring: stillTransferring, confirmed: adoptionConfirmed(keeping), shown: adoptionShown(keeping),
-                                   proceed: stillKeeping(keeping))
+                                   proceed: stillKeeping(keeping), keepRemoved: keepRemoved)
             }
             return .cancelled
         }
@@ -664,7 +678,7 @@ public struct JobExecutor: Sendable {
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
             pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: keeping.retention, checks: healthRecords(),
                                                transferring: stillTransferring, confirmed: adoptionConfirmed(keeping),
-                                               shown: adoptionShown(keeping), proceed: stillKeeping(keeping))
+                                               shown: adoptionShown(keeping), proceed: stillKeeping(keeping), keepRemoved: keepRemoved)
         }
         // what was left alone for the person to say yes to, said in the run's warning
         // and kept for the dashboard: counted with the go-aheads as saved now, and not
@@ -727,18 +741,37 @@ public struct JobExecutor: Sendable {
     /// `confirmed`, `shown`: see prunePlan. `confirmed` has no default: nothing
     /// deletes an adopted version unless its caller says which it may. `proceed`:
     /// asked before each deletion; once it says no, nothing more is deleted.
+    /// `keepRemoved`: for a library that keeps what is deleted from it (see
+    /// ContentType.keepsRemoved), saves what only its going versions hold first (the
+    /// library, its folder, the version folders going; see RemovedArchive); a version
+    /// it couldn't save from stays, and is named among what couldn't be removed.
     @discardableResult
     static func pruneVersions(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
                               checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false },
                               confirmed: @escaping (URL, String) -> Bool, shown: ((URL, String) -> Bool)? = nil,
-                              proceed: () -> Bool = { true }) -> [String] {
-        let plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring, confirmed: confirmed, shown: shown)
+                              proceed: () -> Bool = { true },
+                              keepRemoved: ((ContentType, URL, [URL]) -> RemovedArchive.Outcome)? = nil) -> [String] {
+        var plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring, confirmed: confirmed, shown: shown)
         let fm = FileManager.default
         for husk in plan.husks {        // junk from a failed/canceled run
             guard proceed() else { return [] }
             try? fm.removeItem(at: husk)
         }
         var failures: [String] = []
+        if let keepRemoved {
+            for f in folders where f.library.keepsRemoved {
+                // this folder's share of the plan (each folder is planned on its own)
+                let going = prunePlan(folders: [f], policy: policy, checks: checks, transferring: transferring,
+                                      confirmed: confirmed, shown: shown).versions.map(\.url)
+                guard !going.isEmpty, proceed() else { continue }
+                let out = keepRemoved(f.library, f.folder, going)
+                guard !out.spared.isEmpty else { continue }
+                plan.versions.removeAll { out.spared.contains($0.url) }
+                for v in out.spared.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                    failures.append("\(f.library.displayName) \(v.lastPathComponent): kept until the items deleted from it are saved (\(out.why ?? "unknown"))")
+                }
+            }
+        }
         for v in plan.versions {
             guard proceed() else { return failures }
             do { try fm.removeItem(at: v.url) }

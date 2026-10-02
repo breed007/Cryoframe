@@ -140,6 +140,10 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
     public var version: Date?             // the timestamp of this sealed version (nil = single-copy / legacy)
     /// the version's file list, as its manifest records it (see ContentsListing); nil: none
     public var contents: ContentsDigest?
+    /// an archive of items deleted from the library, kept when retention deleted the
+    /// versions holding them (see RemovedArchive), not a version of the library: its
+    /// name says so, so it is never restored in place of the library
+    public var removedItems = false
 
     public init(dir: URL, libraryName: String, format: ArchiveFormat, bytes: UInt64,
                 artifactNames: [String], encrypted: Bool = false, version: Date? = nil, libraryKey: String? = nil,
@@ -150,7 +154,13 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
     }
 
     /// the folder holding the library's archives (a version's parent, or a mirror's own)
-    public var libraryFolder: URL { version != nil ? dir.deletingLastPathComponent() : dir }
+    public var libraryFolder: URL {
+        removedItems ? dir.deletingLastPathComponent().deletingLastPathComponent()
+            : version != nil ? dir.deletingLastPathComponent() : dir
+    }
+
+    /// what a removed-items archive of the library called `name` is called
+    public static func removedItemsName(_ name: String) -> String { "\(name), removed items" }
 
     /// the original library/bundle name, recovered from the first artifact filename
     /// (e.g. "Photos Library.photoslibrary.dmg" → "Photos Library.photoslibrary";
@@ -185,9 +195,13 @@ public enum RestoreDiscovery {
     /// With `downloading` false, a version whose manifest is evicted to a placeholder
     /// isn't read (reading it would bring it back down); it is found from its folder's
     /// listing instead (see `listed(at:)`). For measuring and counting only.
-    public static func scan(_ folder: URL, maxDepth: Int = 2, downloading: Bool = true) -> [RestorableArchive] {
+    ///
+    /// With `removedItems`, also each library folder's removed-items archives (see
+    /// RemovedArchive), for Restore: they aren't versions of the library, so nothing
+    /// that counts, measures, pairs or rehearses versions is handed them.
+    public static func scan(_ folder: URL, maxDepth: Int = 2, downloading: Bool = true, removedItems: Bool = false) -> [RestorableArchive] {
         var out: [RestorableArchive] = []
-        walk(folder, depth: 0, maxDepth: maxDepth, downloading: downloading, into: &out)
+        walk(folder, depth: 0, maxDepth: maxDepth, downloading: downloading, removedItems: removedItems, into: &out)
         // two libraries of one name (two folders, or a library's folder and a 1.5
         // folder of its name): tell them apart by folder
         let folders = Dictionary(grouping: out, by: \.libraryName).mapValues { Set($0.map { $0.libraryFolder.lastPathComponent }) }
@@ -200,7 +214,8 @@ public enum RestoreDiscovery {
         }
     }
 
-    private static func walk(_ dir: URL, depth: Int, maxDepth: Int, downloading: Bool, into out: inout [RestorableArchive]) {
+    private static func walk(_ dir: URL, depth: Int, maxDepth: Int, downloading: Bool, removedItems: Bool,
+                             into out: inout [RestorableArchive]) {
         // listing a symlink lists nothing: follow it (depth still bounds a loop)
         let dir = (try? dir.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
             ? dir.resolvingSymlinksInPath() : dir
@@ -217,13 +232,18 @@ public enum RestoreDiscovery {
             }
             return
         }
+        // a library folder's removed-items archives, a level further down than its
+        // versions (see RemovedArchive)
+        let isLibraryFolder = LibraryIdentity.read(in: dir) != nil
+        if removedItems, isLibraryFolder { out += RemovedArchive.archives(in: dir) }
         guard depth < maxDepth else { return }
-        for entry in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey])) ?? [] {
+        for entry in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        where entry.lastPathComponent != PlainCopyLayout.removedFolder || !isLibraryFolder {
             // fileExists follows a symlink: a destination can be one, or be reached
             // through one (a folder in the home folder pointing at a drive)
             var isDir: ObjCBool = false
             if fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue {
-                walk(entry, depth: depth + 1, maxDepth: maxDepth, downloading: downloading, into: &out)
+                walk(entry, depth: depth + 1, maxDepth: maxDepth, downloading: downloading, removedItems: removedItems, into: &out)
             }
         }
     }
@@ -256,14 +276,20 @@ public enum RestoreDiscovery {
             return listed(at: dir)
         }
         guard let m = try? ArchiveManifest.read(sidecar), !m.artifacts.isEmpty else { return nil }
-        // a timestamped folder name means this is one version; the library name is its parent.
+        // a timestamped folder name means this is one version; the library name is its
+        // parent's, or, in its Removed items, its parent's parent's (see RemovedArchive)
         let version = VersionStamp.date(dir.lastPathComponent)
-        let folder = version != nil ? dir.deletingLastPathComponent() : dir
+        var folder = version != nil ? dir.deletingLastPathComponent() : dir
+        let removed = version != nil && folder.lastPathComponent == PlainCopyLayout.removedFolder
+            && LibraryIdentity.read(in: folder.deletingLastPathComponent()) != nil
+        if removed { folder = folder.deletingLastPathComponent() }
         let identity = LibraryIdentity.read(in: folder)
-        var a = RestorableArchive(dir: dir, libraryName: identity?.name ?? folder.lastPathComponent, format: m.format,
+        let name = identity?.name ?? folder.lastPathComponent
+        var a = RestorableArchive(dir: dir, libraryName: removed ? RestorableArchive.removedItemsName(name) : name, format: m.format,
                                   bytes: m.artifacts.reduce(0) { $0 + $1.size }, artifactNames: m.artifacts.map(\.name),
                                   encrypted: m.encrypted ?? false, version: version, libraryKey: identity?.key)
         a.contents = m.contents
+        a.removedItems = removed
         return a
     }
 
