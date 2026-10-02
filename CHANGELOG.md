@@ -2,7 +2,7 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
-## [1.6.0] — Unreleased
+## [1.6.0] — 2026-10-01
 
 1.6 is about trusting Cryoframe with backups you can't afford to lose. Jobs are made and edited in one editor that uses plain words, drives can take turns, and getting your backups back no longer needs this Mac: each destination says how to open its backups without Cryoframe, and a printed kit records where they all are. Testing for this release also found several ways 1.5 could lose data or fail every run without saying why. Those are listed first.
 
