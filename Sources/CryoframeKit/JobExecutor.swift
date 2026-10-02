@@ -1128,7 +1128,7 @@ public struct JobExecutor: Sendable {
         defer { if !out.readable { listing?.markPartial() } }
         var groups = DMGBlockers.Membership()
         let sealed = forDMG || forZip || forMirror
-        // a mirror keeps locks (MirrorCopy.copyFlags); a sealed build may not
+        // a mirror keeps locks (MirrorCopy.finish); a sealed build may not
         let locks = forDMG || forZip
         if sealed { out.dmgBlockers.inspect(url.path, relative: url.lastPathComponent, groups: &groups, forDMG: forDMG, locks: locks) }   // copied too
         for case let u as URL in e {

@@ -43,7 +43,7 @@ import Foundation
 enum FilteredCopy {
     static let folderName = "filtered"
 
-    /// the flags the copy carries, as a direct disk image does (see MirrorCopy.copyFlags)
+    /// the flags the copy carries, as a direct disk image does (see MirrorCopy.finish)
     static let copiedFlags: UInt32 = MirrorCopy.copiedFlags
 
     /// Copy `source` to `<buildDir>/filtered/<name>`, leaving out the items neither
@@ -170,7 +170,7 @@ enum FilteredCopy {
     /// "create failed - Operation not permitted", while a direct build of the same
     /// library, and a filtered one of a library without them, succeeded; macOS 26 and
     /// 27 build both. The likeliest difference is the locked flags the copy is given
-    /// (see MirrorCopy.copyFlags), set by a different process than the library's, so
+    /// (see MirrorCopy.finish), set by a different process than the library's, so
     /// the build is tried once more with nothing in the copy locked (unmeasured: no
     /// macOS 15 here). If that is refused too, the run says so plainly; either way the
     /// copy is removed.

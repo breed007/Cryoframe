@@ -217,7 +217,7 @@ extension MirrorAttributeReadBackTests {
         try fm.setAttributes([.modificationDate: date], ofItemAtPath: copy.appendingPathComponent("locked.txt").path)
         try fm.setAttributes([.modificationDate: date], ofItemAtPath: lib.appendingPathComponent("locked.txt").path)
 
-        try MirrorCopy.matchAttributes(from: lib, to: copy, control: nil)
+        try MirrorCopy.finish(from: lib, to: copy, control: nil)
         for rel in ["plain.txt", "locked.txt", "kept.txt", "Folder"] {
             #expect(MirrorCopy.differentAttributes(lib.appendingPathComponent(rel).path, copy.appendingPathComponent(rel).path) == nil,
                     "\(rel): \(MirrorCopy.differentAttributes(lib.appendingPathComponent(rel).path, copy.appendingPathComponent(rel).path) ?? "")")

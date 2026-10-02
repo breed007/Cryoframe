@@ -342,24 +342,30 @@ enum MirrorCopy {
     /// Named pipes, sockets and devices are left out (see `leftOut(in:)`), and any a
     /// copy made before this holds are taken out of it. Returns the ones left out.
     ///
-    /// Last, every folder gets the library's dates back, and every item its flags
-    /// (hidden, locked: see `copiedFlags`), which rsync drops; a restore needs both. A
-    /// copy made before this (the previous copy, cloned) is unlocked first, so rsync
+    /// Last, every item gets what rsync leaves different (see `finish`): sizes and
+    /// dates, extended attributes and access lists, folder modes and dates, and flags
+    /// (hidden, locked: see `copiedFlags`), which rsync drops; a restore needs them all.
+    /// A copy made before this (the previous copy, cloned) is unlocked first, so rsync
     /// can update and delete what a locked flag would stop. `beforeLocking` is work of
-    /// the caller's that still writes to the copy.
+    /// the caller's that still writes to the copy. It goes after the sizes and dates
+    /// are put right, because FilteredCopy's relinking knows a file by them, and rsync
+    /// sets whole seconds only (measured: .165958441 in the library, .000000000 in the
+    /// copy). Run before them, it linked nothing.
     @discardableResult
     static func sync(_ source: URL, into next: URL, runner: CommandRunner,
-                     beforeLocking: () throws -> Void = {},
+                     beforeLocking: (() throws -> Void)? = nil,
                      execute: (Command) throws -> Void) throws -> [String] {
         unlock(next)
         let leftOut = try update(source, into: next, runner: runner, execute: execute)     // takes out what is left out
-        try beforeLocking()
-        try restoreFolderDates(from: source, to: next, control: runner.control)
-        try copyFlags(from: source, to: next, control: runner.control)
+        if let beforeLocking {
+            try matchSizesAndDates(from: source, to: next, control: runner.control)
+            try beforeLocking()
+        }
+        try finish(from: source, to: next, control: runner.control)
         return leftOut
     }
 
-    /// `sync` up to the dates and flags
+    /// `sync` up to `finish`
     private static func update(_ source: URL, into next: URL, runner: CommandRunner,
                                execute: (Command) throws -> Void) throws -> [String] {
         let survey = survey(source)
@@ -367,8 +373,6 @@ enum MirrorCopy {
         defer { removeLeftOut(in: next) }
         guard !readOnly.isEmpty || !leftOut.isEmpty || !sparse.isEmpty else {
             try execute(ArchivePlan.rsync(root: source, into: next))
-            try matchSizesAndDates(from: source, to: next, control: runner.control)
-            try matchAttributes(from: source, to: next, control: runner.control)
             return []
         }
         let fm = FileManager.default
@@ -405,13 +409,10 @@ enum MirrorCopy {
             }
         }
         try copySparse(sparse, from: source, to: next, control: runner.control)
-        try matchSizesAndDates(from: source, to: next, control: runner.control)
         for (i, rel) in (readOnly + sparse).enumerated() {
             if i % 256 == 0, runner.control?.isCancelled == true { throw CancelledError() }
             try copyAttributes(from: source.appendingPathComponent(rel), to: next.appendingPathComponent(rel))
         }
-        try matchAttributes(from: source, to: next, control: runner.control)
-        restoreFolderModes(from: source, to: next)
         return leftOut
     }
 
@@ -585,120 +586,108 @@ enum MirrorCopy {
         }
     }
 
-    /// Give every file and folder of the copy the library's extended attributes and
-    /// access list where rsync left them different.
+    /// Give the copy what rsync leaves different from the library, in one walk of it,
+    /// deepest items first. Only what differs is written; each item is looked at once
+    /// on each side.
     ///
-    /// openrsync's -E sends a file's attributes as an AppleDouble ("._") file, and a
-    /// file with no attributes at all has none to send. So when a file's last
-    /// attribute or its access list is removed from the library (a Finder tag taken
-    /// off, say), nothing tells the copy, and the copy kept it on every run after.
-    /// It went unseen on this Mac only because macOS gives every file this session's
-    /// processes write a provenance attribute, so every file had something to send;
-    /// files written by other processes (older files, files from another Mac, the
-    /// CI runners') have none. The read-back then failed every run.
-    static func matchAttributes(from source: URL, to next: URL, control: RunControl?) throws {
+    /// This was six walks, each of every item on both sides, and they took longer than
+    /// rsync's own pass over an unchanged library (measured: 46 s for 120,000 items on
+    /// an exFAT drive, while the run showed 99% and nothing moving). For each item:
+    ///
+    ///   - a file gets the library's size and dates. rsync -S writes a run of zeros as a
+    ///     hole, and when the zeros run to the end of the file the copier has to extend
+    ///     it once it's done. The openrsync of macOS 15 doesn't (CI's macOS 15 runner:
+    ///     every file of zeros, and every file ending in them, read back "has the wrong
+    ///     size or date"), so such a file is extended here, its missing tail a hole that
+    ///     reads back as the zeros it is. That can't pass a bad copy off as a good one:
+    ///     rsync only writes a file whose size or date differs from the library's, so a
+    ///     file fixed here differs from the previous copy, and the read-back compares its
+    ///     bytes (see `verify`).
+    ///   - a file or folder gets the library's extended attributes and access list.
+    ///     openrsync's -E sends a file's attributes as an AppleDouble ("._") file, and a
+    ///     file with no attributes has none to send, so an attribute or access list taken
+    ///     off in the library (a Finder tag, say) stayed on the copy. It went unseen here
+    ///     only because macOS gives every file this session's processes write a
+    ///     provenance attribute; files written by other processes (older files, files
+    ///     from another Mac, the CI runners') have none, and the read-back failed every
+    ///     run.
+    ///   - a folder gets the library's mode. A --files-from pass makes the folders on the
+    ///     way to each file it names writable and leaves them so (a read-only folder
+    ///     holding a read-only file came back 755); --no-implied-dirs keeps the mode but
+    ///     then can't create the file.
+    ///   - a folder gets the library's dates. rsync sets them, but what follows it (the
+    ///     read-only files' --files-from pass, a pipe an older copy held taken out, a
+    ///     relinked file) changes a folder by adding to it or taking from it. Measured: a
+    ///     folder holding a read-only file came out of a mirror run dated the run.
+    ///   - every item gets the library's flags (see `copiedFlags`), last: nothing can be
+    ///     written to a locked item after. Setting a flag changes no date.
+    /// Deepest first, so a folder is made read-only, dated and locked only once
+    /// everything in it is done. Anything that can't be set is left for the read-back
+    /// to name.
+    static func finish(from source: URL, to copy: URL, control: RunControl?) throws {
         var rels = [""]
         if let walker = FileManager.default.enumerator(atPath: source.path) {
             while let rel = walker.nextObject() as? String { rels.append(rel) }
         }
-        for (i, rel) in rels.enumerated() {
-            if i % 512 == 0, control?.isCancelled == true { throw CancelledError() }
-            let from = rel.isEmpty ? source : source.appendingPathComponent(rel)
-            let to = rel.isEmpty ? next : next.appendingPathComponent(rel)
+        let depth = rels.map { $0.isEmpty ? 0 : $0.utf8.reduce(1) { $1 == UInt8(ascii: "/") ? $0 + 1 : $0 } }
+        let order = rels.indices.sorted { depth[$0] > depth[$1] }
+        for (n, i) in order.enumerated() {
+            if n % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+            let rel = rels[i]
+            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
+            let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
             var a = stat(), b = stat()
-            guard lstat(from.path, &a) == 0, lstat(to.path, &b) == 0 else { continue }
+            guard lstat(from, &a) == 0, lstat(to, &b) == 0 else { continue }
             let type = a.st_mode & S_IFMT
-            guard type == b.st_mode & S_IFMT, type == S_IFREG || type == S_IFDIR else { continue }
-            if differentAttributes(from.path, to.path) != nil { try copyAttributes(from: from, to: to) }
+            guard type == b.st_mode & S_IFMT else { continue }
+            if type == S_IFREG { matchSizeAndDates(to, a, b) }
+            if type == S_IFREG || type == S_IFDIR, differentAttributes(from, to) != nil {
+                try copyAttributes(from: URL(fileURLWithPath: from), to: URL(fileURLWithPath: to))
+            }
+            if type == S_IFDIR {
+                if a.st_mode & 0o7777 != b.st_mode & 0o7777 { chmod(to, a.st_mode & 0o7777) }
+                var now = stat()
+                if lstat(to, &now) == 0, a.st_mtimespec.tv_sec != now.st_mtimespec.tv_sec || a.st_mtimespec.tv_nsec != now.st_mtimespec.tv_nsec {
+                    var times = [a.st_atimespec, a.st_mtimespec]
+                    _ = utimensat(AT_FDCWD, to, &times, AT_SYMLINK_NOFOLLOW)
+                }
+            }
+            if a.st_flags & copiedFlags != b.st_flags & copiedFlags {
+                _ = lchflags(to, (b.st_flags & ~copiedFlags) | (a.st_flags & copiedFlags))
+            }
         }
     }
 
-    /// Give every file of the copy the library's size and date where rsync left them
-    /// different.
-    ///
-    /// rsync -S writes a run of zeros as a hole: it skips over it instead of writing
-    /// it. When the zeros run to the end of the file, skipping doesn't make the file
-    /// any longer, so the copier has to extend it to its size once it's done. The
-    /// openrsync of macOS 15 doesn't (CI's macOS 15 runner: every file of zeros, and
-    /// every file ending in them, read back "has the wrong size or date", while files
-    /// with holes inside and data at the end were fine; macOS 26's openrsync gets it
-    /// right). So a mirror of any library holding such a file failed every run on
-    /// macOS 15. Extending the file here makes its missing tail a hole, which reads
-    /// back as the zeros it is, and the library's dates go back on.
-    ///
-    /// This can't pass a bad copy off as a good one. The copy starts as a clone of the
-    /// previous one, and rsync only writes a file whose size or date differs from the
-    /// library's; so a file fixed here differs from the previous copy in size or date,
-    /// and the read-back compares its bytes with the library's (see `verify`).
-    static func matchSizesAndDates(from source: URL, to next: URL, control: RunControl?) throws {
+    /// Every file of the copy given the library's size and dates, the part of `finish`
+    /// that work done before it (see `sync`) relies on.
+    static func matchSizesAndDates(from source: URL, to copy: URL, control: RunControl?) throws {
         guard let walker = FileManager.default.enumerator(atPath: source.path) else { return }
         var seen = 0
         while let rel = walker.nextObject() as? String {
             seen += 1
             if seen % 512 == 0, control?.isCancelled == true { throw CancelledError() }
-            let to = next.appendingPathComponent(rel).path
+            let to = copy.appendingPathComponent(rel).path
             var a = stat(), b = stat()
             guard lstat(source.appendingPathComponent(rel).path, &a) == 0, a.st_mode & S_IFMT == S_IFREG,
                   lstat(to, &b) == 0, b.st_mode & S_IFMT == S_IFREG else { continue }
-            if b.st_size < a.st_size {
-                // read-only like its source: writable for the moment it takes
-                chmod(to, (b.st_mode & 0o7777) | S_IWUSR)
-                let extended = truncate(to, a.st_size)
-                chmod(to, b.st_mode & 0o7777)
-                guard extended == 0 else { continue }                 // the read-back names it
-            } else if b.st_size != a.st_size
-                        || (a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec && a.st_mtimespec.tv_nsec == b.st_mtimespec.tv_nsec) {
-                continue
-            }
-            var times = [a.st_atimespec, a.st_mtimespec]
-            _ = utimensat(AT_FDCWD, to, &times, AT_SYMLINK_NOFOLLOW)
+            matchSizeAndDates(to, a, b)
         }
     }
 
-    /// Put every folder's mode back as the library has it. A --files-from pass makes
-    /// the folders on the way to each file it names writable so it can create the
-    /// file there, and leaves them so: a read-only folder holding a read-only file
-    /// came back 755 (plain rsync does the same: 555 after -aE, 755 after
-    /// --files-from). --no-implied-dirs keeps the mode but then can't create the file.
-    static func restoreFolderModes(from source: URL, to next: URL) {
-        var rels = [""]
-        if let walker = FileManager.default.enumerator(atPath: source.path) {
-            while let rel = walker.nextObject() as? String {
-                if walker.fileAttributes?[.type] as? FileAttributeType == .typeDirectory { rels.append(rel) }
-            }
+    /// a file of the copy (`b`) given the library's (`a`) size and dates (see `finish`)
+    private static func matchSizeAndDates(_ to: String, _ a: stat, _ b: stat) {
+        if b.st_size < a.st_size {
+            // read-only like its source: writable for the moment it takes
+            chmod(to, (b.st_mode & 0o7777) | S_IWUSR)
+            let extended = truncate(to, a.st_size)
+            chmod(to, b.st_mode & 0o7777)
+            guard extended == 0 else { return }                       // the read-back names it
+        } else if b.st_size != a.st_size
+                    || (a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec && a.st_mtimespec.tv_nsec == b.st_mtimespec.tv_nsec) {
+            return
         }
-        // deepest first, so a folder is made read-only only after everything in it is set
-        for rel in rels.sorted(by: { $0.count > $1.count }) {
-            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
-            let to = rel.isEmpty ? next.path : next.appendingPathComponent(rel).path
-            var a = stat(), b = stat()
-            guard lstat(from, &a) == 0, lstat(to, &b) == 0, a.st_mode & 0o7777 != b.st_mode & 0o7777 else { continue }
-            chmod(to, a.st_mode & 0o7777)
-        }
-    }
-
-    /// Put every folder's dates back as the library has them, deepest first. rsync
-    /// sets them, but what follows it (the read-only files' --files-from pass, a
-    /// pipe an older copy held taken out, a relinked file) changes a folder by adding
-    /// to it or taking from it. Measured: a folder holding a read-only file came out
-    /// of a mirror run dated the run, and a restore brought it back so.
-    static func restoreFolderDates(from source: URL, to copy: URL, control: RunControl?) throws {
-        var rels = [""]
-        if let walker = FileManager.default.enumerator(atPath: source.path) {
-            while let rel = walker.nextObject() as? String {
-                if walker.fileAttributes?[.type] as? FileAttributeType == .typeDirectory { rels.append(rel) }
-            }
-        }
-        for (i, rel) in rels.sorted(by: { $0.count > $1.count }).enumerated() {
-            if i % 512 == 0, control?.isCancelled == true { throw CancelledError() }
-            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
-            let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
-            var a = stat(), b = stat()
-            guard lstat(from, &a) == 0, lstat(to, &b) == 0, b.st_mode & S_IFMT == S_IFDIR,
-                  a.st_mtimespec.tv_sec != b.st_mtimespec.tv_sec || a.st_mtimespec.tv_nsec != b.st_mtimespec.tv_nsec else { continue }
-            var times = [a.st_atimespec, a.st_mtimespec]
-            _ = utimensat(AT_FDCWD, to, &times, AT_SYMLINK_NOFOLLOW)
-        }
+        var times = [a.st_atimespec, a.st_mtimespec]
+        _ = utimensat(AT_FDCWD, to, &times, AT_SYMLINK_NOFOLLOW)
     }
 
     /// Flags a direct disk image keeps that a user may set: no-dump, locked,
@@ -709,26 +698,6 @@ enum MirrorCopy {
 
     /// the flags that stop an item being changed, renamed or removed
     static let lockingFlags: UInt32 = UInt32(UF_IMMUTABLE | UF_APPEND)
-
-    /// Give every item of the copy the library's flags (see `copiedFlags`), deepest
-    /// first. The last thing done to a copy: nothing can be written to a locked item
-    /// after. Setting a flag changes no date. One that can't be set is left for the
-    /// read-back to name.
-    static func copyFlags(from source: URL, to copy: URL, control: RunControl?) throws {
-        var rels = [""]
-        if let walker = FileManager.default.enumerator(atPath: source.path) {
-            while let rel = walker.nextObject() as? String { rels.append(rel) }
-        }
-        for (i, rel) in rels.sorted(by: { $0.count > $1.count }).enumerated() {
-            if i % 512 == 0, control?.isCancelled == true { throw CancelledError() }
-            let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
-            let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
-            var a = stat(), b = stat()
-            guard lstat(from, &a) == 0, lstat(to, &b) == 0, a.st_mode & S_IFMT == b.st_mode & S_IFMT,
-                  a.st_flags & copiedFlags != b.st_flags & copiedFlags else { continue }
-            _ = lchflags(to, (b.st_flags & ~copiedFlags) | (a.st_flags & copiedFlags))
-        }
-    }
 
     /// Take the locking flags off every item of `copy` (a previous copy, cloned), so
     /// it can be brought up to date; `copyFlags` puts back the library's.
