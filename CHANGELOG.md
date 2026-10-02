@@ -2,6 +2,41 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.7.0] — Unreleased
+
+1.7 adds a way to keep a backup as ordinary files that any computer can open, and makes a live mirror say what it is doing after its copy. That second part started with the first real use of 1.6.0: a mirror to an SD card that sat at "99%" for up to an hour. The run was working the whole time; it just showed nothing. Testing for this release also found a way a 1.6.0 mirror could fail every run. Problems in 1.6.0 are listed first.
+
+### Fixed: problems in 1.6.0
+- **A live mirror could sit at "archiving 99%" and "Zero KB/s" for up to an hour after its copy.** A mirror's progress came only from its disk image growing on the drive, and nothing after the copy makes it grow: finishing the copy's dates and attributes, writing it out to the drive, and reading back everything the run wrote, which on a first run is the whole library. Each of those steps now names itself on the job row and shows how far it has got, and Stop works in each. Finishing the copy also takes one pass over the library instead of six; in testing, that step went from 39 seconds to 11.5 on 128,000 files.
+- **A live mirror failed every run once a file was deleted from a read-only folder.** In a library with folders whose permissions are 0555, such as Go's module cache, deleting a file from one of them, or deleting the folder, made every later run fail with "unlinkat: Permission denied". Nothing was lost, since the previous mirror stayed whole, but nothing new was backed up either. This was confirmed against 1.6.0.
+- **Quitting during a backup left a live mirror's disk image attached,** and its drive couldn't be ejected until the job's next run cleaned up. Cryoframe now asks before it quits and stops the run the way Stop does.
+- A live mirror's job row read "Live mirror · 500 GB". The 500 GB was a placeholder that 1.6 saves for older versions of Cryoframe, not the mirror's size. The row now reads "Live mirror".
+- Closing Find a File while it was opening a version could leave that version's disk image attached until Cryoframe next launched.
+
+### Added
+- **Plain files.** One up-to-date copy can now be kept as ordinary files and folders instead of a disk image: in the job editor, choose One up-to-date copy, then Plain files. The copy opens on any computer, with no Cryoframe needed.
+  - On an APFS drive connected to this Mac, each run updates a clone of the copy, reads it back, and swaps it in whole, as a live mirror does. On other drives the copy is updated where it is, and a run stopped part way is marked so that Restore and the health check say the copy may be part old and part new.
+  - An APFS or Mac OS Extended drive keeps everything a Mac file has. exFAT, FAT32 and network drives keep names, contents and modification dates, and lose permissions, extended attributes and Finder tags, hidden and locked flags, creation dates, and hard links. Restore names what a drive didn't keep.
+  - App libraries such as Photos, Music and Mail can be kept as plain files only on an APFS drive connected to this Mac. The editor refuses them on exFAT, FAT32 and network drives, on Mac OS Extended, and in cloud folders, and says why: a copy there that was updated part way, or a drive that can't hold what the app needs, would leave a library its app can't open.
+  - Nothing you delete from a library is deleted from the copy. It moves to Removed items beside the copy, in a folder for the day it went, and stays until you delete it from Storage, by age or all at once. Find a File searches Removed items too.
+  - On FAT32, a file of 4 GB or more isn't copied, and a folder holds at most 65,536 entries. Names that differ only in capitals or accents are one name on exFAT and FAT32; only one such item is copied, always the same one. The run names whatever it left out, and why.
+  - exFAT and FAT32 keep dates from 1980 through 2099, and Mac OS Extended from 1904 through 2039. A file dated outside that range is copied with the nearest date the drive keeps, and the run says so.
+  - On exFAT and FAT32, macOS can add a hidden `._` file beside each file, which takes a whole allocation unit (128 KB on many large SD cards). Cryoframe checks whether the drive gets them and counts them when it checks for room.
+  - Plain files can't be encrypted. Unless every destination is an encrypted drive, the editor says so.
+- **Messages attachments,** a library of its own: the photos, videos and files sent and received in Messages, without the conversations, in every format. Messages can stay open while it backs up.
+  - What you delete in Messages stays in the backup. A live mirror keeps it in Removed items inside its disk image, and plain files keep it in Removed items beside the copy. For dated versions, before the Keep rule deletes the last version holding a deleted file, Cryoframe saves the file in a removed-items archive with the same format and passphrase. Restore lists those as "Messages attachments, removed items", and the Keep rule never deletes them.
+  - Link previews and Messages' settings files are kept in dated versions and left out of live mirrors and plain files. Leaving them out of a disk image or zip file would mean copying the whole folder first on every run.
+- **Export Media…** in Restore copies a version's photos, videos or other files out as ordinary files, into a folder for each month by the date each file was last changed. Filter by type and by month. Exporting again copies only what isn't there yet, a file that can't be read is skipped and named, and a file too large for a FAT32 drive is skipped and named. Before an export of an encrypted version or of Messages, the sheet warns that the exported files aren't encrypted, unless the folder is on an encrypted drive. It's offered for folders, Messages and Messages attachments, and not for Photos, iMovie, Music, Mail, GarageBand or other app libraries, whose files are the app's own.
+- **Clear** for the Activity list on the main window. It only hides the entries: History keeps every run, and the dashboard and alerts still use them.
+
+### Changed
+- Quitting while a backup, a check of your backups, an export or a restore is running asks first. Stop and Quit stops everything the way Stop does, then quits once it has all ended. A restore can't be stopped part way, so Cryoframe waits for it.
+- A logout, restart or shutdown doesn't ask. Cryoframe stops everything, waits up to 15 seconds for it to stop, and lets the logout go ahead.
+- A mirror stopped while it was reading its copy back leaves the unchecked copy for the next run to remove, so Stop takes effect at once. Removing it then took as long as the library has items (33 seconds for 120,000 in testing, longer on a slow card).
+
+### Going back to 1.6.0
+If you go back to 1.6.0, your other jobs and backups still work. Plain-files jobs are kept in a file of their own, `jobs-files.json`, which 1.6.0 doesn't read and leaves alone: those jobs don't appear or run in 1.6.0, and they're back when you return to 1.7. Opening Storage in 1.6.0 erases the run trend of plain-files jobs. 1.6.0 also backs up Messages attachments as an ordinary folder, so it keeps nothing you delete in Messages while you use it.
+
 ## [1.6.0] — 2026-10-01
 
 1.6 is about trusting Cryoframe with backups you can't afford to lose. Jobs are made and edited in one editor that uses plain words, drives can take turns, and getting your backups back no longer needs this Mac: each destination says how to open its backups without Cryoframe, and a printed kit records where they all are. Testing for this release also found several ways 1.5 could lose data or fail every run without saying why. Those are listed first.
