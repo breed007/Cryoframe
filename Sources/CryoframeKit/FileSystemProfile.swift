@@ -38,7 +38,8 @@ public struct FileSystemProfile: Sendable, Equatable, Codable {
     public var fsType: String
     /// "a" and "A" are one name on it
     public var foldsCase: Bool
-    /// the smallest amount of space a file takes on it
+    /// the smallest amount of space a file takes on it: what statfs says, until a run
+    /// measures it (see DriveAllocation)
     public var cluster: UInt64
     /// a drive that isn't a Mac's keeps a file's extended attributes in a hidden "._"
     /// companion; a copy checks whether what it writes gets one (see PlainCopy)
@@ -158,25 +159,6 @@ public struct FileSystemProfile: Sendable, Equatable, Codable {
             : (target?.kind == .networkShare || (found && !isLocal)) ? .networkShare : .local
         return make(fsType: fsType, target: kind, foldsCase: !(v?.volumeSupportsCaseSensitiveNames ?? false),
                     cluster: cluster, cloudLimit: target?.kind == .cloudSync ? target?.constraints.maxSingleFileBytes : nil)
-    }
-
-    /// What a 1-byte file takes on the drive under `folder`, written and synced there:
-    /// the real allocation unit where statfs doesn't say it. Measured on macOS 27
-    /// (FSKit): exFAT with 128 KiB clusters answers 131072 both ways; FAT32 answers
-    /// 0 blocks for the probe (statfs says 512). CI's macOS 15 (kernel drivers) gives
-    /// an exFAT drive's f_bsize as less than its cluster (not measured here). nil
-    /// when the probe can't be written or says nothing.
-    public static func allocationUnit(in folder: URL) -> UInt64? {
-        let path = folder.appendingPathComponent(".cryoframe-cluster-" + UUID().uuidString).path
-        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
-        guard fd >= 0 else { return nil }
-        defer { unlink(path) }
-        _ = write(fd, "x", 1)
-        _ = fsync(fd)
-        close(fd)
-        var st = stat()
-        guard lstat(path, &st) == 0, st.st_blocks > 0 else { return nil }
-        return UInt64(st.st_blocks) * 512
     }
 
     // MARK: names

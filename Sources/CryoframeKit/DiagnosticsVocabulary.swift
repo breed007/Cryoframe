@@ -180,7 +180,6 @@ cloud
 clouddocs
 cloudprovider
 cloudstorage
-cluster
 com
 come
 comes

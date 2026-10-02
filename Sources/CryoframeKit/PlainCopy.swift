@@ -375,15 +375,16 @@ public struct PlainCopy {
     let calendar: Calendar
     /// free bytes on the drive (tests set it)
     let freeSpace: (URL) -> UInt64?
-    /// whether files written get a "._" companion; nil: try it on the drive (see
-    /// MediaExport.writesGetCompanions)
+    /// whether files written get a "._" companion; nil: what the probe found (see
+    /// DriveAllocation)
     let companions: Bool?
     /// whether the drive takes a name; nil: try it on the drive (see NameProbe)
     let accepts: ((String) -> Bool)?
-    /// what a file takes at the least on the drive under a folder; nil: try it there
-    /// (see FileSystemProfile.allocationUnit). The room check counts the larger of
-    /// this and what statfs says.
-    let allocationUnit: ((URL) -> UInt64?)?
+    /// what a file written in a folder takes there, and whether it gets a companion;
+    /// nil: a file is written there and measured (see DriveAllocation). The room check
+    /// counts the larger of this and what statfs says: statfs alone said 4 KiB for an
+    /// exFAT drive of 128 KiB clusters on macOS 15.
+    let probe: ((URL) -> DriveAllocation)?
     /// files given to one rsync, at most, so the copy can say how far it has got
     let batchFiles: Int
     let batchBytes: UInt64
@@ -391,11 +392,11 @@ public struct PlainCopy {
     public init(profile: FileSystemProfile, runner: CommandRunner, now: Date = Date(), calendar: Calendar = .current,
                 freeSpace: @escaping (URL) -> UInt64? = { JobExecutor.freeNow(for: $0) },
                 companions: Bool? = nil, accepts: ((String) -> Bool)? = nil,
-                allocationUnit: ((URL) -> UInt64?)? = nil,
+                probe: ((URL) -> DriveAllocation)? = nil,
                 batchFiles: Int = 2_000, batchBytes: UInt64 = 1 << 30) {
         self.profile = profile; self.runner = runner; self.now = now; self.calendar = calendar
         self.freeSpace = freeSpace; self.companions = companions; self.accepts = accepts
-        self.allocationUnit = allocationUnit
+        self.probe = probe
         self.batchFiles = max(batchFiles, 1); self.batchBytes = max(batchBytes, 1)
     }
 
@@ -411,11 +412,9 @@ public struct PlainCopy {
         control?.endStep()
         defer { control?.endStep() }
         var profile = self.profile
-        if profile.companions { profile.companions = companions ?? MediaExport.writesGetCompanions(in: folder) }
-        // statfs alone can say less than a drive's real cluster (macOS 15's exFAT)
-        if let unit = (allocationUnit ?? FileSystemProfile.allocationUnit(in:))(folder), unit > profile.cluster {
-            profile.cluster = unit
-        }
+        let probed = (probe ?? DriveAllocation.probe(at:))(folder)
+        if profile.companions { profile.companions = companions ?? probed.companion ?? true }
+        profile.cluster = DriveAllocation.cluster(statfsBlockSize: profile.cluster, fsType: profile.fsType, probed: probed)
         let (outcome, plan) = profile.swapsWholeCopy ? try swapped(source, in: folder, profile: profile)
                                                      : try inPlace(source, in: folder, profile: profile)
         if let listing {

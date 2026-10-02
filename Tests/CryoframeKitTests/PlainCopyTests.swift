@@ -335,10 +335,13 @@ extension PlainCopyInPlaceTests {
         try put(src, "small.txt", "tiny")
         func run(unit: UInt64?) throws {
             _ = try PlainCopy(profile: exfatLike, runner: ProcessCommandRunner(), freeSpace: { _ in 100_000 }, companions: false,
-                              accepts: { _ in true }, allocationUnit: { _ in unit }).run(src, in: folder)
+                              accepts: { _ in true }, probe: { _ in DriveAllocation(allocationUnit: unit, companion: false) })
+                .run(src, in: folder)
         }
         #expect(throws: PlainCopyError.notEnoughRoom(needed: 131_072, free: 100_000, removedBytes: 0)) { try run(unit: 131_072) }
-        try run(unit: nil)
+        // nothing measured on an exFAT drive: its largest cluster is assumed
+        #expect(throws: PlainCopyError.notEnoughRoom(needed: 131_072, free: 100_000, removedBytes: 0)) { try run(unit: nil) }
+        try run(unit: 4096)
         #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("Lib/small.txt").path))
     }
 }
