@@ -241,8 +241,9 @@ public struct JobDraftState: Sendable, Equatable {
     /// What plain files mean, said once in the editor and in what saving does:
     /// unencrypted (unless every destination is an encrypted drive), and what is
     /// deleted from a library kept, with where to delete it. Messages are named only
-    /// when the job backs them up.
-    public func plainFilesNotice(encrypted: (Target) -> Bool = { MediaExportDrive.of($0.destinationDir).encrypted }) -> String? {
+    /// when the job backs them up. Asking a drive whether it is encrypted can wait on
+    /// it (a card, a network drive): call it off the main thread. Nothing is written.
+    public func plainFilesNotice(encrypted: (Target) -> Bool = { MediaExportDrive.of($0.destinationDir, probing: false).encrypted }) -> String? {
         guard isPlainFiles else { return nil }
         return Self.plainFilesNotice(libraries: selectedLibraries, encrypted: !dedupedTargets.isEmpty && dedupedTargets.allSatisfy(encrypted))
     }

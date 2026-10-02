@@ -469,7 +469,11 @@ struct JobEditor: View {
                  : "Each backup brings one copy up to date, fast, with no history to go back to.")
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .task(id: plainNoticeInputs) { plainNotice = draft.isPlainFiles ? draft.state.plainFilesNotice() : nil }
+        .task(id: plainNoticeInputs) {
+            // it asks each drive whether it is encrypted: off the main thread
+            let state = draft.state
+            plainNotice = state.isPlainFiles ? await Task.detached { state.plainFilesNotice() }.value : nil
+        }
     }
 
     private var keepKind: Binding<String> {
