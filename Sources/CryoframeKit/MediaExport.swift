@@ -229,7 +229,7 @@ public struct MediaExportDrive: Sendable, Equatable {
     public var cluster: UInt64
     /// a drive that isn't a Mac's keeps a file's extended attributes in a hidden `._`
     /// companion, one cluster each; an export checks whether its files get any (see
-    /// MediaExport.writesGetCompanions)
+    /// DriveAllocation.probe)
     public var companions: Bool
     /// FAT32: no file of 4 GiB or more
     public var maxFileSize: UInt64?
@@ -245,13 +245,19 @@ public struct MediaExportDrive: Sendable, Equatable {
     public static let fat32Limit: UInt64 = 4 * 1024 * 1024 * 1024
 
     /// the drive `folder` is on
-    public static func of(_ folder: URL) -> MediaExportDrive {
+    /// `probing: false` skips writing a test file there, for a caller that only wants
+    /// to know whether the drive is encrypted.
+    public static func of(_ folder: URL, allocation: DriveAllocation? = nil, probing: Bool = true) -> MediaExportDrive {
         var url = folder
         url.removeAllCachedResourceValues()
         let v = try? url.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey, .volumeIsEncryptedKey])
         let fsType = VolumeInspector.volume(for: folder)?.fsType ?? ""
         var s = statfs()
-        let cluster: UInt64 = statfs(folder.path, &s) == 0 && s.f_bsize > 0 ? UInt64(s.f_bsize) : 4096
+        let reported: UInt64? = statfs(folder.path, &s) == 0 && s.f_bsize > 0 ? UInt64(s.f_bsize) : nil
+        let measured = allocation ?? (probing ? DriveAllocation.probe(at: folder) : DriveAllocation())
+        let cluster = probing || allocation != nil
+            ? DriveAllocation.cluster(statfsBlockSize: reported, fsType: fsType, probed: measured)
+            : reported ?? 4096
         return MediaExportDrive(name: RestoreRoom.volumeName(for: folder),
                                 foldsCase: !(v?.volumeSupportsCaseSensitiveNames ?? false),
                                 cluster: cluster,
@@ -418,7 +424,7 @@ public enum MediaExportPlanner {
 public enum MediaExportRoom {
     /// What copying `plan` takes on `drive`: each file rounded up to whole clusters,
     /// a cluster for each new folder, one for each `._` companion when the drive gets
-    /// them (see MediaExport.writesGetCompanions), and 1% (at least 16 MB) for the
+    /// them (see DriveAllocation.probe), and 1% (at least 16 MB) for the
     /// drive's own use.
     public static func needed(_ plan: MediaExportPlan, drive: MediaExportDrive) -> UInt64 {
         let c = max(drive.cluster, 512)
@@ -554,8 +560,10 @@ public struct MediaExport: Sendable {
             out.matched = entries.reduce(0) { $0 + $1.files.count }
             guard !entries.isEmpty else { return out }
 
-            var drive = drive ?? MediaExportDrive.of(destination)
-            if drive.companions { drive.companions = Self.writesGetCompanions(in: destination) }
+            let allocation = DriveAllocation.probe(at: destination)
+            var drive = drive ?? MediaExportDrive.of(destination, allocation: allocation)
+            // a probe that couldn't write can't tell: counted
+            if drive.companions { drive.companions = allocation.companion ?? true }
             let total = max(entries.reduce(0) { $0 + $1.bytes }, 1)
             tell(.init(phase: .checking, fraction: 0, detail: "Checking for files exported before…"), force: true)
             let plan = try MediaExportPlanner.plan(entries, drive: drive, probe: Self.probe(source: folder, destination: destination, control: control),
@@ -769,15 +777,10 @@ public struct MediaExport: Sendable {
     /// which tags what some apps write (com.apple.provenance), and a drive that isn't
     /// a Mac's keeps the tag in a `._` file. Measured on macOS 27 with exFAT: a tool
     /// started from Terminal got one for every file, the test runner none. So one
-    /// small file is written, looked at and removed. Can't tell: counted.
+    /// small file is written, looked at and removed (see DriveAllocation.probe).
+    /// Can't tell: counted.
     static func writesGetCompanions(in folder: URL) -> Bool {
-        let probe = folder.appendingPathComponent(tempPrefix + "probe-" + UUID().uuidString)
-        let fd = open(probe.path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
-        guard fd >= 0 else { return true }
-        _ = write(fd, "x", 1)
-        close(fd)
-        defer { unlink(probe.path) }
-        return listxattr(probe.path, nil, 0, XATTR_NOFOLLOW) != 0
+        DriveAllocation.probe(at: folder).companion ?? true
     }
 
     // MARK: - what a crash leaves

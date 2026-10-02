@@ -53,7 +53,7 @@ final class ExportMediaModel: ObservableObject {
 
     func checkDrive() async {
         guard let folder else { driveEncrypted = false; return }
-        driveEncrypted = await Task.detached { MediaExportDrive.of(folder).encrypted }.value
+        driveEncrypted = await Task.detached { MediaExportDrive.of(folder, probing: false).encrypted }.value
     }
 
     func start(_ a: RestorableArchive, passphrases: [String]) {
