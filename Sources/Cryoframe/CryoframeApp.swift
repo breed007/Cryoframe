@@ -7,6 +7,7 @@ import SwiftUI
 import Sparkle
 
 struct CryoframeApp: App {
+    @NSApplicationDelegateAdaptor(CryoframeAppDelegate.self) private var appDelegate   // asks before quitting mid-backup
     @StateObject private var model = AppModel()
     private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 

@@ -69,6 +69,11 @@ final class AppModel: ObservableObject {
     @Published var showReportProblem = false
     @Published var protectedBytes: UInt64?              // total on-disk footprint across all destinations (dashboard)
 
+    /// the model of this launch, for the app delegate (see QuitGuard)
+    static weak var current: AppModel?
+    /// the user chose to stop the running backups and quit (see QuitGuard)
+    var quittingAfterStop = false
+
     private var queue: [String] = []                    // job ids waiting for a run slot
     private var controls: [String: RunControl] = [:]
     private var checkControls: [String: RunControl] = [:]   // checks this app is making, by job
@@ -83,6 +88,7 @@ final class AppModel: ObservableObject {
     }
 
     init() {
+        defer { Self.current = self }
         // No default destination. Seeding one put a backup of the boot disk ON the
         // boot disk, pre-selected — the path of least resistance produced a copy that
         // survives nothing but an accidental delete. Choosing is the whole point.
@@ -724,7 +730,7 @@ final class AppModel: ObservableObject {
     // MARK: running
 
     func runNow(_ job: BackupJob) {
-        guard !runningJobIDs.contains(job.id), !queue.contains(job.id) else { return }
+        guard !quittingAfterStop, !runningJobIDs.contains(job.id), !queue.contains(job.id) else { return }
         if let holder = externalRuns[job.id] {
             log("⏸ \(job.name): \(RunLockError.alreadyRunning(holder).localizedDescription)")
             return
@@ -754,6 +760,17 @@ final class AppModel: ObservableObject {
         }
         controls[id]?.cancel()
         pausedJobIDs.remove(id)
+    }
+
+    /// Stop every backup this app is running, and start no more: the app quits once
+    /// they have ended (see finishRun). Runs of the scheduled agent go on; quitting the
+    /// app doesn't end them.
+    func stopAllForQuit() {
+        queue.removeAll()
+        for id in runningJobIDs {
+            log("⏹ \(jobs.first { $0.id == id }?.name ?? "Job"): stopping to quit")
+            stopJob(id)
+        }
     }
 
     // MARK: runs in other processes
@@ -929,6 +946,11 @@ final class AppModel: ObservableObject {
         runningJobIDs.remove(id); controls[id] = nil; jobStage[id] = nil; jobLibrary[id] = nil; jobProgress[id] = nil
         pausedJobIDs.remove(id)
         refreshSleepGuard()
+        // the user asked to quit once the backups had stopped (see QuitGuard)
+        if quittingAfterStop {
+            if runningJobIDs.isEmpty { NSApp.terminate(nil) }
+            return
+        }
         pump()
     }
 
