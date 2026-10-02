@@ -305,6 +305,26 @@ private func names(_ p: MediaExportPlan) -> [String] { p.copies.map { "\($0.fold
         #expect(o.summary(folder: "Exports") == "Everything was already in “Exports”: 3 files.")
         o.stopped = true; o.planned = 3_412; o.copied = 1_204
         #expect(o.summary(folder: "Exports") == "Stopped after \(1_204.formatted()) of \(3_412.formatted()) files. Exporting again skips what's done.")
+
+        // files that couldn't be read are named, the first three, after what was done
+        var u = MediaExportOutcome()
+        u.matched = 6; u.planned = 6; u.copied = 2; u.bytes = 20; u.unreadable = ["a/1.jpg", "a/2.jpg", "b/3.jpg", "b/4.jpg"]
+        let text = u.summary(folder: "Exports")
+        #expect(text.hasPrefix("Copied 2 files"))
+        #expect(text.contains("4 files couldn't be read from this backup and weren't copied: a/1.jpg, a/2.jpg, b/3.jpg, …"), "\(text)")
+        u.copied = 0; u.alreadyThere = 5; u.unreadable = ["a/1.jpg"]
+        #expect(!u.summary(folder: "Exports").hasPrefix("Everything was already"))
+        #expect(u.summary(folder: "Exports").contains("1 file couldn't be read from this backup and wasn't copied: a/1.jpg."))
+    }
+
+    // a failure writing to the drive says so in words about the drive, never about reading
+    @Test func aWriteFailureIsDescribedAsSaving() {
+        let full = MediaExport.writeReason(NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC)))
+        #expect(full == "the drive is full.")
+        let denied = MediaExport.writeReason(CocoaError(.fileWriteNoPermission))
+        #expect(denied == "Cryoframe isn't allowed to save files there.")
+        let e = MediaExportError.saveFailed(name: "IMG_1.HEIC", folder: "2024-05", reason: full, copied: 3, of: 9)
+        #expect(e.localizedDescription == "Couldn't save “IMG_1.HEIC” in the folder “2024-05”: the drive is full. 3 of 9 files were copied; exporting again skips them.")
     }
 }
 
@@ -387,6 +407,43 @@ private func names(_ p: MediaExportPlan) -> [String] { p.copies.map { "\($0.fold
                                                drive: MediaExportDrive(name: "Out", free: 1024), control: RunControl()) { _ in }
         }
         #expect(everything(dest).isEmpty)
+    }
+
+    // A file that can't be read is skipped and named; the rest go out, nothing
+    // part-written is left, and exporting again still names it.
+    @Test func anUnreadableFileIsSkippedAndTheRestGoOut() throws {
+        let (source, dest, cleanup) = try scratch()
+        let locked = source.appendingPathComponent("b/IMG_2.JPG")
+        defer { chmod(locked.path, 0o644); cleanup() }
+        for i in 0..<4 { try write(source, "\(i < 2 ? "a" : "b")/IMG_\(i).JPG", "photo \(i)", day(2024, 5, 3)) }
+        #expect(chmod(locked.path, 0) == 0)
+        let drive = MediaExportDrive(name: "Out", free: 1 << 40)
+        let export = MediaExport(calendar: utc, interval: 0)
+        let first = try export.run(from: source, to: dest, filter: MediaExportFilter(), drive: drive, control: RunControl()) { _ in }
+        #expect(first.copied == 3 && first.unreadable == ["b/IMG_2.JPG"] && !first.stopped, "\(first)")
+        #expect(everything(dest) == ["2024-05/IMG_0.JPG", "2024-05/IMG_1.JPG", "2024-05/IMG_3.JPG"])
+        #expect(first.summary(folder: "Out").contains("couldn't be read from this backup and wasn't copied: b/IMG_2.JPG."))
+
+        let again = try export.run(from: source, to: dest, filter: MediaExportFilter(), drive: drive, control: RunControl()) { _ in }
+        #expect(again.copied == 0 && again.alreadyThere == 3 && again.unreadable == ["b/IMG_2.JPG"], "\(again)")
+        #expect(everything(dest).count == 3)
+    }
+
+    // A folder that can't be written to ends the export with words about saving.
+    @Test func aFolderThatCantBeWrittenToEndsTheExport() throws {
+        let (source, dest, cleanup) = try scratch()
+        defer { chmod(dest.path, 0o755); cleanup() }
+        try write(source, "a.heic", "a", day(2024, 5, 3))
+        #expect(chmod(dest.path, 0o555) == 0)
+        do {
+            _ = try MediaExport(calendar: utc).run(from: source, to: dest, filter: MediaExportFilter(),
+                                                   drive: MediaExportDrive(name: "Out", free: 1 << 40), control: RunControl()) { _ in }
+            Issue.record("the export didn't fail")
+        } catch let e as MediaExportError {
+            guard case .saveFailed(let name, let folder, let reason, let copied, _) = e else { Issue.record("\(e)"); return }
+            #expect(name == "a.heic" && folder == "2024-05" && copied == 0)
+            #expect(reason == "Cryoframe isn't allowed to save files there.", "\(reason)")
+        }
     }
 
     @Test func aLeftoverPartFileIsSweptOnceItIsOld() throws {

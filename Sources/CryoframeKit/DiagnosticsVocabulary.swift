@@ -36,6 +36,7 @@ alarm
 alike
 all
 allow
+allowed
 allows
 alone
 already
@@ -48,6 +49,7 @@ and
 angled
 another
 answer
+answering
 any
 anyone
 anything
@@ -822,6 +824,7 @@ safely
 safer
 same
 samepath
+save
 saved
 says
 sbin

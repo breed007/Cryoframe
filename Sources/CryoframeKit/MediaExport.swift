@@ -408,15 +408,17 @@ public enum MediaExportRoom {
 
 public enum MediaExportError: Error, LocalizedError, Equatable {
     case notEnoughRoom(needed: UInt64, free: UInt64, drive: String)
-    case copyFailed(name: String, reason: String, copied: Int, of: Int)
+    /// writing into the folder exported to failed: the export ends there. (A file that
+    /// can't be read from the version is skipped instead; see MediaExportOutcome.)
+    case saveFailed(name: String, folder: String, reason: String, copied: Int, of: Int)
     case notFound(String)
 
     public var errorDescription: String? {
         switch self {
         case .notEnoughRoom(let needed, let free, let drive):
             return "There isn't room on \(drive): this export needs about \(MediaExport.size(needed)) and there is \(MediaExport.size(free)) free. Nothing was copied. Choose fewer kinds or months, free up space, or choose a folder on another drive."
-        case .copyFailed(let name, let reason, let copied, let of):
-            return "Couldn't copy “\(name)”: \(reason) \(MediaExport.count(copied)) of \(MediaExport.count(of)) files were copied; exporting again skips them."
+        case .saveFailed(let name, let folder, let reason, let copied, let of):
+            return "Couldn't save “\(name)” in the folder “\(folder)”: \(reason) \(MediaExport.count(copied)) of \(MediaExport.count(of)) files were copied; exporting again skips them."
         case .notFound(let folder):
             return "There's no \(folder) folder in this backup, so there's nothing to export."
         }
@@ -441,19 +443,23 @@ public struct MediaExportOutcome: Sendable, Equatable {
     public var stopped = false
     /// files of the chosen kinds and months, before any were found already there
     public var matched = 0
+    /// files in the version that couldn't be read (a damaged copy, a file no one may
+    /// read), by their path in it: skipped, so the rest still go out
+    public var unreadable: [String] = []
 
     public init() {}
 
     /// what to tell the person, naming the folder exported to
     public func summary(folder: String) -> String {
         if stopped {
-            return copied == 0 ? "Stopped before anything was copied."
+            let out = copied == 0 ? "Stopped before anything was copied."
                 : "Stopped after \(MediaExport.count(copied)) of \(MediaExport.count(planned)) files. Exporting again skips what's done."
+            return out + unreadableNote
         }
         var out: String
         if matched == 0 {
             out = "Nothing to export: no files of those kinds from those months."
-        } else if copied == 0 && tooLarge.isEmpty {
+        } else if copied == 0 && tooLarge.isEmpty && unreadable.isEmpty {
             out = "Everything was already in “\(folder)”: \(MediaExport.count(alreadyThere)) \(alreadyThere == 1 ? "file" : "files")."
         } else {
             out = "Copied \(MediaExport.count(copied)) \(copied == 1 ? "file" : "files") (\(MediaExport.size(bytes))) into month folders in “\(folder)”."
@@ -463,7 +469,15 @@ public struct MediaExportOutcome: Sendable, Equatable {
             let names = tooLarge.prefix(3).joined(separator: ", ") + (tooLarge.count > 3 ? ", …" : "")
             out += " \(MediaExport.count(tooLarge.count)) \(tooLarge.count == 1 ? "file was" : "files were") skipped (\(names)): a file of 4 GB or more doesn't fit on a FAT32 drive. An exFAT or Mac drive can take them."
         }
-        return out
+        return out + unreadableNote
+    }
+
+    /// the files that couldn't be read, the first few by name; empty when there were none
+    var unreadableNote: String {
+        guard !unreadable.isEmpty else { return "" }
+        let shown = unreadable.prefix(3).joined(separator: ", ") + (unreadable.count > 3 ? ", …" : "")
+        let n = unreadable.count
+        return " \(MediaExport.count(n)) \(n == 1 ? "file" : "files") couldn't be read from this backup and \(n == 1 ? "wasn't" : "weren't") copied: \(shown). Another version of the backup may have \(n == 1 ? "it" : "them")."
     }
 }
 
@@ -527,11 +541,11 @@ public struct MediaExport: Sendable {
                       outcome out: inout MediaExportOutcome, tell: MediaExportThrottle) throws {
         let total = max(plan.bytes, 1), files = plan.copies.count
         for name in Set(plan.copies.map(\.folder)) { Self.sweep(destination.appendingPathComponent(name)) }
-        var done: UInt64 = 0
+        var done: UInt64 = 0, handled = 0
         func say(_ extra: UInt64, force: Bool = false) {
-            let bytes = done + extra
+            let bytes = done + extra, at = min(handled + 1, files)
             tell(.init(phase: .copying, fraction: Double(bytes) / Double(total),
-                       detail: "Copying \(Self.count(min(out.copied + 1, files))) of \(Self.count(files)) · \(Self.size(bytes)) of \(Self.size(plan.bytes))"),
+                       detail: "Copying \(Self.count(at)) of \(Self.count(files)) · \(Self.size(bytes)) of \(Self.size(plan.bytes))"),
                  force: force)
         }
         say(0, force: true)
@@ -541,25 +555,42 @@ public struct MediaExport: Sendable {
             do {
                 try Self.copyFile(folder.appendingPathComponent(c.source), into: dir, as: c.name, modified: c.modified,
                                   control: control) { say($0) }
+                out.copied += 1; out.bytes += c.size
             } catch is CancelledError {
                 throw CancelledError()
+            } catch is ReadFailure {
+                // One file, not the drive: the rest still go out. Its name stays its own
+                // (the plan is the same on every export), so nothing after it moves.
+                out.unreadable.append(c.source)
             } catch {
-                throw MediaExportError.copyFailed(name: c.name, reason: Self.reason(error), copied: out.copied, of: files)
+                throw MediaExportError.saveFailed(name: c.name, folder: c.folder, reason: Self.writeReason(error),
+                                                  copied: out.copied, of: files)
             }
-            out.copied += 1; out.bytes += c.size; done += c.size
+            handled += 1; done += c.size
             say(0)
         }
     }
 
-    static func reason(_ error: Error) -> String {
+    /// reading the file in the version failed, not writing it out
+    struct ReadFailure: Error {
+        let underlying: Error
+    }
+
+    /// why a file couldn't be written into the folder exported to, as a sentence
+    static func writeReason(_ error: Error) -> String {
         let ns = error as NSError
         let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError
-        let full = [ns, underlying].contains { e in
-            guard let e else { return false }
-            return (e.domain == NSPOSIXErrorDomain && e.code == Int(ENOSPC))
-                || (e.domain == NSCocoaErrorDomain && e.code == CocoaError.fileWriteOutOfSpace.rawValue)
+        func any(_ posix: Set<Int32>, _ cocoa: Set<CocoaError.Code>) -> Bool {
+            [ns, underlying].contains { e in
+                guard let e else { return false }
+                return (e.domain == NSPOSIXErrorDomain && posix.contains(Int32(e.code)))
+                    || (e.domain == NSCocoaErrorDomain && cocoa.contains(CocoaError.Code(rawValue: e.code)))
+            }
         }
-        if full { return "the drive is full." }
+        if any([ENOSPC, EDQUOT], [.fileWriteOutOfSpace]) { return "the drive is full." }
+        if any([EROFS], [.fileWriteVolumeReadOnly]) { return "the drive can only be read, not written to." }
+        if any([EACCES, EPERM], [.fileWriteNoPermission]) { return "Cryoframe isn't allowed to save files there." }
+        if any([EIO, ENXIO, ENODEV], []) { return "the drive stopped answering. Check that it's still connected." }
         let text = ns.localizedDescription
         return text.hasSuffix(".") ? text : text + "."
     }
@@ -644,6 +675,10 @@ public struct MediaExport: Sendable {
     static func copyFile(_ source: URL, into dir: URL, as name: String, modified: Date, control: RunControl,
                          wrote: (UInt64) -> Void) throws {
         let fm = FileManager.default
+        // opened first: a file that can't be read leaves nothing behind on the drive
+        let input: FileHandle
+        do { input = try FileHandle(forReadingFrom: source) } catch { throw ReadFailure(underlying: error) }
+        defer { try? input.close() }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let temp = dir.appendingPathComponent(tempPrefix + UUID().uuidString)
         guard fm.createFile(atPath: temp.path, contents: nil) else {
@@ -651,14 +686,14 @@ public struct MediaExport: Sendable {
         }
         var placed = false
         defer { if !placed { try? fm.removeItem(at: temp) } }
-        let input = try FileHandle(forReadingFrom: source)
-        defer { try? input.close() }
         let output = try FileHandle(forWritingTo: temp)
         do {
             var n: UInt64 = 0
             while true {
                 if control.isCancelled { throw CancelledError() }
-                guard let data = try input.read(upToCount: chunk), !data.isEmpty else { break }
+                let read: Data?
+                do { read = try input.read(upToCount: chunk) } catch { throw ReadFailure(underlying: error) }
+                guard let data = read, !data.isEmpty else { break }
                 try output.write(contentsOf: data)
                 n += UInt64(data.count)
                 wrote(n)

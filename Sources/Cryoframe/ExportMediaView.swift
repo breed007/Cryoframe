@@ -30,6 +30,8 @@ final class ExportMediaModel: ObservableObject {
     @Published private(set) var stopping = false
     @Published var result: String?
     @Published var failed = false
+    /// it finished, but some files couldn't be read and were left out
+    @Published var warned = false
 
     private let opener = ArchiveOpener()
     private var control: RunControl?
@@ -56,7 +58,7 @@ final class ExportMediaModel: ObservableObject {
         guard !running, let destination = folder, !filter.kinds.isEmpty else { return }
         if a.encrypted, passphrases.isEmpty { failed = true; result = "Enter the passphrase for \(a.displayName) first."; return }
         let filter = self.filter, opener = self.opener
-        running = true; stopping = false; result = nil; failed = false; progress = nil
+        running = true; stopping = false; result = nil; failed = false; warned = false; progress = nil
         openingSince = Date()
         Task {
             let outcome = await opener.open(a, passphrases: a.encrypted ? passphrases : [])
@@ -86,15 +88,16 @@ final class ExportMediaModel: ObservableObject {
                 // closed before the next export can open: a close landing after that open would stop it
                 await Task.detached { opener.close() }.value
                 switch ran {
-                case .success(let r): finish(r.summary(folder: destination.lastPathComponent), failed: false)
+                case .success(let r):
+                    finish(r.summary(folder: destination.lastPathComponent), failed: false, warned: !r.unreadable.isEmpty)
                 case .failure(let e): finish(e.localizedDescription, failed: true)
                 }
             }
         }
     }
 
-    private func finish(_ text: String, failed: Bool) {
-        result = text; self.failed = failed
+    private func finish(_ text: String, failed: Bool, warned: Bool = false) {
+        result = text; self.failed = failed; self.warned = warned
         running = false; stopping = false; progress = nil; openingSince = nil
     }
 
@@ -201,8 +204,8 @@ struct ExportMediaView: View {
                 }
             }
         } else if let result = m.result {
-            Label(result, systemImage: m.failed ? "xmark.circle.fill" : "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(m.failed ? Color.cryoCrit : Color.secondary)
+            Label(result, systemImage: m.failed ? "xmark.circle.fill" : m.warned ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(m.failed ? Color.cryoCrit : m.warned ? Color.cryoWarn : Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
