@@ -81,6 +81,40 @@ public struct FileSystemProfile: Sendable, Equatable, Codable {
     /// FAT32 keeps dates to 2 seconds: compared with a second's window either way
     public var modifyWindow: Bool { kind == .fat32 || kind == .network || kind == .other }
 
+    /// The modification dates the drive keeps, in seconds since 1970; nil when it keeps
+    /// any a library holds. exFAT and FAT32 keep 1980 to 2107 in local time, and
+    /// Mac OS Extended 1904 to 2040; the bounds here sit a day or more inside those,
+    /// whatever the time zone. Measured on macOS 27: FSKit stores 1970 as 1980-01-01
+    /// and wraps 2200 to 2063 on exFAT and FAT32, and gave back 2106-01-01 a day early
+    /// (2100-03-01 came back right), so its bound is 2100; Mac OS Extended, read again
+    /// after a remount, gave back 1900 as 2036 and 2200 as 1970.
+    public var dateRange: ClosedRange<Int>? {
+        switch kind {
+        case .exfat, .fat32: return 315_619_200 ... 4_102_444_800          // 1980-01-02 to 2100-01-01 UTC
+        case .hfs: return -2_082_758_400 ... 2_208_988_800                  // 1904-01-02 to 2040-01-01 UTC
+        default: return nil
+        }
+    }
+
+    /// `seconds`, as the copy on this drive is dated: the nearest date it keeps
+    public func clamped(_ seconds: Int) -> Int {
+        guard let range = dateRange else { return seconds }
+        return min(max(seconds, range.lowerBound), range.upperBound)
+    }
+
+    /// Whether a copy dated `copy` is current with a library item dated `library`, to
+    /// the drive: the date it keeps for the library's, to a second either way where it
+    /// keeps dates to 2 seconds. FAT32 keeps local time, which FSKit works out with the
+    /// UTC offset in force at the time (measured: a January date written in October
+    /// was stored an hour ahead), so after a daylight saving change every file would
+    /// read an hour off and be copied again whole: exactly an hour either way counts
+    /// as the same date there.
+    public func sameDate(library: Int, copy: Int) -> Bool {
+        let off = abs(copy - clamped(library))
+        guard modifyWindow else { return off == 0 }
+        return off <= 1 || (kind == .fat32 && abs(off - 3600) <= 1)
+    }
+
     /// what this drive keeps of the library as plain files and what it drops, for the
     /// identity file, the editor and Restore. Empty for a Mac's own drive.
     public var dropped: [String] {

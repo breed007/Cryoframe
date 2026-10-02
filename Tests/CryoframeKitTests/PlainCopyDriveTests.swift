@@ -92,6 +92,7 @@ private func run(_ src: URL, _ folder: URL, control: RunControl = RunControl()) 
         try FileManager.default.moveItem(at: src.appendingPathComponent("n.tmp"), to: src.appendingPathComponent("Notes.TXT"))
         try FileManager.default.removeItem(at: src.appendingPathComponent("Taxes/W-2.pdf"))
         try put(copy, ".X.o4stnEmcy9", "half a file")
+        try PlainCopy.mark(folder)                  // the killed run's mark
         out = try run(src, folder)
         #expect(out.written == 0)
         #expect(out.removed == 1)

@@ -89,7 +89,8 @@ private final class StepLog: @unchecked Sendable {
         try put(copy, ".Report.txt.o4stnEmcy9", "rsync's leftover")
         try put(copy, ".gone.txt.notatempname", "a file of the person's")
 
-        let planner = PlainCopyPlanner(profile: exfatLike)
+        // a copy a cut-off run left marked: rsync's temporary files are swept only then
+        let planner = PlainCopyPlanner(profile: exfatLike, sweepsTemps: true)
         let plan = try planner.plan(source: src, copy: copy)
         #expect(Set(plan.renames.map { "\($0.from)>\($0.to)" }) == ["notes>Notes", "report.TXT>Report.txt"])
         #expect(plan.replaced == ["kind"])

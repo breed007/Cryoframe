@@ -117,11 +117,15 @@ struct PlainCopyPlan: Sendable, Equatable {
     var leftOut: [String] = []
     /// folders the copy doesn't have yet
     var newFolders: [String] = []
+    /// files dated outside what the drive keeps (see FileSystemProfile.dateRange):
+    /// copied, and dated the nearest it keeps
+    var outOfRange: [String] = []
 
     static func == (a: PlainCopyPlan, b: PlainCopyPlan) -> Bool {
         a.items == b.items && a.written == b.written && a.removed == b.removed && a.replaced == b.replaced
             && a.renames.map { [$0.from, $0.to] } == b.renames.map { [$0.from, $0.to] } && a.temps == b.temps
             && a.excluded.map(\.rel) == b.excluded.map(\.rel) && a.leftOut == b.leftOut && a.newFolders == b.newFolders
+            && a.outOfRange == b.outOfRange
     }
 
     var excludedPaths: Set<String> { Set(excluded.map(\.rel)) }
@@ -134,9 +138,15 @@ struct PlainCopyPlanner {
     /// that isn't a Mac's might refuse
     let accepts: (String) -> Bool
     let control: RunControl?
+    /// whether a name like one of rsync's temporary files is taken for one (see
+    /// isTemp): only when the copy is still marked by a run that was cut off, the only
+    /// kind that leaves them. Otherwise it is the library's own (".backup.2026100201"
+    /// beside "backup"), kept in Removed items when the library deletes it.
+    let sweepsTemps: Bool
 
-    init(profile: FileSystemProfile, accepts: @escaping (String) -> Bool = { _ in true }, control: RunControl? = nil) {
-        self.profile = profile; self.accepts = accepts; self.control = control
+    init(profile: FileSystemProfile, accepts: @escaping (String) -> Bool = { _ in true }, control: RunControl? = nil,
+         sweepsTemps: Bool = false) {
+        self.profile = profile; self.accepts = accepts; self.control = control; self.sweepsTemps = sweepsTemps
     }
 
     /// Characters a drive that isn't a Mac's may refuse in a name (Windows' rules). On
@@ -260,7 +270,8 @@ struct PlainCopyPlanner {
             case S_IFREG:
                 let size = UInt64(max(a.st_size, 0))
                 plan.items.append(.init(rel: itemRel, kind: .file, size: size, inCopy: inCopy, modified: a.st_mtimespec.tv_sec))
-                if !inCopy || b.st_size != a.st_size || !PlainCopy.sameDate(a.st_mtimespec, b.st_mtimespec, window: profile.modifyWindow) {
+                if profile.clamped(a.st_mtimespec.tv_sec) != a.st_mtimespec.tv_sec { plan.outOfRange.append(itemRel) }
+                if !inCopy || b.st_size != a.st_size || !profile.sameDate(library: a.st_mtimespec.tv_sec, copy: b.st_mtimespec.tv_sec) {
                     plan.written.append(itemRel)
                     plan.writtenBytes += size
                     if inCopy {
@@ -285,7 +296,7 @@ struct PlainCopyPlanner {
             let siblings = nameSet
             for name in copyNames.sorted() where !matched.contains(profile.identity(of: name))
                 && !allIdentities.contains(profile.identity(of: name)) {
-                if Self.isTemp(name, of: siblings) { plan.temps.append(join(name)); continue }
+                if sweepsTemps, Self.isTemp(name, of: siblings) { plan.temps.append(join(name)); continue }
                 // Finder's own file, left by a look at the copy in Finder: not the library's
                 if name == ".DS_Store" { continue }
                 var st = stat()
@@ -433,18 +444,28 @@ public struct PlainCopy {
         let copy = PlainCopyLayout.copy(named: source.lastPathComponent, in: folder)
         let probe = NameProbe(in: folder)
         defer { probe.finish() }
-        let planner = PlainCopyPlanner(profile: profile, accepts: accepts ?? probe.accepts, control: control)
+        let planner = PlainCopyPlanner(profile: profile, accepts: accepts ?? probe.accepts, control: control,
+                                       sweepsTemps: PlainCopyLayout.isOpen(folder))
         let plan = try planner.plan(source: source, copy: fm.fileExists(atPath: copy.path) ? copy : nil)
         try checkRoom(plan, folder: folder)
 
         // from here the copy changes: marked until the run has finished (see the top)
         try Self.mark(folder)
         try fm.createDirectory(at: copy, withIntermediateDirectories: true)
-        for rel in plan.temps { unlink(copy.appendingPathComponent(rel).path) }
+        for rel in plan.temps {
+            let path = copy.appendingPathComponent(rel).path
+            Self.withOwnerWrite([(path as NSString).deletingLastPathComponent]) { _ = unlink(path) }
+        }
         try rename(plan.renames, in: copy)
         var outcome = PlainCopyOutcome(copy: copy)
         outcome.removed += try moveToRemoved(plan.replaced, from: copy, in: folder, title: "Setting aside items replaced by another kind")
-        for rel in plan.newFolders { try fm.createDirectory(at: copy.appendingPathComponent(rel), withIntermediateDirectories: true) }
+        for rel in plan.newFolders {
+            // in a folder its owner can't write to, kept so on a Mac's drive
+            let url = copy.appendingPathComponent(rel)
+            try Self.withOwnerWrite([url.deletingLastPathComponent().path]) {
+                try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            }
+        }
 
         if profile.keepsMacDetails {
             control?.begin("Copying what changed", stage: .archiving)
@@ -454,6 +475,7 @@ public struct PlainCopy {
             try copyFiles(plan, from: source, to: copy, profile: profile)
             try finishDates(plan, from: source, to: copy)
         }
+        datesTheDriveKeeps(plan, in: copy, profile: profile)
         // pushed to the drive before it is read back: a step of its own, which can't be
         // stopped part way (sync(2)), so it says what it is doing
         control?.begin("Writing the copy out to the drive", stage: .finishing)
@@ -510,9 +532,27 @@ public struct PlainCopy {
         }
     }
 
+    /// files dated outside what the drive keeps given the nearest date it keeps, so
+    /// the copy is dated the same way every run and the read-back finds what it
+    /// expects (see FileSystemProfile.dateRange). Folders aren't judged by date.
+    private func datesTheDriveKeeps(_ plan: PlainCopyPlan, in copy: URL, profile: FileSystemProfile) {
+        let modified = Dictionary(plan.items.map { ($0.rel, $0.modified) }, uniquingKeysWith: { a, _ in a })
+        for rel in plan.outOfRange {
+            guard let library = modified[rel] else { continue }
+            let path = copy.appendingPathComponent(rel).path
+            var b = stat()
+            let date = profile.clamped(library)
+            guard lstat(path, &b) == 0, b.st_mtimespec.tv_sec != date else { continue }
+            let when = timespec(tv_sec: date, tv_nsec: 0)
+            var times = [when, when]
+            _ = utimensat(AT_FDCWD, path, &times, AT_SYMLINK_NOFOLLOW)
+        }
+    }
+
     /// Check the copy against the library: every item copied is there under the
-    /// library's spelling, of the same kind, a file of the same size and date (to the
-    /// drive's window) and a link to the same place; and what this run wrote matches
+    /// library's spelling, of the same kind, a file of the same size and date (the date
+    /// the drive keeps for the library's: see FileSystemProfile.sameDate) and a link to
+    /// the same place; and what this run wrote matches
     /// the library byte for byte. The drive's own companions, and what the copy holds
     /// that the library doesn't (moved to Removed items next), aren't judged.
     private func readBack(_ plan: PlainCopyPlan, source: URL, copy: URL, profile: FileSystemProfile) throws {
@@ -542,7 +582,7 @@ public struct PlainCopy {
                 let t2 = try? FileManager.default.destinationOfSymbolicLink(atPath: copy.appendingPathComponent(item.rel).path)
                 if t1 != t2 { bad.append((item.rel, "points somewhere else")) }
             case .file:
-                if a.st_size != b.st_size || !Self.sameDate(a.st_mtimespec, b.st_mtimespec, window: profile.modifyWindow) {
+                if a.st_size != b.st_size || !profile.sameDate(library: a.st_mtimespec.tv_sec, copy: b.st_mtimespec.tv_sec) {
                     bad.append((item.rel, "has the wrong size or date"))
                 }
             case .folder:
@@ -650,10 +690,9 @@ public struct PlainCopy {
             let from = copy.appendingPathComponent(r.from).path
             let to = (from as NSString).deletingLastPathComponent + "/" + r.to
             let temp = (from as NSString).deletingLastPathComponent + "/.cryoframe-rename-" + UUID().uuidString
-            guard Darwin.rename(from, temp) == 0 else { throw PlainCopyError.couldNotMove(r.from, String(cString: strerror(errno))) }
-            guard Darwin.rename(temp, to) == 0 else {
-                let why = String(cString: strerror(errno))
-                _ = Darwin.rename(temp, from)
+            if let why = Self.move(from, to: temp) { throw PlainCopyError.couldNotMove(r.from, why) }
+            if let why = Self.move(temp, to: to) {
+                _ = Self.move(temp, to: from)
                 throw PlainCopyError.couldNotMove(r.from, why)
             }
         }
@@ -661,7 +700,7 @@ public struct PlainCopy {
 
     /// move each of `rels` in the copy into Removed items, under today, keeping where
     /// it was. One rename each, so a Stop leaves each item in one place or the other;
-    /// a name already taken there gets " (2)" and so on.
+    /// each deletion is kept under a name of its own (see RemovedItems.place).
     private func moveToRemoved(_ rels: [String], from copy: URL, in folder: URL, title: String) throws -> Int {
         guard !rels.isEmpty else { return 0 }
         control?.begin(title, stage: .finishing, total: UInt64(rels.count))
@@ -670,30 +709,16 @@ public struct PlainCopy {
         for rel in rels {
             if control?.isCancelled == true { throw CancelledError() }
             control?.advance()
-            let from = copy.appendingPathComponent(rel)
-            let to = Self.free(day.appendingPathComponent(rel))
-            try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if Darwin.rename(from.path, to.path) != 0 {
-                // a locked item (kept locked on a Mac's drive) moves once unlocked, and
-                // is locked again where it went
-                var st = stat()
-                guard errno == EPERM, lstat(from.path, &st) == 0, st.st_flags & MirrorCopy.lockingFlags != 0,
-                      lchflags(from.path, st.st_flags & ~MirrorCopy.lockingFlags) == 0 else {
-                    throw PlainCopyError.couldNotMove(rel, String(cString: strerror(errno)))
-                }
-                guard Darwin.rename(from.path, to.path) == 0 else {
-                    let why = String(cString: strerror(errno))
-                    _ = lchflags(from.path, st.st_flags)
-                    throw PlainCopyError.couldNotMove(rel, why)
-                }
-                _ = lchflags(to.path, st.st_flags)
-            }
+            let to = try RemovedItems.place(rel, in: day)
+            if let why = Self.move(copy.appendingPathComponent(rel).path, to: to.path) { throw PlainCopyError.couldNotMove(rel, why) }
             moved += 1
         }
         return moved
     }
 
-    /// a clone of each of `rels` in the copy, in Removed items under today (see swapped)
+    /// a clone of each of `rels` in the copy, in Removed items under today (see
+    /// swapped). One a run stopped after this already kept (the previous copy is
+    /// still in place then) isn't kept twice.
     private func cloneToRemoved(_ rels: [String], from copy: URL, in folder: URL) throws -> Int {
         guard !rels.isEmpty else { return 0 }
         control?.begin("Moving deleted items to Removed items", stage: .finishing, total: UInt64(rels.count))
@@ -702,13 +727,51 @@ public struct PlainCopy {
         for rel in rels {
             if control?.isCancelled == true { throw CancelledError() }
             control?.advance()
-            let to = day.appendingPathComponent(rel)
-            if FileManager.default.fileExists(atPath: to.path) { kept += 1; continue }
-            try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try MirrorCopy.clone(copy.appendingPathComponent(rel), to: to, runner: runner)
+            let from = copy.appendingPathComponent(rel)
+            if RemovedItems.alreadyKept(from, as: rel, in: day) { kept += 1; continue }
+            let to = try RemovedItems.place(rel, in: day)
+            try Self.withOwnerWrite([to.deletingLastPathComponent().path]) {
+                try MirrorCopy.clone(from, to: to, runner: runner)
+            }
             kept += 1
         }
         return kept
+    }
+
+    /// Rename `from` to `to`; nil once done, else why not. A Mac's drive keeps a
+    /// library's read-only folders (0555) and locked items as they are, and neither
+    /// can be renamed out of or into as it is: the folders on either side, and a
+    /// folder being moved (whose ".." changes), get owner write access for the move,
+    /// and a locked item is unlocked; each is put back as it was afterwards.
+    static func move(_ from: String, to: String) -> String? {
+        let fromDir = (from as NSString).deletingLastPathComponent, toDir = (to as NSString).deletingLastPathComponent
+        var st = stat()
+        guard lstat(from, &st) == 0 else { return String(cString: strerror(errno)) }
+        let locked = st.st_flags & MirrorCopy.lockingFlags
+        let isDir = st.st_mode & S_IFMT == S_IFDIR
+        let selfMode = st.st_mode & 0o7777
+        if Darwin.rename(from, to) == 0 { return nil }
+        guard errno == EACCES || (errno == EPERM && locked != 0) else { return String(cString: strerror(errno)) }
+        if locked != 0, lchflags(from, st.st_flags & ~MirrorCopy.lockingFlags) != 0 { return String(cString: strerror(errno)) }
+        let opened = isDir && selfMode & S_IWUSR == 0 && chmod(from, selfMode | S_IWUSR) == 0
+        let moved = withOwnerWrite([fromDir, toDir]) { Darwin.rename(from, to) == 0 ? 0 : errno }
+        let at = moved == 0 ? to : from
+        if opened { _ = chmod(at, selfMode) }
+        if locked != 0 { _ = lchflags(at, st.st_flags) }
+        return moved == 0 ? nil : String(cString: strerror(moved))
+    }
+
+    /// `body`, with each of `folders` its owner can't write to made writable for the
+    /// owner while it runs, and put back after
+    static func withOwnerWrite<T>(_ folders: [String], _ body: () throws -> T) rethrows -> T {
+        var opened: [(String, mode_t)] = []
+        for path in Set(folders) {
+            var st = stat()
+            guard lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFDIR, st.st_mode & S_IWUSR == 0 else { continue }
+            if chmod(path, (st.st_mode & 0o7777) | S_IWUSR) == 0 { opened.append((path, st.st_mode & 0o7777)) }
+        }
+        defer { for (path, mode) in opened { _ = chmod(path, mode) } }
+        return try body()
     }
 
     /// what the run says of what it left out and what the drive keeps
@@ -718,7 +781,21 @@ public struct PlainCopy {
         out.writtenBytes = plan.writtenBytes
         for (rel, why) in plan.excluded { out.excluded[rel] = why }
         out.notes = Self.notes(plan.excluded)
+        if let note = Self.datesNote(plan.outOfRange, profile: profile) { out.notes.append(note) }
         return out
+    }
+
+    /// The run's words for files dated outside what the drive keeps (see
+    /// FileSystemProfile.dateRange): copied, and dated the nearest it keeps.
+    static func datesNote(_ rels: [String], profile: FileSystemProfile) -> String? {
+        guard !rels.isEmpty, let range = profile.dateRange else { return nil }
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0) ?? utc.timeZone
+        let first = utc.component(.year, from: Date(timeIntervalSince1970: TimeInterval(range.lowerBound)))
+        let last = utc.component(.year, from: Date(timeIntervalSince1970: TimeInterval(range.upperBound))) - 1
+        let shown = rels.prefix(3).map { "“\($0)”" }.joined(separator: ", ") + (rels.count > 3 ? " and \(rels.count - 3) more" : "")
+        let files = rels.count == 1 ? "1 file is" : "\(rels.count) files are"
+        return "\(files) dated before \(first) or after \(last) (\(shown)), which \(profile.described) can't keep. They are copied, with the nearest date it keeps."
     }
 
     /// The run's words for what it left out, one line per reason.
@@ -777,26 +854,6 @@ public struct PlainCopy {
         return out
     }
 
-    /// whether two modification dates are the same to rsync: the same second, or within
-    /// a second of each other with `window` (FAT32 keeps dates to 2 seconds)
-    static func sameDate(_ a: timespec, _ b: timespec, window: Bool) -> Bool {
-        window ? abs(a.tv_sec - b.tv_sec) <= 1 : a.tv_sec == b.tv_sec
-    }
-
-    /// `url`, or the first of "name (2)", "name (3)"… not taken
-    static func free(_ url: URL) -> URL {
-        guard FileManager.default.fileExists(atPath: url.path) || (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil else { return url }
-        let dir = url.deletingLastPathComponent(), ext = url.pathExtension
-        let base = ext.isEmpty ? url.lastPathComponent : (url.lastPathComponent as NSString).deletingPathExtension
-        var n = 2
-        while true {
-            let name = "\(base) (\(n))" + (ext.isEmpty ? "" : ".\(ext)")
-            let candidate = dir.appendingPathComponent(name)
-            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
-            n += 1
-        }
-    }
-
     /// mark the copy as changing, on the drive before anything else is written
     static func mark(_ folder: URL) throws {
         let path = folder.appendingPathComponent(PlainCopyLayout.openMark).path
@@ -815,6 +872,90 @@ public struct PlainCopy {
 /// each day in Removed items (see PlainCopy). Nothing prunes it but the person, in
 /// Storage.
 public enum RemovedItems {
+    /// Where `rel` (a path in the copy) is kept in Removed items under `day`, its
+    /// folders made as needed. Each deletion keeps a name of its own: a name already
+    /// taken there (the same name deleted earlier that day) gets " (2)", " (3)" and so
+    /// on, and so does a folder on the way whose name a file kept that day holds. A
+    /// folder made read-only (kept so on a Mac's drive) is written into all the same.
+    static func place(_ rel: String, in day: URL) throws -> URL {
+        let parts = rel.split(separator: "/").map(String.init)
+        try FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
+        var at = day
+        for part in parts.dropLast() {
+            var n = 1
+            while true {
+                let candidate = at.appendingPathComponent(numbered(part, n), isDirectory: true)
+                var st = stat()
+                if lstat(candidate.path, &st) != 0 {
+                    try PlainCopy.withOwnerWrite([at.path]) {
+                        try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: false)
+                    }
+                    at = candidate
+                    break
+                }
+                if st.st_mode & S_IFMT == S_IFDIR { at = candidate; break }
+                n += 1
+            }
+        }
+        var n = 1
+        while true {
+            let candidate = at.appendingPathComponent(numbered(parts.last ?? rel, n))
+            var st = stat()
+            if lstat(candidate.path, &st) != 0 { return candidate }
+            n += 1
+        }
+    }
+
+    /// Whether `item` (in the copy, at `rel`) is already kept under `day`, as a run
+    /// stopped after keeping it left it (see place): an item of the same kind there,
+    /// a file of the same size and date, a link to the same place, a folder of the
+    /// same names.
+    static func alreadyKept(_ item: URL, as rel: String, in day: URL) -> Bool {
+        let parts = rel.split(separator: "/").map(String.init)
+        var at = day
+        for part in parts.dropLast() {
+            var n = 1, found = false
+            while !found {
+                let candidate = at.appendingPathComponent(numbered(part, n))
+                var st = stat()
+                guard lstat(candidate.path, &st) == 0 else { return false }
+                if st.st_mode & S_IFMT == S_IFDIR { at = candidate; found = true } else { n += 1 }
+            }
+        }
+        var a = stat()
+        guard lstat(item.path, &a) == 0 else { return false }
+        var n = 1
+        while true {
+            let candidate = at.appendingPathComponent(numbered(parts.last ?? rel, n))
+            var b = stat()
+            guard lstat(candidate.path, &b) == 0 else { return false }
+            if a.st_mode & S_IFMT == b.st_mode & S_IFMT {
+                switch a.st_mode & S_IFMT {
+                case S_IFREG:
+                    if a.st_size == b.st_size, a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec { return true }
+                case S_IFLNK:
+                    let fm = FileManager.default
+                    if (try? fm.destinationOfSymbolicLink(atPath: item.path)) == (try? fm.destinationOfSymbolicLink(atPath: candidate.path)) {
+                        return true
+                    }
+                case S_IFDIR:
+                    if Set(PlainCopy.list(item.path)) == Set(PlainCopy.list(candidate.path)) { return true }
+                default:
+                    break
+                }
+            }
+            n += 1
+        }
+    }
+
+    /// `name`, or for `n` past 1 "name (n)", before any extension ("report (2).txt")
+    static func numbered(_ name: String, _ n: Int) -> String {
+        guard n > 1 else { return name }
+        let ext = (name as NSString).pathExtension
+        guard !ext.isEmpty, !name.hasPrefix(".") || name.dropFirst().contains(".") else { return "\(name) (\(n))" }
+        return "\((name as NSString).deletingPathExtension) (\(n)).\(ext)"
+    }
+
     /// the days held in `removed` (a library folder's Removed items), oldest first
     public static func days(in removed: URL, calendar: Calendar = .current) -> [(day: Date, folder: URL)] {
         PlainCopy.list(removed.path).compactMap { name -> (Date, URL)? in
