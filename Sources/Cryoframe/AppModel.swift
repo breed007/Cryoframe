@@ -1017,8 +1017,9 @@ extension FormatChoice {
         switch self {
         case .sealedDMG: return "Sealed DMG"
         case .sealedZip: return "Sealed zip"
-        case .liveMirror(let g):
-            return "Live mirror · " + ((g >= 1000 && g % 1000 == 0) ? "\(g / 1000) TB" : "\(g) GB")
+        // A mirror's recorded size is a placeholder for older versions (every new job
+        // records FormatChoice.legacyMirrorGB); the image is sized from its drive.
+        case .liveMirror: return "Live mirror"
         }
     }
 }
