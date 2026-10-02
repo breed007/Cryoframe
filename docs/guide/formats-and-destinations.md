@@ -34,7 +34,7 @@ Some folders can't go straight into a sealed archive. A folder holding named pip
 
 ### One up-to-date copy as plain files
 
-Plain files keep one copy of each library as ordinary files and folders, which any computer can open: a Windows PC, a TV, a camera, or a Mac without Cryoframe. In the job editor, under Keep, choose One up-to-date copy, then Plain files.
+Plain files keep one copy of each library as ordinary files and folders, which open anywhere: on a Windows PC, a TV, a camera, or a Mac without Cryoframe. In the job editor, under Keep, choose One up-to-date copy, then Plain files.
 
 <!-- SHOT: editor-plain-files.png — The job editor's Keep section with One up-to-date copy and Plain files chosen, showing the note that plain files aren't encrypted and where deleted items go -->
 
@@ -42,7 +42,7 @@ Plain files are chosen when a job is made, and the job keeps them for good. For 
 
 A file that changes in the library replaces the one in the copy, so there is no history to go back to. A file you delete from the library isn't deleted from the backup; it moves to Removed items (below).
 
-How a copy is brought up to date depends on the drive. On an APFS drive connected to this Mac, each run updates a clone of the copy, reads it back, and swaps it in whole, the way a live mirror does, so the copy is complete at every moment. Everywhere else the copy is updated where it is. While that happens, Cryoframe marks the copy as changing, so a run that is stopped or cut off leaves a copy that Restore and the health check describe as possibly part old and part new. The next backup finishes it.
+How a copy is brought up to date depends on the drive. On an APFS drive connected to this Mac (not a cloud folder), each run updates a clone of the copy, reads it back, and swaps it in whole, the way a live mirror does, so the copy is complete at every moment. Everywhere else the copy is updated where it is. While that happens, Cryoframe marks the copy as changing, so a run that is stopped or cut off leaves a copy that Restore and the health check describe as possibly part old and part new. The next backup finishes it.
 
 #### What each drive keeps
 
