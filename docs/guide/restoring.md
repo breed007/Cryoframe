@@ -29,8 +29,7 @@ A live mirror has no timeline. It keeps one copy, updated in place, so there is 
 
 Select a version and the bar at the bottom names exactly what will happen when you restore it.
 
-<!-- SHOT: restore-timeline.png — the restore timeline with badges, including a Kept version, and the Find a File button -->
-![The restore timeline: versions by night with sizes, and badges for restore-tested and checksum-verified](../screenshots/restore-timeline.png)
+![The restore window: a library's versions on a timeline, with the Find a File button](../screenshots/restore-timeline.png)
 
 If an archive is encrypted, enter its passphrase. If the passphrase is still in this Mac's Keychain it is filled in for you. If not, get it from your recovery file. See [Encryption and recovery keys](encryption-and-recovery-keys.md).
 
@@ -60,7 +59,7 @@ When you know the file you want but not which night still had it, click Find a F
 
 Cryoframe searches the list of files saved with each version, newest first, and shows what matched in each, with Stop if you've seen enough. Show opens that version in the file browser at the match, so you can extract it. Encrypted versions use the passphrase you type, and the one saved on this Mac for that job is tried too.
 
-<!-- SHOT: find-a-file.png — Find a File with a query, matches in two versions, and one older version with no list -->
+![Find a File: a search that finds the same file in three saved versions](../screenshots/find-a-file.png)
 
 Not every version can answer:
 
@@ -80,13 +79,11 @@ If the Mac is new, or you have wiped this one, you are not looking for one libra
 
 **3. Point in time.** One slider chooses the moment to rebuild to, and each library shows the version it will contribute.
 
-<!-- SHOT: recovery-point-in-time.png — Recover to this Mac: the point-in-time slider with each library's version -->
-![Choosing a moment: one slider, and each library shows the version it had then](../screenshots/recovery-point-in-time.png)
+![Recover to this Mac: choosing a moment, with the version each library had then](../screenshots/recovery-point-in-time.png)
 
 This is the part worth understanding. Libraries rarely run on the same nights: Photos might back up nightly while a project folder runs weekly. When you choose a moment, each library contributes the newest version it had **at or before** that moment, never a later one. Pick Wednesday and a library whose last run was Monday gives you its Monday version, because that is what existed on Wednesday. Its Friday version holds changes that had not happened yet, so using it would rebuild a Mac that never existed. If a library is newer than the moment you chose and has nothing that old, it gives you its earliest version and says so.
 
-<!-- SHOT: recovery-review.png — Recover to this Mac: the review step, with a Restore alongside choice for a clash -->
-![The review step: what will be restored, from when, to where, and how much space it needs](../screenshots/recovery-review.png)
+![Recover to this Mac: the review of what will be restored, from where, and how much room it needs](../screenshots/recovery-review.png)
 
 **4. Review.** Check what is about to happen. By default each library goes back to where its app looks for it, so Photos and Messages simply open what came back; use Change to put everything in one folder instead. Nothing already on this Mac is overwritten, each archive is verified before it is written, and a library that cannot be opened is skipped and reported while the rest still restore. If something is already where a library would go, you can restore that library, or all of them, alongside it.
 

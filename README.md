@@ -6,9 +6,8 @@ macOS 15 or later, including macOS 27 · Apple Silicon · MIT licensed
 
 📖 **[User guide](docs/guide/README.md)**: install, jobs, formats, encryption, restoring, and troubleshooting.
 
-<!-- SHOT: main-window.png — the main window: protection dashboard, a decision card, and the job list -->
 <p align="center">
-  <img src="docs/screenshots/main-window.png" alt="Cryoframe main window" width="520">
+  <img src="docs/screenshots/main-window.png" alt="The main window: the protection dashboard says You're protected, above the job list" width="560">
 </p>
 
 ---
@@ -56,8 +55,6 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Keeps the Mac awake while a backup runs, and can optionally wake it for a scheduled run, so unattended backups actually finish.
 - A menu-bar status item and notifications, so you know at a glance whether the last run succeeded, scheduled ones included.
 - Owns its snapshots end to end. It never touches Time Machine's snapshots.
-
-<!-- SHOT: rehearse-recovery.png — a job's ⋯ menu with Verify, Run restore drill, Rehearse recovery -->
 
 ## Supported libraries
 
@@ -126,7 +123,9 @@ Press New Job. The editor opens with quick-start presets ("Photos, nightly", "Mu
 - **Keep**: each backup keeps one up-to-date copy (a live mirror) or dated versions, as disk images or zip files, with a rule for how many versions to keep.
 - **Details**: encryption, how each backup is checked, and what to do if the library's app is open.
 
-<!-- SHOT: editor-create.png — the job editor in create mode with quick-start presets -->
+<p align="center">
+  <img src="docs/screenshots/editor-create.png" alt="The new-job editor's quick-start presets: Photos nightly, Music kept up to date, Photos and Music, or start from scratch" width="620">
+</p>
 
 Before a new job's first backup, and before an edit is saved, a summary says what will happen to the backups already at each destination.
 
@@ -150,22 +149,22 @@ Two doors, because there are two situations.
 
 **Restore (⌘R)** is for "I need that library back." Pick a library, and its versions appear on a timeline, each night with its size and how it moved. Choose one and bring it back beside your live library (the default, which changes nothing you have now) or in place over it. You can also open a version and pull out a handful of files instead of the whole thing.
 
-<!-- SHOT: restore-timeline.png — the restore timeline with badges, including a Kept version, and the Find a File button -->
 <p align="center">
-  <img src="docs/screenshots/restore-timeline.png" alt="The restore timeline: a library's versions by night, each with its size, and badges showing which were restore-tested or checksum verified" width="640">
+  <img src="docs/screenshots/restore-timeline.png" alt="The restore window: a library's versions on a timeline, with the Find a File button" width="620">
 </p>
 
 A version a restore drill has opened is marked *Restore-tested*; one whose checksums were re-read is marked *Checksum verified*. A version nothing has checked yet carries no badge, because Cryoframe won't claim more than it knows.
 
 Not sure which night still had the file? **Find a File…** in Restore searches each version's list of files for a name or a path, newest first, and opens the version at the match so you can extract it. Versions made before 1.6 have no list; open those with **Look inside…**.
 
-<!-- SHOT: find-a-file.png — Find a File with a query, matches in two versions, and one older version with no list -->
+<p align="center">
+  <img src="docs/screenshots/find-a-file.png" alt="Find a File: a search that finds the same file in three saved versions" width="620">
+</p>
 
 **Recover to this Mac (⇧⌘R)** is for a new or wiped Mac. It walks four steps: find the drive or folder holding your backups, unlock the encrypted libraries with the recovery-key file you exported, choose the moment to rebuild to, and restore. Every library comes back as it was at that moment. A library that did not run that night contributes the last version it had before then, never a newer one. Otherwise you would get a Mac assembled out of different days.
 
-<!-- SHOT: recovery-point-in-time.png — Recover to this Mac: the point-in-time slider with each library's version -->
 <p align="center">
-  <img src="docs/screenshots/recovery-point-in-time.png" alt="Choosing a moment to rebuild to: one slider, and each library shows the version it had at that moment" width="560">
+  <img src="docs/screenshots/recovery-point-in-time.png" alt="Recover to this Mac: choosing a moment, with the version each library had then" width="620">
 </p>
 
 In this example the moment is 2:00 AM on July 31. Photos, which runs nightly, contributes its July 31 version. Messages runs every few days at 3:00 AM, so its last version before that moment is the 28th; restoring its 31st would pull in changes that had not happened yet.

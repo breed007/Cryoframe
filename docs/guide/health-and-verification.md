@@ -58,8 +58,6 @@ What it adds is the question no per-archive check can answer: **is everything yo
 
 Rehearsals run monthly, and you can run one at any time from a job's ⋯ menu (Rehearse recovery…). Only the newest version of each library is opened, so the work depends on how much you protect rather than how long you have kept it. Turn the schedule off in Settings ▸ General ▸ Running.
 
-<!-- SHOT: rehearse-recovery.png — a job's ⋯ menu with Verify, Run restore drill, Rehearse recovery -->
-
 ### Stopping a check
 
 While a job's archives are being checked, its row shows Stop. A check, drill, or rehearsal you stop doesn't count: it isn't recorded as a pass, no version gets a badge from it, and the last check that finished still stands. Anything it had already found wrong is still listed, with how many archives it got through. Stop never interrupts a disk image while macOS is attaching it; the attach finishes and is then detached.

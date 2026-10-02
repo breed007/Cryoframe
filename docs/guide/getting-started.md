@@ -30,7 +30,7 @@ You can skip this and run every job by hand with Run now. Scheduling is only nee
 
 Click New Job to open the job editor. You can also drag a folder onto the window to start one with that folder already in it.
 
-<!-- SHOT: editor-create.png — the job editor in create mode with quick-start presets -->
+![The new-job editor's quick-start presets: Photos nightly, Music kept up to date, Photos and Music, or start from scratch](../screenshots/editor-create.png)
 
 **Quick start.** A new job begins with presets: "Photos, nightly", "Music, kept up to date", "Photos and Music", or start from scratch. A preset fills in everything below it, and you can change any of it.
 
@@ -52,8 +52,7 @@ Once you have a job, the top of the window is a status panel that answers "am I 
 
 A few cards can appear under it when something needs a decision from you: backups from an earlier version of Cryoframe that a job is keeping until you say otherwise (see [Versions, retention, and storage](versions-retention-storage.md)), and a reminder when your recovery file or printed recovery kit is out of date (see [Encryption and recovery keys](encryption-and-recovery-keys.md)).
 
-<!-- SHOT: main-window.png — the main window: protection dashboard, a decision card, and the job list -->
-![The main window with the protection dashboard, job list, and activity log](../screenshots/main-window.png)
+![The main window: the protection dashboard says You're protected, above the job list](../screenshots/main-window.png)
 
 ## What to read next
 

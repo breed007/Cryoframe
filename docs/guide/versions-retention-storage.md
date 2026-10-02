@@ -48,7 +48,7 @@ The Storage button at the top of the window shows, for each job, how much space 
 
 This is the place to look before a disk fills. If a job is using more than you want, tighten its retention policy, and the next run prunes down to the new limit.
 
-<!-- SHOT: storage.png — Storage with a job expanded: versions, a Kept badge, a destination's run trend, and a cloud folder's upload status -->
+![Storage: a job's total, its versions on one drive, and the trend of its last runs](../screenshots/storage.png)
 
 ### Run trend
 

@@ -51,7 +51,7 @@ A recovery file holds passphrases. It doesn't say where your backups are, and so
 
 Click Print Recovery Kit… in Settings ▸ Security. The kit lists your jobs, where each keeps its backups (with each drive's name and volume UUID), how to open each kind of backup without Cryoframe, and when you last exported a recovery file, with blank lines to write where you keep the kit and the recovery file. It holds no passphrases.
 
-<!-- SHOT: recovery-kit.png — the Print a recovery kit dialog, with the passphrase box unticked -->
+![The Print a recovery kit dialog: the kit lists your jobs and how to open them, and holds no passphrases](../screenshots/recovery-kit.png)
 
 If you want the passphrases on paper too, tick "Also print the passphrases, on a separate page". Cryoframe then warns you before printing that page, because anyone holding it can open your encrypted backups. The page goes through the print queue like any other, and macOS keeps a copy of each print job's file for about a day afterward. The PDF menu in the print panel (Save as PDF, Save to iCloud Drive, Mail, Preview) writes or sends a copy, so choose a printer, not PDF. The choice is never remembered; the box starts unticked every time.
 

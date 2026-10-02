@@ -45,7 +45,7 @@ Click Add destination… in the job editor and choose a folder. Cryoframe works 
 - a folder on a network share,
 - or a cloud-sync folder, which can also be picked from the Cloud folders menu.
 
-<!-- SHOT: add-destination.png — the Copies go to section after Add destination…, with the main badge and the Cloud folders menu -->
+![Copies go to: a connected drive set as the main destination, with its free space and the size to back up](../screenshots/add-destination.png)
 
 A destination is known by its drive's volume UUID as well as its path. A drive that's been renamed, or mounts as "T7 1" because another drive took its name, is still found. A different drive that happens to have the same name isn't used by mistake.
 
@@ -92,8 +92,6 @@ A cloud-sync folder is a fine *second* copy for off-site reach. For the main des
 ## Drives that take turns
 
 Rotating backup drives (one at home, one away, swapped every so often) is a good way to keep a copy off-site. In the job editor, add each drive as a destination, then open one drive's menu and choose Takes turns with and the other drive. The pair counts as one destination: each backup goes to whichever drive is connected, and the one that's away is shown as "away" rather than as a problem. Stop taking turns splits them again.
-
-<!-- SHOT: takes-turns.png — a destination's menu with Takes turns with, and a pair showing the takes turns badge and one drive away -->
 
 ### Two drives with the same name, from 1.5
 
