@@ -227,7 +227,9 @@ public struct MediaExportDrive: Sendable, Equatable {
     public var foldsCase: Bool
     /// the smallest amount of space a file takes on it
     public var cluster: UInt64
-    /// a drive that isn't a Mac's gives every file a hidden `._` companion, one cluster each
+    /// a drive that isn't a Mac's keeps a file's extended attributes in a hidden `._`
+    /// companion, one cluster each; an export checks whether its files get any (see
+    /// MediaExport.writesGetCompanions)
     public var companions: Bool
     /// FAT32: no file of 4 GiB or more
     public var maxFileSize: UInt64?
@@ -392,8 +394,9 @@ public enum MediaExportPlanner {
 
 public enum MediaExportRoom {
     /// What copying `plan` takes on `drive`: each file rounded up to whole clusters,
-    /// a cluster for each `._` companion and each new folder, and 1% (at least 16 MB)
-    /// for the drive's own use.
+    /// a cluster for each new folder, one for each `._` companion when the drive gets
+    /// them (see MediaExport.writesGetCompanions), and 1% (at least 16 MB) for the
+    /// drive's own use.
     public static func needed(_ plan: MediaExportPlan, drive: MediaExportDrive) -> UInt64 {
         let c = max(drive.cluster, 512)
         let per: UInt64 = drive.companions ? c : 0
@@ -528,7 +531,8 @@ public struct MediaExport: Sendable {
             out.matched = entries.reduce(0) { $0 + $1.files.count }
             guard !entries.isEmpty else { return out }
 
-            let drive = drive ?? MediaExportDrive.of(destination)
+            var drive = drive ?? MediaExportDrive.of(destination)
+            if drive.companions { drive.companions = Self.writesGetCompanions(in: destination) }
             let total = max(entries.reduce(0) { $0 + $1.bytes }, 1)
             tell(.init(phase: .checking, fraction: 0, detail: "Checking for files exported before…"), force: true)
             let plan = try MediaExportPlanner.plan(entries, drive: drive, probe: Self.probe(source: folder, destination: destination, control: control),
@@ -734,6 +738,23 @@ public struct MediaExport: Sendable {
                      timespec(tv_sec: Int(seconds), tv_nsec: min(Int(((t - seconds) * 1e9).rounded()), 999_999_999))]
         guard futimens(fd, &times) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         whole = true
+    }
+
+    /// Whether a file this app writes into `folder` gets a hidden `._` companion. An
+    /// export copies only bytes and a date, so the version's extended attributes and
+    /// resource forks never come along: a companion comes only from macOS itself,
+    /// which tags what some apps write (com.apple.provenance), and a drive that isn't
+    /// a Mac's keeps the tag in a `._` file. Measured on macOS 27 with exFAT: a tool
+    /// started from Terminal got one for every file, the test runner none. So one
+    /// small file is written, looked at and removed. Can't tell: counted.
+    static func writesGetCompanions(in folder: URL) -> Bool {
+        let probe = folder.appendingPathComponent(tempPrefix + "probe-" + UUID().uuidString)
+        let fd = open(probe.path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+        guard fd >= 0 else { return true }
+        _ = write(fd, "x", 1)
+        close(fd)
+        defer { unlink(probe.path) }
+        return listxattr(probe.path, nil, 0, XATTR_NOFOLLOW) != 0
     }
 
     // MARK: - what a crash leaves

@@ -492,6 +492,38 @@ private func names(_ p: MediaExportPlan) -> [String] { p.copies.map { "\($0.fold
         #expect(MediaExport.finishInterrupted(in: dest) == 0)
     }
 
+    // The probe for `._` companions agrees with what the drive does with a file this
+    // process writes, and leaves nothing; and a file that does carry an attribute
+    // gets its companion, which is what the probe looks for.
+    @Test func theCompanionProbeSeesWhatAnExFATDriveDoes() throws {
+        let (_, base, cleanup) = try scratch()
+        defer { cleanup() }
+        let image = base.appendingPathComponent("card.dmg"), card = base.appendingPathComponent("card", isDirectory: true)
+        try FileManager.default.createDirectory(at: card, withIntermediateDirectories: true)
+        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "32m", "-fs", "ExFAT", "-volname", "CARD",
+                                                                       "-layout", "MBRSPUD", "-type", "UDIF", image.path], stdin: nil)
+        try #require(made.ok, "\(made.stderr)")
+        let attached = try DiskImageGate.serialized {
+            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", card.path, "-nobrowse"])
+        }
+        try #require(attached.ok, "\(attached.stderr)")
+        defer { MountPoint.detach(card, runner: ProcessCommandRunner()) }
+        #expect(MediaExportDrive.of(card).companions)
+
+        let plain = card.appendingPathComponent("plain.jpg")
+        try Data("x".utf8).write(to: plain)
+        let tagged = FileManager.default.fileExists(atPath: card.appendingPathComponent("._plain.jpg").path)
+        #expect(MediaExport.writesGetCompanions(in: card) == tagged)
+        let left = try FileManager.default.contentsOfDirectory(atPath: card.path).filter { $0.contains(MediaExport.tempPrefix) }
+        #expect(left.isEmpty, "\(left)")
+
+        let withAttribute = card.appendingPathComponent("tagged.jpg")
+        try Data("y".utf8).write(to: withAttribute)
+        #expect(setxattr(withAttribute.path, "com.example.cryoframe", "1", 1, 0, 0) == 0)
+        #expect(listxattr(withAttribute.path, nil, 0, 0) > 0)
+        #expect(FileManager.default.fileExists(atPath: card.appendingPathComponent("._tagged.jpg").path))
+    }
+
     @Test func aMissingAttachmentsFolderSaysSo() throws {
         let (source, dest, cleanup) = try scratch()
         defer { cleanup() }
