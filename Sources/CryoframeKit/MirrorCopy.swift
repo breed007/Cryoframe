@@ -789,15 +789,25 @@ enum MirrorCopy {
     /// the flags that stop an item being changed, renamed or removed
     static let lockingFlags: UInt32 = UInt32(UF_IMMUTABLE | UF_APPEND)
 
-    /// Take the locking flags off every item of `copy` (a previous copy, cloned), so
-    /// it can be brought up to date; `copyFlags` puts back the library's.
+    /// Take the locking flags off every item of `copy` (a previous copy, cloned), and
+    /// give its owner write access to every folder that lacks it, so it can be brought
+    /// up to date; `finish` puts back the library's flags and folder modes.
+    ///
+    /// rsync runs as the person, and nothing can be added to or removed from a folder
+    /// its owner can't write to. A library holding a read-only folder (0555, as Go's
+    /// module cache is throughout) failed every run once a file in it was deleted:
+    /// "unlinkat: Permission denied", in 1.6.0's mirror as well.
     static func unlock(_ copy: URL) {
+        func open(_ path: String, _ st: inout stat) {
+            guard lstat(path, &st) == 0 else { return }
+            if st.st_flags & lockingFlags != 0 { _ = lchflags(path, st.st_flags & ~lockingFlags) }
+            if st.st_mode & S_IFMT == S_IFDIR, st.st_mode & S_IWUSR == 0 { _ = chmod(path, (st.st_mode & 0o7777) | S_IWUSR) }
+        }
         var st = stat()
-        if lstat(copy.path, &st) == 0, st.st_flags & lockingFlags != 0 { _ = lchflags(copy.path, st.st_flags & ~lockingFlags) }
+        open(copy.path, &st)
         guard let walker = FileManager.default.enumerator(atPath: copy.path) else { return }
         while let rel = walker.nextObject() as? String {
-            let path = copy.appendingPathComponent(rel).path
-            if lstat(path, &st) == 0, st.st_flags & lockingFlags != 0 { _ = lchflags(path, st.st_flags & ~lockingFlags) }
+            open(copy.appendingPathComponent(rel).path, &st)
         }
     }
 
