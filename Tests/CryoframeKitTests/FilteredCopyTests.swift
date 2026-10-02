@@ -339,7 +339,10 @@ private func differences(_ a: [String: String], _ b: [String: String]) -> [Strin
         let lib = base.appendingPathComponent("Lib")
         try makeLibrary(lib)
         let buildDir = base.appendingPathComponent("build")
-        let made = try FilteredCopy.make(of: lib, name: "Lib", in: buildDir, runner: ProcessCommandRunner())
+        let control = RunControl()
+        let made = try FilteredCopy.make(of: lib, name: "Lib", in: buildDir, runner: ProcessCommandRunner(control: control))
+        // the copy's finishing step ends with it, so the build's own progress shows after
+        #expect(control.step == nil, "the copy's step outlived it")
         func flags(_ root: URL, _ rel: String) -> UInt32 {
             var st = stat(); _ = lstat(root.appendingPathComponent(rel).path, &st); return st.st_flags & FilteredCopy.copiedFlags
         }

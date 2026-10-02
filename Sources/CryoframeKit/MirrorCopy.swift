@@ -51,14 +51,21 @@ enum MirrorCopy {
         let current = volume.appendingPathComponent(name, isDirectory: true)
         let staging = volume.appendingPathComponent(stagingName, isDirectory: true)
         let next = staging.appendingPathComponent(name, isDirectory: true)
+        let control = runner.control
         // never start from what a previous run left (see above); a leftover that won't
-        // go fails the run rather than being trusted
+        // go fails the run rather than being trusted. Stop ends the removal, and the
+        // next run carries on with it.
         if fm.fileExists(atPath: staging.path) {
-            removeStaging(staging, runner: runner.forTeardown)
+            control?.begin("Removing an unfinished copy an earlier run left", stage: .preparing)
+            removeStaging(staging, runner: runner.forTeardown, control: control)
+            if control?.isCancelled == true { throw CancelledError() }
             if fm.fileExists(atPath: staging.path) { throw MirrorCopyError.stagingStuck(staging.path) }
         }
         try fm.createDirectory(at: staging, withIntermediateDirectories: true)
         if fm.fileExists(atPath: current.path) {
+            // the image already holds the library, so how much of it there is says
+            // nothing about how far this run has got
+            control?.begin("Copying what changed", stage: .archiving)
             try clone(current, to: next, runner: runner)
         } else {
             try fm.createDirectory(at: next, withIntermediateDirectories: true)   // the first run
@@ -71,7 +78,8 @@ enum MirrorCopy {
             // as well as the library. When the drive runs out, the staging copy is what
             // is holding it full: left there, every later run failed the same way even
             // once the library had shrunk. The previous copy is untouched.
-            removeStaging(staging, runner: runner.forTeardown)
+            control?.begin("Removing the unfinished copy", stage: .finishing)
+            removeStaging(staging, runner: runner.forTeardown, control: control)
             throw MirrorCopyError.driveFilled
         }
         return Staged(volume: volume, current: current, staging: staging, next: next)
@@ -83,13 +91,18 @@ enum MirrorCopy {
         // `volume` is now a plain folder on the startup disk.
         guard MountPoint.isMounted(s.volume) else { throw MirrorCopyError.imageWentAway(s.volume.path) }
         try putInPlace(s.next, s.current)
-        removeStaging(s.staging, runner: runner)
+        // The previous copy, now in staging, is as many items as the library (measured:
+        // 33 s for 120,000 on an exFAT drive). Stop ends the removal; the next run
+        // removes the rest before it starts.
+        runner.control?.begin("Removing the previous copy", stage: .finishing)
+        removeStaging(s.staging, runner: runner, control: runner.control)
     }
 
-    /// give up on the new copy; the previous one stays
+    /// give up on the new copy; the previous one stays. Stop ends the removal (see commit).
     static func abandon(_ s: Staged, runner: CommandRunner) {
         guard MountPoint.isMounted(s.volume) else { return }       // the next run throws it away
-        removeStaging(s.staging, runner: runner.forTeardown)
+        runner.control?.begin("Removing the unfinished copy", stage: .finishing)
+        removeStaging(s.staging, runner: runner.forTeardown, control: runner.control)
     }
 
     /// Check the new copy against the library, reading it back from the image.
@@ -115,15 +128,25 @@ enum MirrorCopy {
     /// A run with nothing changed reads no file data. The library is a frozen snapshot,
     /// so it can't have moved meanwhile (a volume that can't be frozen is read live
     /// with its app closed).
+    ///
+    /// A first run writes everything, so it reads everything back, as many small reads
+    /// as the library has files (measured: 3.3 GB in 128,000 reads, 28 s from an exFAT
+    /// disk image on an SSD; a card answers small reads far more slowly). Each part says
+    /// how far it has got (see RunStep), the read-back in bytes.
     static func verify(_ s: Staged, against source: URL, control: RunControl?) throws {
         var found = try structure(of: s.next, against: source, previous: s.current, control: control)
         // the bytes of everything this run wrote, several files at a time (opening a
         // file is most of the cost for small ones)
+        control?.begin("Reading the copy back", stage: .verifying, unit: .bytes, total: found.writtenBytes)
         let mismatched = inParallel(found.written, control: control) { rel, x, y, size in
-            byteDifference(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path, x, y, size)
+            byteDifference(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path, x, y, size,
+                           control: control)
         }
+        if control?.isCancelled == true { throw CancelledError() }
+        control?.begin("Checking attributes", stage: .verifying, total: UInt64(found.present.count))
         let attributes = inParallel(found.present, control: control) { rel, _, _, _ in
-            differentAttributes(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path)
+            defer { control?.advance() }
+            return differentAttributes(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path)
         }
         if control?.isCancelled == true { throw CancelledError() }
         var noted = Set<String>()
@@ -139,6 +162,8 @@ enum MirrorCopy {
         var count = 0
         var examples: [String] = []
         var written: [String] = []
+        /// the bytes of `written`
+        var writtenBytes: UInt64 = 0
         /// the library folder ("") and every file and folder that is in the copy as
         /// the same kind of item (links aside): whose attributes can be compared
         var present: [String] = [""]
@@ -150,15 +175,20 @@ enum MirrorCopy {
 
     /// Compare `copy` with the library by structure: every path there with the same
     /// type, size, date, link target and flags, and nothing else. No file data is read.
-    static func structure(of copy: URL, against source: URL, previous: URL?, control: RunControl?) throws -> Differences {
+    /// `title` is the step it shows as (see RunStep), item by item.
+    static func structure(of copy: URL, against source: URL, previous: URL?, control: RunControl?,
+                          title: String = "Checking the copy") throws -> Differences {
         let fm = FileManager.default
         var found = Differences()
         var inLibrary = Set<String>()
         guard let walker = fm.enumerator(atPath: source.path) else { return found }
-        var seen = 0
-        while let rel = walker.nextObject() as? String {
-            seen += 1
+        // the library's paths first (from the snapshot, quickly), so the step has a total
+        var rels: [String] = []
+        while let rel = walker.nextObject() as? String { rels.append(rel) }
+        control?.begin(title, stage: .verifying, total: UInt64(rels.count))
+        for (seen, rel) in rels.enumerated() {
             if seen % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+            control?.advance()
             inLibrary.insert(rel)
             var a = stat(), b = stat(), c = stat()
             guard lstat(source.appendingPathComponent(rel).path, &a) == 0 else { continue }
@@ -188,7 +218,7 @@ enum MirrorCopy {
             let carried = previous.map { lstat($0.appendingPathComponent(rel).path, &c) == 0 } == true
                 && c.st_size == a.st_size && c.st_mtimespec.tv_sec == a.st_mtimespec.tv_sec
                 && (!isSparse(source.appendingPathComponent(rel).path, a) || sparseCopyIsCurrent(c, of: a))
-            if !carried { found.written.append(rel) }
+            if !carried { found.written.append(rel); found.writtenBytes += UInt64(max(a.st_size, 0)) }
         }
         if let extra = fm.enumerator(atPath: copy.path) {
             while found.count < 1000, let rel = extra.nextObject() as? String {
@@ -289,8 +319,11 @@ enum MirrorCopy {
     /// than reading as different data: the one is lost data, the other may not be. The
     /// image was attached afresh for this, and detaching drops what the mount had in
     /// memory, so reads of the new copy come from the drive.
+    ///
+    /// What is read counts toward `control`'s step, and Stop ends the read part way
+    /// through a file (nil: the caller sees the Stop).
     static func byteDifference(_ a: String, _ b: String, _ x: UnsafeMutableRawPointer, _ y: UnsafeMutableRawPointer,
-                               _ size: Int) -> String? {
+                               _ size: Int, control: RunControl? = nil) -> String? {
         func failed(_ what: String) -> String { "\(what) (\(String(cString: strerror(errno))))" }
         let fa = open(a, O_RDONLY)
         guard fa >= 0 else { return failed("couldn't be read in the library") }
@@ -319,6 +352,8 @@ enum MirrorCopy {
                 got += m
             }
             if memcmp(x, y, n) != 0 { return "doesn't match the library" }
+            control?.advance(by: UInt64(n))
+            if control?.isCancelled == true { return nil }
         }
     }
 
@@ -631,8 +666,10 @@ enum MirrorCopy {
         }
         let depth = rels.map { $0.isEmpty ? 0 : $0.utf8.reduce(1) { $1 == UInt8(ascii: "/") ? $0 + 1 : $0 } }
         let order = rels.indices.sorted { depth[$0] > depth[$1] }
+        control?.begin("Finishing the copy", stage: .finishing, total: UInt64(rels.count))
         for (n, i) in order.enumerated() {
             if n % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+            control?.advance()
             let rel = rels[i]
             let from = rel.isEmpty ? source.path : source.appendingPathComponent(rel).path
             let to = rel.isEmpty ? copy.path : copy.appendingPathComponent(rel).path
@@ -855,16 +892,35 @@ enum MirrorCopy {
     /// remove the previous copy. Deny-delete ACLs and read-only folders inside it are
     /// dealt with if the plain remove is refused. Whatever still won't go is left for
     /// the next run, which removes it before it starts (and fails if it can't).
-    static func removeStaging(_ staging: URL, runner: CommandRunner) {
-        let fm = FileManager.default
+    ///
+    /// Each item removed counts toward `control`'s step, and Stop ends the removal part
+    /// way (measured: FileManager asks its delegate about every item, and stops soon
+    /// after it is told no). What is left is the next run's to remove.
+    static func removeStaging(_ staging: URL, runner: CommandRunner, control: RunControl? = nil) {
+        let fm = FileManager()
+        let counter = RemovalCounter(control)
+        fm.delegate = counter
         try? fm.removeItem(at: staging)
-        guard fm.fileExists(atPath: staging.path) else { return }
+        guard fm.fileExists(atPath: staging.path), control?.isCancelled != true else { return }
         // locked items, deny-delete ACLs, and read-only folders (all of which the copy
         // keeps) are what stops a plain remove
         _ = try? runner.run("/usr/bin/chflags", ["-R", "0", staging.path], stdin: nil)
         _ = try? runner.run("/bin/chmod", ["-R", "-N", staging.path], stdin: nil)
         _ = try? runner.run("/bin/chmod", ["-R", "u+w", staging.path], stdin: nil)
+        guard control?.isCancelled != true else { return }
         try? fm.removeItem(at: staging)
+    }
+}
+
+/// counts what a removal removes toward the run's step, and refuses the rest once the
+/// run is stopped
+private final class RemovalCounter: NSObject, FileManagerDelegate {
+    let control: RunControl?
+    init(_ control: RunControl?) { self.control = control }
+    func fileManager(_ fileManager: FileManager, shouldRemoveItemAt url: URL) -> Bool {
+        guard control?.isCancelled != true else { return false }
+        control?.advance()
+        return true
     }
 }
 

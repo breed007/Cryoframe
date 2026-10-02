@@ -14,7 +14,8 @@ public enum VerificationPolicy: String, Codable, Sendable {
     case mountAndOpen      // also mount the archive and confirm the library reopens
 }
 
-/// coarse phase progress for the UI (the engines run synchronously).
+/// coarse phase progress for the UI (the engines run synchronously). `finishing` is
+/// work on a copy after it has been written (dates, flags, putting it in place).
 public enum BackupStage: String, Sendable {
-    case preparing, archiving, checksumming, verifying, transferring, completed
+    case preparing, archiving, finishing, checksumming, verifying, transferring, completed
 }

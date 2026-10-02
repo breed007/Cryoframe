@@ -36,12 +36,92 @@ public struct RunProgress: Sendable {
     }
 }
 
+/// A step of a run that has no growing archive to measure: checking a copy, finishing
+/// it, putting it in place. The engine says which step it is on and how far it has got,
+/// and the run's progress shows that (see `RunProgress.init(step:…)`).
+///
+/// A live mirror's progress used to come only from its image growing on the drive. On
+/// a first run that reached 99% when the copy was written, and then everything after it
+/// (finishing the copy, flushing it, reading every byte of it back from the drive)
+/// showed as 99% at zero bytes a second, for up to an hour on a microSD card.
+public struct RunStep: Sendable, Equatable {
+    public enum Unit: Sendable, Equatable { case items, bytes }
+    public let title: String
+    public let stage: BackupStage
+    public let unit: Unit
+    /// nil when the step can't say ahead how much there is
+    public let total: UInt64?
+    public var done: UInt64 = 0
+    public let started: Date
+
+    public init(title: String, stage: BackupStage, unit: Unit = .items, total: UInt64? = nil, done: UInt64 = 0,
+                started: Date = Date()) {
+        self.title = title; self.stage = stage; self.unit = unit; self.total = total; self.done = done
+        self.started = started
+    }
+}
+
+extension RunProgress {
+    /// what the run shows during `step`. `speed` (bytes a second) only for a step
+    /// counted in bytes; the time left from it and what remains.
+    public init(step: RunStep, libraryIndex: Int, libraryCount: Int, speed: Double?, elapsed: TimeInterval?) {
+        var fraction: Double?, detail: String, eta: TimeInterval?
+        let rate = step.unit == .bytes ? speed : nil
+        if let total = step.total, total > 0 {
+            let done = min(step.done, total)
+            fraction = min(0.99, Double(done) / Double(total))
+            switch step.unit {
+            case .bytes:
+                detail = "\(step.title): \(JobExecutor.human(done)) of \(JobExecutor.human(total))"
+                if let rate, rate > 0 { eta = Double(total - done) / rate }
+            case .items:
+                detail = "\(step.title): \(Self.count(done)) of \(Self.count(total)) items"
+            }
+        } else if step.done > 0 {
+            detail = step.unit == .bytes ? "\(step.title): \(JobExecutor.human(step.done))"
+                                         : "\(step.title): \(Self.count(step.done)) items"
+        } else {
+            detail = "\(step.title)…"
+        }
+        self.init(stage: step.stage, libraryIndex: libraryIndex, libraryCount: libraryCount, fraction: fraction,
+                  detail: detail, speed: rate, eta: eta, elapsed: elapsed)
+    }
+
+    static func count(_ n: UInt64) -> String {
+        NumberFormatter.localizedString(from: NSNumber(value: n), number: .decimal)
+    }
+}
+
+/// a step's speed in bytes a second, smoothed as the archive's is; nil for a step
+/// counted in items, and starting afresh with each step
+struct StepRate {
+    private var title: String?, started: Date?
+    private var lastDone: UInt64 = 0, lastTime = Date()
+    private(set) var rate: Double?
+
+    mutating func update(_ step: RunStep, now: Date = Date()) -> Double? {
+        guard step.unit == .bytes else { return nil }
+        if step.title != title || step.started != started {
+            title = step.title; started = step.started
+            lastDone = step.done; lastTime = now; rate = nil
+            return nil
+        }
+        let dt = now.timeIntervalSince(lastTime)
+        guard dt >= 0.1 else { return rate }
+        let instant = Double(step.done >= lastDone ? step.done - lastDone : 0) / dt
+        rate = rate.map { 0.65 * $0 + 0.35 * instant } ?? instant
+        lastDone = step.done; lastTime = now
+        return rate
+    }
+}
+
 public final class RunControl: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
     private var paused = false
     private var current: Process?
     private var watch: ToolWatch?
+    private var currentStep: RunStep?
     /// how long a tool of this run may make no progress before it is stopped (see
     /// ToolWatchdog); shorter in tests
     public let quietLimit: TimeInterval
@@ -50,6 +130,29 @@ public final class RunControl: @unchecked Sendable {
 
     public var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
     public var isPaused: Bool { lock.lock(); defer { lock.unlock() }; return paused }
+
+    /// the step the run is on, if it has said (see RunStep)
+    public var step: RunStep? { lock.lock(); defer { lock.unlock() }; return currentStep }
+
+    /// told of each step as it begins, with the one it ends (tests follow a run with it)
+    var stepChanged: (@Sendable (_ ended: RunStep?, _ begun: RunStep) -> Void)?
+
+    /// start a step, replacing the one before
+    public func begin(_ title: String, stage: BackupStage, unit: RunStep.Unit = .items, total: UInt64? = nil) {
+        let s = RunStep(title: title, stage: stage, unit: unit, total: total)
+        lock.lock(); let ended = currentStep; currentStep = s; let told = stepChanged; lock.unlock()
+        told?(ended, s)
+    }
+
+    /// `n` more items or bytes of the current step done; safe from several threads
+    public func advance(by n: UInt64 = 1) {
+        lock.lock(); currentStep?.done += n; lock.unlock()
+    }
+
+    /// no step: the run's progress comes from what it writes again
+    public func endStep() {
+        lock.lock(); currentStep = nil; lock.unlock()
+    }
 
     /// Stop: the tool in flight is ended the way the watchdog ends one (its process
     /// group gets SIGTERM, then SIGCONT so a paused one handles it, then SIGKILL after

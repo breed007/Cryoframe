@@ -491,7 +491,10 @@ public struct JobExecutor: Sendable {
                                 continue
                             }
                         }
-                        let poller = self.archivePoller(total: stats.copyBytes, outputDir: libDir, idx: idx, count: count, onProgress: onProgress)
+                        // the steps of the mirror before (see RunStep) moved the stage on
+                        onStage(.archiving)
+                        let poller = self.archivePoller(total: stats.copyBytes, outputDir: libDir, idx: idx, count: count,
+                                                        control: control, onStage: onStage, onProgress: onProgress)
                         do {
                             results.append(try self.direct(job: job, library: library, source: source,
                                                            dest: libDir, target: t, runner: runner,
@@ -1031,8 +1034,12 @@ public struct JobExecutor: Sendable {
     // MARK: progress
 
     /// polls the output directory's size against the (known) source size while an
-    /// archive runs, so the UI shows a moving bytes-written bar.
+    /// archive runs, so the UI shows a moving bytes-written bar. While the engine says
+    /// it is on a step of its own (see RunStep: checking or finishing a mirror's copy),
+    /// that step is shown instead, with its stage.
     private func archivePoller(total: UInt64, outputDir: URL, copyDir: URL? = nil, idx: Int, count: Int,
+                               control: RunControl? = nil,
+                               onStage: (@Sendable (BackupStage) -> Void)? = nil,
                                onProgress: @escaping @Sendable (RunProgress) -> Void) -> Task<Void, Never> {
         let copyFolder = (copyDir ?? outputDir).appendingPathComponent(FilteredCopy.folderName)
         return Task.detached {
@@ -1040,7 +1047,18 @@ public struct JobExecutor: Sendable {
             var lastBytes: UInt64 = 0
             var lastTime = start
             var rate: Double?                            // bytes/sec, EWMA-smoothed
+            var shownStage: BackupStage?
+            var stepRate = StepRate()
             while !Task.isCancelled {
+                if let step = control?.step {
+                    if step.stage != shownStage { shownStage = step.stage; onStage?(step.stage) }
+                    onProgress(RunProgress(step: step, libraryIndex: idx, libraryCount: count,
+                                           speed: stepRate.update(step), elapsed: Date().timeIntervalSince(start)))
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    continue
+                }
+                // the engine's step ended: the run is writing its archive again
+                if shownStage != nil { shownStage = nil; onStage?(.archiving) }
                 // a sealed build's copy of the library without its pipes and sockets
                 // (see FilteredCopy) isn't the archive: measured apart, and while it is
                 // all there is, said instead of a bar that doesn't move

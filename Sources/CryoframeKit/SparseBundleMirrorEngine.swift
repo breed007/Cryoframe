@@ -100,6 +100,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let bundle = destinationDir.appendingPathComponent(source.name + ".sparsebundle", isDirectory: true)
 
         let result = ArchiveResult(artifacts: [bundle], format: .liveMirror)
+        // each step after the copy says how far it has got (see RunStep); none outlives the run
+        runner.control?.endStep()
+        defer { runner.control?.endStep() }
 
         // An image found damaged after an earlier run may not even mount. Unless a
         // check now finds it sound (someone repaired it), say so plainly rather than
@@ -193,6 +196,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// run reported a success.
     private func confirm(_ bundle: URL, name: String, against source: URL, in destinationDir: URL, stdin: Data?) throws {
         let teardown = runner.forTeardown
+        runner.control?.begin("Checking the disk image", stage: .verifying)
         // Stop ends a wait for the image (see ImageLock.attaching), which the teardown
         // runner, with no control of its own, can't
         switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: teardown, control: runner.control,
@@ -228,7 +232,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                 throw MirrorCopyError.couldNotConfirm(attached.map { ProcessCommandRunner.meaningful($0.stderr) } ?? "it wouldn't attach")
             }
         }
-        let found = try MirrorCopy.structure(of: mnt.appendingPathComponent(name), against: source, previous: nil, control: runner.control)
+        let found = try MirrorCopy.structure(of: mnt.appendingPathComponent(name), against: source, previous: nil,
+                                             control: runner.control, title: "Confirming the update")
         guard found.count == 0 else { throw MirrorCopyError.updateNotConfirmed(count: found.count, examples: found.examples) }
         // The swap lifts and restores the top folder's access list after the read-back
         // (see MirrorCopy.putInPlace), so it is the one thing written unverified.
@@ -254,6 +259,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// "not compared", rather than a list naming bands compact rightly removed, which
     /// read as damage and refused the restore of a healthy mirror.
     private func compact(_ bundle: URL, stdin: Data?) {
+        runner.control?.begin("Compacting the disk image", stage: .finishing)
         MirrorSeal.withdrawBands(in: bundle.deletingLastPathComponent())
         // -puppetstrings: progress lines as it goes, which the tool watchdog counts
         // (the disk-image daemon does the work, and hdiutil itself can sit idle)
@@ -385,6 +391,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                                           runner: runner, execute: { try execute($0) })
         do {
             // on the drive, and the drive never came close to full while it was written
+            runner.control?.begin("Writing the copy to the drive", stage: .finishing)
             MirrorCopy.flush(volume: mountpoint)
             drive.sample()
             if drive.dipped { throw MirrorCopyError.driveFilledByAnother(swapped: false) }
@@ -395,6 +402,12 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             try MirrorCopy.verify(staged, against: source.root, control: runner.control)
             drive.sample()
             if drive.dipped { throw MirrorCopyError.driveFilledByAnother(swapped: false) }
+        } catch let stop as CancelledError {
+            // Stopped: the unfinished copy stays in staging, where the next run removes
+            // it before it starts. Removing it now is as many deletes as the library has
+            // items, and kept a stopped run going long after Stop (measured: 33 s for
+            // 120,000 items on an exFAT drive; a slow card takes longer).
+            throw stop
         } catch {
             MirrorCopy.abandon(staged, runner: runner)
             throw error
@@ -406,6 +419,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // held the new library, so the history and the restore disagreed. Flush, then
         // detach patiently and by force if need be; only a volume that still won't go
         // fails the run.
+        runner.control?.begin("Writing the copy to the drive", stage: .finishing)
         MirrorCopy.flush(volume: mountpoint)
         MountPoint.detach(mountpoint, runner: teardown)
         guard !MountPoint.isMounted(mountpoint) else { throw MountPointError.stillMounted(mountpoint.path) }

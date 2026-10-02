@@ -60,6 +60,9 @@ enum FilteredCopy {
         // read before the copy: which paths are links to one file
         let links = hardLinks(in: source)
         let leftOut: [String]
+        // the copy's finishing pass counts as a step of the run (see RunStep); the
+        // build that follows is measured by what it writes, so the step ends here
+        defer { runner.control?.endStep() }
         do {
             // hard links made again before anything is locked (see MirrorCopy.sync)
             leftOut = try MirrorCopy.sync(source, into: copy, runner: runner, beforeLocking: {

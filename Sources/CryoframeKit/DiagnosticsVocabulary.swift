@@ -172,6 +172,7 @@ comes
 comm
 command
 compact
+compacting
 compare
 compared
 complete
@@ -180,6 +181,7 @@ compressed
 computer
 confirm
 confirmed
+confirming
 connect
 connected
 connection
@@ -767,6 +769,7 @@ rely
 remove
 removed
 removes
+removing
 rename
 renamed
 reopened
