@@ -3,7 +3,8 @@
 //  CryoframeKitTests
 //
 //  Messages attachments as a library of their own: what the editor says of them,
-//  what every format leaves out (link previews, property lists, Finder's files),
+//  what the mirror and plain files leave out (link previews, property lists,
+//  Finder's files) and a sealed version keeps,
 //  and what each one-copy format keeps of what was deleted in Messages. All on a
 //  made-up Attachments folder in a temporary folder; never the real one.
 //
@@ -111,26 +112,36 @@ private let wanted = ["0a/01/AAAA-1111/IMG_0001.HEIC", "0a/01/AAAA-1111/IMG_0001
         #expect(stats.entries == wanted.count)
         #expect(listing.count == wanted.count + 14)          // and the 14 folders not left out
         #expect(JobExecutor.directoryStats(src).entries == wanted.count + 4)
-        #expect(SealedReadPlan.of(stats.dmgBlockers, .zip, excluding: true).fromCopy)
-        #expect(!SealedReadPlan.of(stats.dmgBlockers, .zip).fromCopy)
     }
 
-    // A sealed build reads a copy without them.
-    @Test func aSealedBuildLeavesThemOut() throws {
+    // A sealed build keeps them: leaving them out would mean a full copy of the
+    // library first on every run. Only the mirror and plain files leave them out.
+    @Test func aSealedBuildKeepsThemAndNeedsNoCopy() throws {
         let src = try attachments()
         let base = tempDir("sealed")
         defer { for d in [src.deletingLastPathComponent(), base] { try? FileManager.default.removeItem(at: d) } }
-        let stats = JobExecutor.directoryStats(src, forZip: true, leavesOut: ContentType.messagesAttachments.leavesOut)
+        let library = ContentType.messagesAttachments
+        #expect(JobExecutor.leavesOut(library, sealed: .zip) == nil)
+        #expect(JobExecutor.leavesOut(library, sealed: .dmg) == nil)
+        #expect(JobExecutor.leavesOut(library, sealed: nil) != nil)
+        #expect(JobExecutor.leavesOut(.messages, sealed: nil) == nil)
+
+        let stats = JobExecutor.directoryStats(src, forZip: true, leavesOut: JobExecutor.leavesOut(library, sealed: .zip))
+        #expect(stats.excluded.isEmpty)
+        #expect(stats.entries == wanted.count + 4)
+        let plan = SealedReadPlan.of(stats.dmgBlockers, .zip)
+        #expect(!plan.fromCopy)
         let build = base.appendingPathComponent("build")
         let built = try FilteredCopy.sealedArchive(SealedArchiveEngine(.zip),
                                                    source: ArchiveSource(name: "Attachments", root: src, excluded: stats.excluded),
-                                                   found: stats.dmgBlockers, plan: .of(stats.dmgBlockers, .zip, excluding: true),
-                                                   buildDir: build, copyDir: build, library: "Messages attachments",
+                                                   found: stats.dmgBlockers, plan: plan,
+                                                   buildDir: build, copyDir: build, library: library.displayName,
                                                    runner: ProcessCommandRunner())
         let out = base.appendingPathComponent("out")
         let r = try ProcessCommandRunner().run("/usr/bin/ditto", ["-x", "-k", built.archive.artifacts[0].path, out.path], stdin: nil)
         #expect(r.ok, "\(r.stderr)")
-        #expect(files(out.appendingPathComponent("Attachments")) == wanted)
+        #expect(files(out.appendingPathComponent("Attachments")) == files(src))
+        #expect(files(src).count == wanted.count + 4)
         #expect(!FileManager.default.fileExists(atPath: build.appendingPathComponent(FilteredCopy.folderName).path))
     }
 

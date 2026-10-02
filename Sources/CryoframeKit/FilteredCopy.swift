@@ -49,9 +49,7 @@ enum FilteredCopy {
     /// Copy `source` to `<buildDir>/filtered/<name>`, leaving out the items neither
     /// sealed format can hold. Returns the copy and what was left out, relative to the
     /// library. Honors Stop (the copy is the caller's to remove).
-    /// `excluded`: what the library leaves out of its backups (see ArchiveSource).
-    static func make(of source: URL, name: String, in buildDir: URL, runner: CommandRunner,
-                     excluded: [String] = []) throws -> (copy: URL, leftOut: [String]) {
+    static func make(of source: URL, name: String, in buildDir: URL, runner: CommandRunner) throws -> (copy: URL, leftOut: [String]) {
         let fm = FileManager.default
         let folder = buildDir.appendingPathComponent(folderName, isDirectory: true)
         remove(in: buildDir, runner: runner.forTeardown)
@@ -67,7 +65,7 @@ enum FilteredCopy {
         defer { runner.control?.endStep() }
         do {
             // hard links made again before anything is locked (see MirrorCopy.sync)
-            leftOut = try MirrorCopy.sync(source, into: copy, runner: runner, options: .init(excluded: excluded), beforeLocking: {
+            leftOut = try MirrorCopy.sync(source, into: copy, runner: runner, beforeLocking: {
                 if runner.control?.isCancelled == true { throw CancelledError() }
                 relink(links, source: source, copy: copy)
             }) { command in
@@ -136,7 +134,7 @@ enum FilteredCopy {
         try ScratchLayout.claim(libraryDir: copyDir)
         let copy: URL
         do {
-            copy = try make(of: source.root, name: source.name, in: copyDir, runner: runner, excluded: source.excluded).copy
+            copy = try make(of: source.root, name: source.name, in: copyDir, runner: runner).copy
         } catch FilteredCopyError.scratchFilled(let volume, let library, _) where engine.passphrase != nil {
             throw FilteredCopyError.scratchFilled(volume: volume, library: library, encrypted: true)
         }
@@ -355,12 +353,10 @@ struct SealedReadPlan: Equatable, Sendable {
     /// macOS measured, 27 included ("could not access … - Operation not permitted"),
     /// so a library holding one is copied up front, where the run's room check covers
     /// the copy, rather than after a direct build has failed.
-    /// `excluding`: the library leaves items out of its backups (see ContentType.leavesOut),
-    /// which only a copy can do.
     static func of(_ found: DMGBlockers, _ kind: SealedArchiveEngine.Sealed,
-                   diskImageKeepsLocks: Bool = FilteredCopy.diskImageKeepsLocks, excluding: Bool = false) -> SealedReadPlan {
+                   diskImageKeepsLocks: Bool = FilteredCopy.diskImageKeepsLocks) -> SealedReadPlan {
         let unlock = kind == .dmg && found.count(.locked) > 0 && (!diskImageKeepsLocks || found.appendOnly > 0)
-        return SealedReadPlan(fromCopy: found.count(.special) > 0 || unlock || excluding, unlocked: unlock)
+        return SealedReadPlan(fromCopy: found.count(.special) > 0 || unlock, unlocked: unlock)
     }
 }
 

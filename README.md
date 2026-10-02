@@ -71,7 +71,7 @@ Built in (fixed locations, detected automatically):
 | Mail | `~/Library/Mail` | Mail |
 | Microsoft Outlook | default Outlook profile | Outlook |
 
-**Messages attachments** backs up the photos, videos and files sent and received in Messages, without the conversations. Link previews and Messages' own settings files are left out. What you delete in Messages stays in the backup: one up-to-date copy keeps it in a Removed items folder, and dated versions save it in a separate archive before old versions are deleted. Restore lists those archives as "Messages attachments, removed items".
+**Messages attachments** backs up the photos, videos and files sent and received in Messages, without the conversations. One up-to-date copy and plain files leave out link previews and Messages' own settings files. Dated versions keep them: a disk image or zip file can't skip anything, so leaving them out would mean copying the whole folder first on every run. What you delete in Messages stays in the backup: one up-to-date copy keeps it in a Removed items folder, and dated versions save it in a separate archive before old versions are deleted. Restore lists those archives as "Messages attachments, removed items".
 
 Templates (you point at the library, since these live anywhere, often on external drives), under **A library from another app…** in the job editor:
 

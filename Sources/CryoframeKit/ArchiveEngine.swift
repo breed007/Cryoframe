@@ -23,7 +23,8 @@ public struct ArchiveSource: Sendable, Equatable {
     /// every source before archiving). The mirror checks the destination against it.
     public let sizeHint: UInt64?
     /// items of the library left out of its backup, relative to `root`, each the
-    /// topmost such item (see ContentType.leavesOut): no format copies them
+    /// topmost such item (see ContentType.leavesOut): the mirror and plain files don't
+    /// copy them. Always empty for a sealed build (see JobExecutor.leavesOut).
     public var excluded: [String] = []
     /// what the library no longer holds is kept (see ContentType.keepsRemoved): the
     /// mirror moves it to Removed items in its image rather than deleting it

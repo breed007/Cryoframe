@@ -14,6 +14,8 @@
 //      attachments (".pluginPayloadAttachment"; measured on one Mac: 2,690 of 8,191
 //      files, 465 MB), property lists (112 there) and Finder's ".DS_Store". None is a
 //      photo, video or file someone sent. Stickers aren't in this folder at all.
+//      Only the up-to-date disk image and plain files leave them out; a sealed
+//      version holds them (see JobExecutor.leavesOut).
 //    - What was deleted in Messages stays in the backup (`keepsRemoved`): plain files
 //      and the up-to-date disk image keep it in Removed items (see RemovedItems),
 //      and dated versions in a removed-items archive (see RemovedArchive).

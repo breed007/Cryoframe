@@ -394,7 +394,7 @@ public struct JobExecutor: Sendable {
                     : ContentsListing.Collector(binding: ContentsCrypto.Binding(jobID: job.id, libraryID: library.id, version: plannedStamp))
                 if let listing, placement.volume.map({ mounts[$0.mountPoint] == nil }) ?? true { listing.markPartial() }
                 let stats = Self.directoryStats(root, forDMG: sealed == .dmg, forZip: sealed == .zip, forMirror: sealed == nil,
-                                                listing: listing, leavesOut: library.leavesOut)
+                                                listing: listing, leavesOut: Self.leavesOut(library, sealed: sealed))
                 let sourceSize = stats.bytes
                 // a mirror writes every file out whole (see copySize); a sealed archive
                 // compresses, and is held to the bytes the library takes on disk
@@ -435,10 +435,7 @@ public struct JobExecutor: Sendable {
                 // What's left are named pipes, sockets and devices, on which hdiutil and
                 // ditto both hang or fail, and locks: the build may read a copy without
                 // them (see SealedReadPlan).
-                // what the library leaves out (see ContentType.leavesOut) neither sealed
-                // format can be told to skip: the build reads a copy without it
-                let plan = sealed.map { SealedReadPlan.of(stats.dmgBlockers, $0, diskImageKeepsLocks: self.diskImageKeepsLocks,
-                                                          excluding: !stats.excluded.isEmpty) } ?? .direct
+                let plan = sealed.map { SealedReadPlan.of(stats.dmgBlockers, $0, diskImageKeepsLocks: self.diskImageKeepsLocks) } ?? .direct
                 let filtered = plan.fromCopy
                 onStage(.archiving)
 
@@ -1462,6 +1459,16 @@ public struct JobExecutor: Sendable {
         try? FileManager.default.removeItem(at: b.buildDir)
         ScratchLayout.tidy(jobDir: b.buildDir.deletingLastPathComponent().deletingLastPathComponent())
         for d in b.dests { pendingStore?.remove(jobID: "\(b.jobID):\(Self.safe(d.id)):\(b.library.id)") }
+    }
+
+    /// What a run of `library` leaves out (see ContentType.leavesOut): only where the
+    /// copier can skip it for nothing, the up-to-date disk image and plain files
+    /// (rsync excludes it). Neither hdiutil nor ditto can be told to skip anything, so
+    /// a sealed build would have to read a full copy of the library without it, tens
+    /// of gigabytes of Messages attachments on every run, to save a few hundred
+    /// megabytes. A sealed version holds the library whole.
+    static func leavesOut(_ library: ContentType, sealed: SealedArchiveEngine.Sealed?) -> (@Sendable (String) -> Bool)? {
+        sealed == nil ? library.leavesOut : nil
     }
 
     private static func sealedKind(_ format: FormatChoice) -> SealedArchiveEngine.Sealed? {
