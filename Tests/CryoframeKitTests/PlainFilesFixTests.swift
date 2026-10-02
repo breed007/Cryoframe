@@ -264,4 +264,83 @@ private let exfatLike = FileSystemProfile(kind: .exfat, fsType: "exfat", foldsCa
         #expect(live.removedOn == nil)
         #expect(ArchiveLayout.item(live, in: a.dir, for: a).path.hasSuffix("/Taxes/keep.txt"))
     }
+
+    // What a run moves into Removed items is recorded as it goes, and Find a File
+    // reads that record instead of walking every day's folders. A folder made only
+    // to keep a deleted file's path isn't a match; a folder deleted whole is, with
+    // all it held. A day the record doesn't hold, or one a run was cut off while
+    // moving items into, is walked as before; the next run's record takes it in.
+    @Test func removedItemsAreRecordedAsTheyAreMoved() throws {
+        try removedItemsAreRecorded(profile: exfatLike)
+    }
+
+    // the same for a copy swapped in whole (a Mac's own drive), whose deleted items
+    // are cloned into Removed items
+    @Test func removedItemsAreRecordedWhenTheCopyIsSwapped() throws {
+        let apfs = FileSystemProfile(kind: .apfs, fsType: "apfs")
+        #expect(apfs.swapsWholeCopy)
+        try removedItemsAreRecorded(profile: apfs)
+    }
+
+    private func removedItemsAreRecorded(profile: FileSystemProfile) throws {
+        let base = tempDir("findindex")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let src = base.appendingPathComponent("src/Taxes")
+        try put(src, "2024/W-2.pdf", "w2")
+        try put(src, "2024/keep.txt", "k")
+        try put(src, "old/a.txt", "a")
+        try put(src, "old/deeper/b.txt", "b")
+        let dest = base.appendingPathComponent("dest")
+        let lib = ContentType.genericFolder(id: "taxes", displayName: "Taxes", path: .absolute(src.path))
+        let job = BackupJob(name: "T", libraries: [lib], target: .localVolume(id: "d", name: "Disk", dir: dest),
+                            format: .plainFiles, frequency: .manual, createdAt: Date())
+        func once() throws {
+            let prepared = try LibraryFolders.prepare(job: job, library: lib, in: dest, jobs: [job])
+            _ = try JobExecutor.plainFiles(job: job, library: lib, source: ArchiveSource(name: "Taxes", root: src), folder: prepared.folder,
+                                           target: job.target, profile: profile, bytes: 10, partial: false, now: Date(),
+                                           runner: ProcessCommandRunner())
+        }
+        try once()
+        try FileManager.default.removeItem(at: src.appendingPathComponent("2024/W-2.pdf"))
+        try FileManager.default.removeItem(at: src.appendingPathComponent("old"))
+        try once()
+        let a = try #require(RestoreDiscovery.scan(dest).first)
+        // found again for each search: a run's new list is another file
+        func removedHits(_ q: String) throws -> [String] {
+            let now = try #require(RestoreDiscovery.scan(dest).first)
+            let r = try #require(ContentsSearch().search(ContentsQuery(q)!, in: now, passphrases: { _ in [] }))
+            guard case .listed(let hits, _, _) = r.answer else { return ["not listed"] }
+            return hits.filter { $0.removedOn != nil }.map(\.path).sorted()
+        }
+        #expect(try removedHits("2024").isEmpty, "the folder made to keep its path is a match")
+        #expect(try removedHits("W-2") == ["2024/W-2.pdf"])
+        #expect(try removedHits("old") == ["old"])
+        #expect(try removedHits("deeper") == ["old/deeper"])
+        #expect(try removedHits("a.txt") == ["old/a.txt"])
+        #expect(try removedHits("b.txt") == ["old/deeper/b.txt"])
+
+        // the record is what is read: an item put there by hand isn't found ...
+        let removed = a.dir.appendingPathComponent(PlainCopyLayout.removedFolder)
+        let day = try #require(RemovedItems.days(in: removed).first?.folder)
+        try put(day, "stray.txt", "s")
+        #expect(try removedHits("stray").isEmpty)
+        // ... until the day is one a run was cut off in, which is walked
+        var index = try #require(RemovedItemsIndex.read(removed))
+        index.pending = day.lastPathComponent
+        try index.write(removed)
+        #expect(try removedHits("stray") == ["stray.txt"])
+        // and the next run that moves something takes it in
+        try FileManager.default.removeItem(at: src.appendingPathComponent("2024/keep.txt"))
+        try once()
+        let after = try #require(RemovedItemsIndex.read(removed))
+        #expect(after.pending == nil)
+        #expect(try removedHits("stray") == ["stray.txt"])
+        #expect(try removedHits("keep") == ["2024/keep.txt"])
+        // a day deleted in Storage is gone from the search, and with every day gone
+        // Removed items goes too, record and all
+        RemovedItems.delete(in: removed, before: nil)
+        #expect(try removedHits("W-2").isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: removed.path))
+        #expect(RemovedItemsIndex.read(removed) == nil)
+    }
 }

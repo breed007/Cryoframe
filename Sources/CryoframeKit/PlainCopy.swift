@@ -727,12 +727,17 @@ public struct PlainCopy {
         guard !rels.isEmpty else { return 0 }
         control?.begin(title, stage: .finishing, total: UInt64(rels.count))
         let day = PlainCopyLayout.removedDay(folder, now, calendar: calendar)
+        // what is moved is recorded for Find a File (see RemovedItemsIndex), up to a Stop
+        let recorder = RemovedItemsRecorder(day: day)
+        recorder.begin(control: control)
+        defer { recorder.finish() }
         var moved = 0
         for rel in rels {
             if control?.isCancelled == true { throw CancelledError() }
             control?.advance()
             let to = try RemovedItems.place(rel, in: day)
             if let why = Self.move(copy.appendingPathComponent(rel).path, to: to.path) { throw PlainCopyError.couldNotMove(rel, why) }
+            recorder.kept(rel, at: to)
             moved += 1
         }
         return moved
@@ -742,7 +747,7 @@ public struct PlainCopy {
     /// swapped). One a run stopped after this already kept (the previous copy is
     /// still in place then) isn't kept twice.
     private func cloneToRemoved(_ rels: [String], from copy: URL, in folder: URL) throws -> Int {
-        try RemovedItems.keep(rels, from: copy, in: folder, now: now, calendar: calendar, runner: runner)
+        try RemovedItems.keep(rels, from: copy, in: folder, now: now, calendar: calendar, runner: runner, recording: true)
     }
 
     /// Rename `from` to `to`; nil once done, else why not. A Mac's drive keeps a
@@ -1002,14 +1007,18 @@ public enum RemovedItems {
     /// A clone of each of `rels` in `copy`, in `folder`'s Removed items under the day
     /// of `now`, each under a name of its own (see place). One a run that stopped after
     /// this already kept (see alreadyKept) isn't kept twice. Says how far it has got,
-    /// and Stop ends it. Returns how many are kept.
+    /// and Stop ends it. Returns how many are kept. `recording`: a plain-files copy's,
+    /// whose Removed items Find a File searches (see RemovedItemsIndex).
     @discardableResult
     static func keep(_ rels: [String], from copy: URL, in folder: URL, now: Date, calendar: Calendar = .current,
-                     runner: CommandRunner) throws -> Int {
+                     runner: CommandRunner, recording: Bool = false) throws -> Int {
         guard !rels.isEmpty else { return 0 }
         let control = runner.control
         control?.begin("Moving deleted items to Removed items", stage: .finishing, total: UInt64(rels.count))
         let day = PlainCopyLayout.removedDay(folder, now, calendar: calendar)
+        let recorder = recording ? RemovedItemsRecorder(day: day) : nil
+        recorder?.begin(control: control)
+        defer { recorder?.finish() }
         var kept = 0
         for rel in rels {
             if control?.isCancelled == true { throw CancelledError() }
@@ -1020,6 +1029,7 @@ public enum RemovedItems {
             try PlainCopy.withOwnerWrite([to.deletingLastPathComponent().path]) {
                 try MirrorCopy.clone(from, to: to, runner: runner)
             }
+            recorder?.kept(rel, at: to)
             kept += 1
         }
         return kept
@@ -1051,7 +1061,10 @@ public enum RemovedItems {
                 if (try? FileManager.default.removeItem(at: folder)) != nil { deleted += 1 } else { failed.append(folder.lastPathComponent) }
             }
         }
-        if PlainCopy.list(removed.path).allSatisfy({ $0.hasPrefix("._") || $0 == ".DS_Store" }) { try? FileManager.default.removeItem(at: removed) }
+        if PlainCopy.list(removed.path).allSatisfy({ $0.hasPrefix("._") || $0 == ".DS_Store" }) {
+            try? FileManager.default.removeItem(at: removed)
+            unlink(RemovedItemsIndex.url(in: removed).path)
+        }
         return (deleted, failed)
     }
 }

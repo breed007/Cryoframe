@@ -254,12 +254,23 @@ public struct ContentsSearch: Sendable {
     /// Hand `visit` every item kept in a plain-files copy's Removed items (see
     /// PlainCopy), as the library had it, with the day it was removed and where it is
     /// kept. What was deleted from the library is still on the drive, and a search
-    /// that said otherwise would send someone to a file they have. Read from the drive
-    /// as it is: the list holds the copy only. false when stopped part way.
+    /// that said otherwise would send someone to a file they have. The list holds the
+    /// copy only; what the runs moved into Removed items is read from its index (see
+    /// RemovedItemsIndex), and a day the index doesn't hold is read from the drive as
+    /// it is. Only days still on the drive count. false when stopped part way.
     static func searchRemoved(in folder: URL, control: RunControl?, visit: (ContentsEntry) -> Void) -> Bool {
         let removed = folder.appendingPathComponent(PlainCopyLayout.removedFolder, isDirectory: true)
+        let index = RemovedItemsIndex.read(removed)
         var seen = 0
         for (day, dayFolder) in RemovedItems.days(in: removed) {
+            if let index, let items = index.items(of: dayFolder.lastPathComponent) {
+                for item in items {
+                    seen += 1
+                    if seen % 4096 == 0, control?.isCancelled == true { return false }
+                    if let entry = index.entry(item, day: day, dayName: dayFolder.lastPathComponent) { visit(entry) }
+                }
+                continue
+            }
             guard let walker = FileManager.default.enumerator(atPath: dayFolder.path) else { continue }
             while let rel = walker.nextObject() as? String {
                 seen += 1
