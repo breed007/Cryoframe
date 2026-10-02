@@ -194,6 +194,9 @@ public struct DMGBlockers: Sendable, Equatable {
     /// they hold no data.
     public func leftOutOfMirror(library: String) -> String? { leftOut(library: library, of: "the mirror") }
 
+    /// The same for a plain-files run (see PlainCopy), which leaves them out too.
+    public func leftOutOfPlainCopy(library: String) -> String? { leftOut(library: library, of: "the copy") }
+
     /// The same for a sealed run, which builds from a copy without them (see
     /// FilteredCopy).
     public func leftOutOfSealed(library: String, zip: Bool) -> String? {

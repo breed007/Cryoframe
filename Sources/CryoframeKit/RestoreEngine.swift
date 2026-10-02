@@ -20,6 +20,9 @@ public enum RestoreError: Error, Equatable {
     case libraryNotFound
     case destinationExists(String)
     case noManifest
+    /// a plain-files copy of an app's library whose last update was stopped part way
+    /// (see PlainCopy): not restored until a backup has finished it
+    case unfinishedPlainCopy(String)
     /// the drive the restore writes to hasn't room for it (see RestoreRoom). `volume`
     /// names the drive; `inPlace`: a restore over the live library, which keeps its
     /// space in the Trash.
@@ -158,6 +161,7 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
     /// mirrored, drilled and rehearsed clean, and then wouldn't restore.
     public var bundleName: String {
         guard var n = artifactNames.first, !n.isEmpty else { return libraryName }
+        if format == .plainFiles { return n }           // the library's own folder, as it is
         if format != .liveMirror, let r = n.range(of: ".part.", options: .backwards) {
             let suffix = n[r.upperBound...]
             if !suffix.isEmpty, suffix.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) {
@@ -246,6 +250,7 @@ public enum RestoreDiscovery {
     }
 
     public static func archive(at dir: URL, downloading: Bool = true) -> RestorableArchive? {
+        if let plain = plainFiles(at: dir) { return plain }
         let sidecar = dir.appendingPathComponent(ArchiveManifest.sidecarName)
         if !downloading, VersionStamp.date(dir.lastPathComponent) != nil, CloudFile.isDataless(sidecar) {
             return listed(at: dir)
@@ -259,6 +264,18 @@ public enum RestoreDiscovery {
                                   bytes: m.artifacts.reduce(0) { $0 + $1.size }, artifactNames: m.artifacts.map(\.name),
                                   encrypted: m.encrypted ?? false, version: version, libraryKey: identity?.key)
         a.contents = m.contents
+        return a
+    }
+
+    /// A library folder holding a plain-files copy (see PlainCopy): one up-to-date copy,
+    /// found by its identity, never looked into for archives (the library's own files
+    /// may hold disk images and zips of their own).
+    static func plainFiles(at dir: URL) -> RestorableArchive? {
+        guard let identity = LibraryIdentity.read(in: dir), let files = identity.files, let copy = files.copy,
+              FileManager.default.fileExists(atPath: dir.appendingPathComponent(copy).path) else { return nil }
+        var a = RestorableArchive(dir: dir, libraryName: identity.name, format: .plainFiles, bytes: files.bytes ?? 0,
+                                  artifactNames: [copy], libraryKey: identity.key)
+        a.contents = files.contents
         return a
     }
 
@@ -312,7 +329,15 @@ public struct RestoreEngine: Sendable {
         // and a clash is said before the archive is verified, not after
         _ = try Self.target(archive.bundleName, in: destinationDir, onClash: onClash)
 
-        if verify {
+        if archive.format == .plainFiles {
+            // Plain files have no checksums: they were read back when they were copied.
+            // An app's library whose last update was stopped part way may be part old
+            // and part new, and its app could damage it further: not restored then.
+            let copy = archive.dir.appendingPathComponent(archive.bundleName)
+            if PlainCopyLayout.isOpen(archive.dir), (try? copy.resourceValues(forKeys: [.isPackageKey]))?.isPackage == true {
+                throw RestoreError.unfinishedPlainCopy(archive.bundleName)
+            }
+        } else if verify {
             onStage(.verifying)
             let sidecar = archive.dir.appendingPathComponent(ArchiveManifest.sidecarName)
             guard let manifest = try? ArchiveManifest.read(sidecar) else { throw RestoreError.noManifest }
@@ -356,7 +381,7 @@ public struct RestoreEngine: Sendable {
                 try fm.copyItem(at: child, to: into)
                 Self.keepQuarantine(from: child, to: into)
             }
-        case .sealedZip, .liveMirror:
+        case .sealedZip, .liveMirror, .plainFiles:
             let bundle = opened.root.appendingPathComponent(bundleName)
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: bundle.path, isDirectory: &isDir), isDir.boolValue else {

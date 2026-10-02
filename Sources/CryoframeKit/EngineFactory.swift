@@ -17,14 +17,27 @@ public enum FormatChoice: Sendable, Equatable, Codable {
     /// older app reading a newer job) still decode, and is otherwise ignored: the image
     /// is sized from its destination (see MirrorSizing).
     case liveMirror(sizeGB: Int)
+    /// Ordinary files and folders at the destination, one up-to-date copy, with what
+    /// was deleted at the source kept beside it (see PlainCopy). New in 1.7. A job of
+    /// this format is kept only in jobs-files.json, which 1.6.0 never reads: 1.6.0
+    /// drops a job it can't decode and erases it at its next write (see JobStore).
+    case plainFiles
 
     /// what a new mirror job records as its size, for the benefit of older versions
     public static let legacyMirrorGB = 500
 
-    /// sealed formats are versioned into timestamped folders; a live mirror is a single
-    /// in-place copy. Two sealed jobs to the same (target, library) share version folders
-    /// and would cross-prune each other.
-    public var isSealed: Bool { if case .liveMirror = self { return false }; return true }
+    /// sealed formats are versioned into timestamped folders; a live mirror and plain
+    /// files are a single in-place copy. Two sealed jobs to the same (target, library)
+    /// share version folders and would cross-prune each other.
+    public var isSealed: Bool {
+        switch self {
+        case .sealedDMG, .sealedZip: return true
+        case .liveMirror, .plainFiles: return false
+        }
+    }
+
+    /// the copy is ordinary files and folders, not an archive (see PlainCopy)
+    public var isPlainFiles: Bool { self == .plainFiles }
 }
 
 public enum TargetError: Error, Equatable {
@@ -49,6 +62,8 @@ public enum EngineFactory {
                 throw TargetError.incrementalUnsupported(target.displayName)
             }
             return SparseBundleMirrorEngine(sizing: .fromDestination, runner: runner, passphrase: passphrase)
+        case .plainFiles:
+            return PlainCopyEngine(target: target, runner: runner)
         }
     }
 }

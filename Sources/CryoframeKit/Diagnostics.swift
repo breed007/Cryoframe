@@ -384,6 +384,7 @@ public enum DiagnosticsReport {
         case .sealedDMG: return "sealed disk image"
         case .sealedZip: return "sealed zip"
         case .liveMirror: return "live mirror"
+        case .plainFiles: return "plain files"
         }
     }
 

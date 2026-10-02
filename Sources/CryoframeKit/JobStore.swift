@@ -45,6 +45,11 @@ public final class JobStore: @unchecked Sendable {
         url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + "-drives.json")
     }
 
+    /// the file beside jobs.json holding the plain-files jobs (see the top)
+    var filesURL: URL {
+        url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + "-files.json")
+    }
+
     /// the file `update` locks (see the top). Never removed: a lock is the inode, and
     /// two processes locking two files of one name would each think it held it.
     var lockURL: URL {
@@ -118,12 +123,15 @@ public final class JobStore: @unchecked Sendable {
     // MARK: files
 
     private func read() -> ScheduleState {
-        guard let data = try? Data(contentsOf: url),
-              var state = try? JSONDecoder().decode(ScheduleState.self, from: data) else {
-            return ScheduleState()
+        var state = ScheduleState()
+        if let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder().decode(ScheduleState.self, from: data) {
+            state = decoded
+            if let d = try? Data(contentsOf: drivesURL), let drives = try? JSONDecoder().decode(DriveRecords.self, from: d) {
+                drives.fill(&state)
+            }
         }
-        if let d = try? Data(contentsOf: drivesURL), let drives = try? JSONDecoder().decode(DriveRecords.self, from: d) {
-            drives.fill(&state)
+        if let data = try? Data(contentsOf: filesURL), let files = try? JSONDecoder().decode(ScheduleState.self, from: data) {
+            state.merge(plainFiles: files)
         }
         return state
     }
@@ -131,8 +139,13 @@ public final class JobStore: @unchecked Sendable {
     private func write(_ state: ScheduleState) {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(DriveRecords(state)) { try? data.write(to: drivesURL, options: .atomic) }
-        if let data = try? encoder.encode(state) { try? data.write(to: url, options: .atomic) }
+        let (main, files) = state.splittingPlainFiles()
+        // the sidecar first, then what 1.6.0 reads (see the top). Without a plain-files
+        // job and without a file to empty, none is written.
+        if !files.jobs.isEmpty || FileManager.default.fileExists(atPath: filesURL.path),
+           let data = try? encoder.encode(files) { try? data.write(to: filesURL, options: .atomic) }
+        if let data = try? encoder.encode(DriveRecords(main)) { try? data.write(to: drivesURL, options: .atomic) }
+        if let data = try? encoder.encode(main) { try? data.write(to: url, options: .atomic) }
     }
 
     /// the lock file, locked, or -1 when it can't be opened or the wait ran out (the
@@ -147,6 +160,39 @@ public final class JobStore: @unchecked Sendable {
             usleep(5_000)
         }
         return fd
+    }
+}
+
+extension ScheduleState {
+    /// `self` without its plain-files jobs (what jobs.json holds), and those jobs with
+    /// what is recorded of them (what jobs-files.json holds; see JobStore)
+    func splittingPlainFiles() -> (main: ScheduleState, files: ScheduleState) {
+        let plain = Set(jobs.filter { $0.format.isPlainFiles }.map(\.id))
+        var main = self, files = ScheduleState()
+        main.jobs = jobs.filter { !plain.contains($0.id) }
+        files.jobs = jobs.filter { plain.contains($0.id) }
+        main.lastRun = lastRun.filter { !plain.contains($0.key) }
+        files.lastRun = lastRun.filter { plain.contains($0.key) }
+        main.lastCopy = lastCopy.filter { !plain.contains($0.key) }
+        files.lastCopy = lastCopy.filter { plain.contains($0.key) }
+        main.adoptionReviews = adoptionReviews.filter { !plain.contains($0.key) }
+        files.adoptionReviews = adoptionReviews.filter { plain.contains($0.key) }
+        main.droppedJobs = 0; files.droppedJobs = 0
+        return (main, files)
+    }
+
+    /// the jobs of jobs-files.json added to those of jobs.json, with what is recorded
+    /// of them; a job in both is taken from `files` (see JobStore)
+    mutating func merge(plainFiles files: ScheduleState) {
+        let ids = Set(files.jobs.map(\.id))
+        jobs.removeAll { ids.contains($0.id) }
+        jobs.append(contentsOf: files.jobs)
+        for id in ids {
+            lastRun[id] = files.lastRun[id]
+            lastCopy[id] = files.lastCopy[id]
+            adoptionReviews[id] = files.adoptionReviews[id]
+        }
+        droppedJobs += files.droppedJobs
     }
 }
 

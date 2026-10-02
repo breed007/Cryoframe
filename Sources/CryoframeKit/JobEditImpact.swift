@@ -87,6 +87,13 @@ public struct JobEditImpact: Sendable, Equatable, Identifiable {
             }
         }
 
+        // what plain files mean, said once for a new job (see JobDraftState.plainFilesNotice)
+        if base == nil, draft.format.isPlainFiles {
+            let here = placed.job.targets.compactMap { placed.presence[$0.id]?.url }
+            let encrypted = !here.isEmpty && here.count == placed.job.targets.count && here.allSatisfy { MediaExportDrive.of($0).encrypted }
+            say(.changes, JobDraftState.plainFilesNotice(libraries: draft.libraries, encrypted: encrypted))
+        }
+
         for t in placed.job.targets {
             let before = base?.targets.first { $0.id == t.id }
             let here = placed.presence[t.id]?.url

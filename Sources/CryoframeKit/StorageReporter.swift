@@ -17,6 +17,9 @@ public struct ArchiveSize: Sendable, Identifiable {
     public var bytes: UInt64
     /// kept from before its job changed kind (see LibraryFolders.isKept)
     public var kept: Bool = false
+    /// a plain-files copy's Removed items (see PlainCopy): this folder, which only the
+    /// person empties, in Storage
+    public var removedItems: URL? = nil
 }
 
 public struct JobStorage: Sendable, Identifiable {
@@ -52,6 +55,17 @@ public enum StorageReporter {
                     // without reading an evicted manifest: that would download it, and
                     // undo what the cloud upload check looks for (see CloudUpload)
                     for a in LibraryFolders.archives(job: job, library: library, in: t.destinationDir, downloading: false) {
+                        if a.format == .plainFiles {
+                            // the copy, and what was deleted from the library, kept beside it
+                            archives.append(ArchiveSize(library: a.libraryName, version: nil,
+                                                        bytes: JobExecutor.directorySize(a.dir.appendingPathComponent(a.bundleName))))
+                            let removed = a.dir.appendingPathComponent(PlainCopyLayout.removedFolder, isDirectory: true)
+                            if FileManager.default.fileExists(atPath: removed.path) {
+                                archives.append(ArchiveSize(library: "\(a.libraryName) · Removed items", version: nil,
+                                                            bytes: JobExecutor.directorySize(removed), removedItems: removed))
+                            }
+                            continue
+                        }
                         archives.append(ArchiveSize(library: a.libraryName, version: a.version,
                                                     bytes: JobExecutor.directorySize(a.dir), kept: LibraryFolders.isKept(a)))
                     }

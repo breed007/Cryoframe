@@ -155,6 +155,7 @@ public enum RestoreFailureText {
         case .destinationExists:         return "already exists in the destination — rename or move it, then try again"
         case .libraryNotFound:           return "library not found inside the archive"
         case .noManifest:                return "no checksum manifest beside the archive"
+        case .unfinishedPlainCopy(let name): return "the last update of “\(name)” was stopped before it finished, so it may be part old and part new; run its backup again, then restore it"
         case .notEnoughRoom(let needed, let free, let volume, let inPlace):
             return roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
         case .none: break
@@ -191,6 +192,7 @@ public enum RestoreFailureText {
             case .destinationExists(let p):  return "something is already at \((p as NSString).lastPathComponent) — it was left alone"
             case .libraryNotFound:           return "the archive didn't contain the library"
             case .noManifest:                return "no checksum manifest beside the archive"
+            case .unfinishedPlainCopy(let name): return "the last update of “\(name)” was stopped before it finished, so it may be part old and part new; run its backup again, then restore it"
             case .notEnoughRoom(let needed, let free, let volume, let inPlace):
                 return roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
             }
@@ -226,6 +228,7 @@ extension RestoreError: LocalizedError {
         case .libraryNotFound:                return "the archive didn't contain the library"
         case .destinationExists(let path):    return "something is already at \(path)"
         case .noManifest:                     return "no checksum manifest beside the archive"
+        case .unfinishedPlainCopy(let name): return "the last update of “\(name)” was stopped before it finished, so it may be part old and part new; run its backup again, then restore it"
         case .notEnoughRoom(let needed, let free, let volume, let inPlace):
             return RestoreFailureText.roomMessage(needed: needed, free: free, volume: volume, inPlace: inPlace)
         }

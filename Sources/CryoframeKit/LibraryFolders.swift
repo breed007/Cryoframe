@@ -68,8 +68,11 @@ public enum LibraryFolders {
     static func holdings(job: BackupJob, library: ContentType, in destination: URL,
                          downloading: Bool = true) -> [(folder: URL, archives: [RestorableArchive])] {
         let key = LibraryIdentity.key(job: job, library: library)
-        let mirror = !job.format.isSealed
-        func ofItsKind(_ a: RestorableArchive) -> Bool { mirror ? a.format == .liveMirror && a.version == nil : a.format != .liveMirror }
+        let mirror = !job.format.isSealed && !job.format.isPlainFiles
+        func ofItsKind(_ a: RestorableArchive) -> Bool {
+            if job.format.isPlainFiles { return a.format == .plainFiles }
+            return a.format == .plainFiles ? false : mirror ? a.format == .liveMirror && a.version == nil : a.format != .liveMirror
+        }
         let entries = listing(destination)
         // each archive as this library's, whatever folder it sits in: a version 1.5.6
         // wrote into a mirror job's folder, checked there, then moved home, is still
@@ -218,7 +221,9 @@ public enum LibraryFolders {
             .sorted { rank($0.url.lastPathComponent, library: library, key: key) < rank($1.url.lastPathComponent, library: library, key: key) }
             .first?.url
 
-        if folder == nil, let legacy, takesOver(legacy.url, key: key, in: destination, job: job, jobs: jobs) {
+        // a plain-files job (new in 1.7) never takes over a folder 1.5 wrote: it holds
+        // archives, and the job's copy is files
+        if folder == nil, !job.format.isPlainFiles, let legacy, takesOver(legacy.url, key: key, in: destination, job: job, jobs: jobs) {
             // taken over in place: every version in it is adopted, recorded in the same
             // write, so no run of this job prunes one before the person has said yes
             var taken = identity
@@ -279,6 +284,8 @@ public enum LibraryFolders {
             updated.adoptedVersions = adopted.isEmpty ? nil : adopted.sorted()
         }
         if current != updated { try updated.write(in: folder) }
+        // a plain-files job's folder holds only its own copy: nothing moves in or out
+        if job.format.isPlainFiles { return Prepared(folder: folder, notes: notes) }
 
         // Its sealed versions in any other folder of its name move in: a 1.5 folder it
         // shared with a mirror job, whichever of the two took it over first, or a
@@ -341,7 +348,7 @@ public enum LibraryFolders {
 
     static func claimants(named name: String, bundles: Set<String>, in destination: URL, jobs: [BackupJob]) -> [Claimant] {
         var seen = Set<String>(), out: [Claimant] = []
-        for job in jobs where job.targets.contains(where: { samePlace($0.destinationDir, destination) }) {
+        for job in jobs where !job.format.isPlainFiles && job.targets.contains(where: { samePlace($0.destinationDir, destination) }) {
             for lib in job.libraries where lib.answers(to: name) {
                 if !bundles.isEmpty {
                     guard bundles.contains(where: { isOf(lib, bundle: $0) }) else { continue }

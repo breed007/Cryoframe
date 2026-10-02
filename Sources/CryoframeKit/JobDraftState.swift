@@ -33,7 +33,7 @@ public struct JobDraftState: Sendable, Equatable {
     public var targets: [Target] = []
     public var selectedTargetIDs: [String] = []        // ordered; first is primary
 
-    public var formatKind = "mirror"                   // "mirror" | "zip" | "dmg"
+    public var formatKind = "mirror"                   // "mirror" | "plain" | "zip" | "dmg"
 
     public var verification: VerificationPolicy = .checksumOnly
     public var runPolicy: RunPolicy = .proceed
@@ -67,6 +67,8 @@ public struct JobDraftState: Sendable, Equatable {
     public let editingID: String?
     public let editingEncrypted: Bool
     public let editingMirrorGB: Int?     // the size an existing mirror job recorded (see FormatChoice.liveMirror)
+    /// the format of the job being edited (nil for a new job)
+    public let editingFormat: FormatChoice?
     public let editingEnabled: Bool
     public let editingCreatedAt: Date?
     public var isEditing: Bool { editingID != nil }
@@ -82,6 +84,7 @@ public struct JobDraftState: Sendable, Equatable {
         editingID = editing?.id
         editingEncrypted = editing?.encrypted ?? false
         if case .liveMirror(let g)? = editing?.format { editingMirrorGB = g } else { editingMirrorGB = nil }
+        editingFormat = editing?.format
         editingEnabled = editing?.enabled ?? true
         editingCreatedAt = editing?.createdAt
         dailyTime = calendar.date(bySettingHour: 2, minute: 0, second: 0, of: now) ?? now
@@ -99,10 +102,12 @@ public struct JobDraftState: Sendable, Equatable {
         switch formatKind {
         case "dmg": .sealedDMG
         case "zip": .sealedZip
+        case "plain": .plainFiles
         default: .liveMirror(sizeGB: editingMirrorGB ?? FormatChoice.legacyMirrorGB)
         }
     }
-    public var isSealed: Bool { formatKind != "mirror" }
+    public var isSealed: Bool { formatKind == "dmg" || formatKind == "zip" }
+    public var isPlainFiles: Bool { formatKind == "plain" }
     public var selectedLibraries: [ContentType] { libraries.filter { selectedLibraryIDs.contains($0.id) } }
     public var selectedTargets: [Target] { selectedTargetIDs.compactMap { id in targets.first { $0.id == id } } }
     public var primaryTarget: Target? { dedupedTargets.first }
@@ -172,10 +177,11 @@ public struct JobDraftState: Sendable, Equatable {
     /// don't overlap. `existing` is every saved job; the one being edited is skipped.
     public func destinationConflicts(existing: [BackupJob]) -> [String] {
         var out = Set<String>()
-        for job in existing where job.id != editingID && job.format.isSealed == isSealed {
+        for job in existing where job.id != editingID && job.format.isSealed == isSealed && job.format.isPlainFiles == isPlainFiles {
             for t in selectedTargets where job.targets.contains(where: { Self.samePlace($0.destinationDir, t.destinationDir) }) {
                 for lib in selectedLibraries where job.libraries.contains(where: { LibraryNames.same($0.displayName, lib.displayName) }) {
-                    out.insert("“\(job.name)” already keeps \(isSealed ? "dated versions" : "an up-to-date copy") of \(lib.displayName) at \(t.displayName)")
+                    let what = isSealed ? "dated versions" : isPlainFiles ? "plain files" : "an up-to-date copy"
+                    out.insert("“\(job.name)” already keeps \(what) of \(lib.displayName) at \(t.displayName)")
                 }
             }
         }
@@ -201,9 +207,51 @@ public struct JobDraftState: Sendable, Equatable {
         return out
     }
 
-    public func isValid(existing: [BackupJob], home: String = NSHomeDirectory()) -> Bool {
+    public func isValid(existing: [BackupJob], home: String = NSHomeDirectory(),
+                        profile: (Target) -> FileSystemProfile = { FileSystemProfile.of($0.destinationDir, target: $0) }) -> Bool {
         !selectedLibraries.isEmpty && !dedupedTargets.isEmpty && encryptionValid
             && destinationConflicts(existing: existing).isEmpty && pathIssues(home: home).isEmpty
+            && plainFilesIssues(profile: profile).isEmpty
+    }
+
+    // MARK: plain files
+
+    /// The format is chosen when a job is made. A plain-files job is kept apart from
+    /// the others (see JobStore) and its folder holds files, not a disk image or
+    /// versions, so neither becomes the other.
+    public var formatLocked: Bool { editingFormat?.isPlainFiles == true }
+
+    /// plain files are offered for a new job only (see formatLocked)
+    public var plainFilesOffered: Bool { !isEditing }
+
+    /// An app's library (Photos, Music…) kept as plain files on a drive that can't
+    /// hold it as its app needs (see FileSystemProfile.refusal): each, with why.
+    public func plainFilesIssues(profile: (Target) -> FileSystemProfile = { FileSystemProfile.of($0.destinationDir, target: $0) }) -> [String] {
+        guard isPlainFiles else { return [] }
+        var out: [String] = []
+        for t in dedupedTargets {
+            let p = profile(t)
+            for lib in selectedLibraries where lib.kind == .liveDB {
+                if let why = p.refusal(appLibrary: lib.owningProcess?.displayName ?? lib.displayName), !out.contains(why) { out.append(why) }
+            }
+        }
+        return out
+    }
+
+    /// What plain files mean, said once in the editor and in what saving does:
+    /// unencrypted (unless every destination is an encrypted drive), and what is
+    /// deleted from a library kept, with where to delete it. Messages are named only
+    /// when the job backs them up.
+    public func plainFilesNotice(encrypted: (Target) -> Bool = { MediaExportDrive.of($0.destinationDir).encrypted }) -> String? {
+        guard isPlainFiles else { return nil }
+        return Self.plainFilesNotice(libraries: selectedLibraries, encrypted: !dedupedTargets.isEmpty && dedupedTargets.allSatisfy(encrypted))
+    }
+
+    public static func plainFilesNotice(libraries: [ContentType], encrypted: Bool) -> String {
+        let messages = libraries.contains { $0.id.hasPrefix("com.apple.messages") }
+        let open = encrypted ? "" : "Plain files aren't encrypted: anyone with the drive can open them"
+            + (messages ? ", including photos and files from your messages. " : ". ")
+        return open + "What you delete from a library is kept in Removed items beside its copy, until you delete it in Storage."
     }
 
     public var defaultName: String {
@@ -227,7 +275,7 @@ public struct JobDraftState: Sendable, Equatable {
     public func makeJob(id: String, now: Date = Date(), calendar: Calendar = .current) -> BackupJob {
         // an existing job keeps its encryption exactly as it is (see encryptionLocked);
         // only a new job sets it
-        let encrypted = encryptionLocked ? editingEncrypted : encrypt
+        let encrypted = isPlainFiles ? false : encryptionLocked ? editingEncrypted : encrypt
         // a rotation needs two drives: one whose partners are on offer but weren't
         // chosen is a destination of its own (one saved alone is left as it was)
         var targets = dedupedTargets
@@ -462,6 +510,8 @@ public struct JobDraftState: Sendable, Equatable {
         case .sealedZip: formatKind = "zip"
         case .liveMirror:
             formatKind = "mirror"
+        case .plainFiles:
+            formatKind = "plain"
         }
         verification = job.verification; runPolicy = job.runPolicy; encrypt = job.encrypted
         switch job.retention {

@@ -366,7 +366,9 @@ public enum DestinationRules {
             var name = LibraryFolderName.choose(job: job, library: lib, in: folder)
             if planned.contains(where: { LibraryNames.same($0, name) }) { name = LibraryFolderName.make(job: job, library: lib) }
             planned.append(name)
-            let what = job.format.isSealed ? "a dated folder for each backup inside it" : "a disk image holding the copy"
+            let what = job.format.isSealed ? "a dated folder for each backup inside it"
+                : job.format.isPlainFiles ? "the library's files and folders inside it, and Removed items beside them"
+                : "a disk image holding the copy"
             return (true, "\(lib.displayName): creates \(folder.appendingPathComponent(name).path), with \(what)")
         }
     }

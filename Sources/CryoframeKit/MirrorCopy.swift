@@ -133,14 +133,19 @@ enum MirrorCopy {
     /// as the library has files (measured: 3.3 GB in 128,000 reads, 28 s from an exFAT
     /// disk image on an SSD; a card answers small reads far more slowly). Each part says
     /// how far it has got (see RunStep), the read-back in bytes.
-    static func verify(_ s: Staged, against source: URL, control: RunControl?) throws {
-        var found = try structure(of: s.next, against: source, previous: s.current, control: control)
+    ///
+    /// A plain-files copy (see PlainCopy) is checked the same way, less the items it
+    /// leaves out (`excluded`), and with its reads not cached (`uncached`): it has no
+    /// image to detach.
+    static func verify(_ s: Staged, against source: URL, control: RunControl?,
+                       excluded: Set<String> = [], uncached: Bool = false) throws {
+        var found = try structure(of: s.next, against: source, previous: s.current, control: control, excluded: excluded)
         // the bytes of everything this run wrote, several files at a time (opening a
         // file is most of the cost for small ones)
         control?.begin("Reading the copy back", stage: .verifying, unit: .bytes, total: found.writtenBytes)
         let mismatched = inParallel(found.written, control: control) { rel, x, y, size in
             byteDifference(source.appendingPathComponent(rel).path, s.next.appendingPathComponent(rel).path, x, y, size,
-                           control: control)
+                           control: control, uncached: uncached)
         }
         if control?.isCancelled == true { throw CancelledError() }
         control?.begin("Checking attributes", stage: .verifying, total: UInt64(found.present.count))
@@ -176,8 +181,11 @@ enum MirrorCopy {
     /// Compare `copy` with the library by structure: every path there with the same
     /// type, size, date, link target and flags, and nothing else. No file data is read.
     /// `title` is the step it shows as (see RunStep), item by item.
+    /// Items in `excluded` (paths relative to the library), and what is in them, aren't
+    /// compared: a plain-files copy leaves them out (see PlainCopy), or keeps what an
+    /// earlier run copied of them.
     static func structure(of copy: URL, against source: URL, previous: URL?, control: RunControl?,
-                          title: String = "Checking the copy") throws -> Differences {
+                          title: String = "Checking the copy", excluded: Set<String> = []) throws -> Differences {
         let fm = FileManager.default
         var found = Differences()
         var inLibrary = Set<String>()
@@ -190,6 +198,7 @@ enum MirrorCopy {
             if seen % 512 == 0, control?.isCancelled == true { throw CancelledError() }
             control?.advance()
             inLibrary.insert(rel)
+            if !excluded.isEmpty, isWithin(rel, excluded) { continue }
             var a = stat(), b = stat(), c = stat()
             guard lstat(source.appendingPathComponent(rel).path, &a) == 0 else { continue }
             if isLeftOut(a.st_mode) { inLibrary.remove(rel); continue }       // not mirrored (see isLeftOut)
@@ -222,10 +231,20 @@ enum MirrorCopy {
         }
         if let extra = fm.enumerator(atPath: copy.path) {
             while found.count < 1000, let rel = extra.nextObject() as? String {
-                if !inLibrary.contains(rel) { found.note(rel, "isn't in the library") }
+                if !inLibrary.contains(rel), excluded.isEmpty || !isWithin(rel, excluded) { found.note(rel, "isn't in the library") }
             }
         }
         return found
+    }
+
+    /// whether `rel` is one of `paths` or inside one
+    static func isWithin(_ rel: String, _ paths: Set<String>) -> Bool {
+        var p = Substring(rel)
+        while true {
+            if paths.contains(String(p)) { return true }
+            guard let slash = p.lastIndex(of: "/") else { return false }
+            p = p[..<slash]
+        }
     }
 
     /// `check` for each of `rels`, eight at a time; what it found wrong, by item. Each
@@ -322,8 +341,12 @@ enum MirrorCopy {
     ///
     /// What is read counts toward `control`'s step, and Stop ends the read part way
     /// through a file (nil: the caller sees the Stop).
+    ///
+    /// `uncached`: the copy's reads go around the cache (F_NOCACHE), for a copy on a
+    /// drive that can't be detached first. Best effort: pages already cached may still
+    /// be what is read (not measured).
     static func byteDifference(_ a: String, _ b: String, _ x: UnsafeMutableRawPointer, _ y: UnsafeMutableRawPointer,
-                               _ size: Int, control: RunControl? = nil) -> String? {
+                               _ size: Int, control: RunControl? = nil, uncached: Bool = false) -> String? {
         func failed(_ what: String) -> String { "\(what) (\(String(cString: strerror(errno))))" }
         let fa = open(a, O_RDONLY)
         guard fa >= 0 else { return failed("couldn't be read in the library") }
@@ -331,6 +354,7 @@ enum MirrorCopy {
         let fb = open(b, O_RDONLY)
         guard fb >= 0 else { return failed("couldn't be read back") }
         defer { close(fb) }
+        if uncached { _ = fcntl(fb, F_NOCACHE, 1) }
         func readSome(_ fd: Int32, _ into: UnsafeMutableRawPointer, _ n: Int) -> Int {
             while true {
                 let got = read(fd, into, n)
@@ -386,29 +410,56 @@ enum MirrorCopy {
     /// are put right, because FilteredCopy's relinking knows a file by them, and rsync
     /// sets whole seconds only (measured: .165958441 in the library, .000000000 in the
     /// copy). Run before them, it linked nothing.
+    ///
+    /// A plain-files copy on a Mac's drive (see PlainCopy) is made the same way, with
+    /// `options`: what it leaves out, and, updated where it is, without deleting what
+    /// the library no longer holds (PlainCopy keeps that in Removed items).
     @discardableResult
     static func sync(_ source: URL, into next: URL, runner: CommandRunner,
+                     options: SyncOptions = SyncOptions(),
                      beforeLocking: (() throws -> Void)? = nil,
                      execute: (Command) throws -> Void) throws -> [String] {
         unlock(next)
-        let leftOut = try update(source, into: next, runner: runner, execute: execute)     // takes out what is left out
+        let leftOut = try update(source, into: next, runner: runner, options: options, execute: execute)     // takes out what is left out
         if let beforeLocking {
             try matchSizesAndDates(from: source, to: next, control: runner.control)
             try beforeLocking()
         }
-        try finish(from: source, to: next, control: runner.control)
+        // an item left out must not lend its dates or attributes to the copy's item of a
+        // name the drive takes for the same (see PlainCopy)
+        try finish(from: source, to: next, control: runner.control, excluded: Set(options.excluded))
         return leftOut
     }
 
+    /// How `sync` makes a copy other than a mirror's
+    struct SyncOptions: Sendable, Equatable {
+        /// items of the library not copied, relative to it (see PlainCopy): no pass
+        /// copies them, and none deletes what of them the copy already holds
+        var excluded: [String] = []
+        /// The copy is the one a restore reads, updated where it is: rsync deletes
+        /// nothing (PlainCopy keeps what the library no longer holds), and keeps no
+        /// partly sent file (--partial would put one in place of the file it was
+        /// replacing when the run is stopped)
+        var inPlace = false
+    }
+
     /// `sync` up to `finish`
-    private static func update(_ source: URL, into next: URL, runner: CommandRunner,
+    private static func update(_ source: URL, into next: URL, runner: CommandRunner, options: SyncOptions,
                                execute: (Command) throws -> Void) throws -> [String] {
         let survey = survey(source)
-        let readOnly = survey.readOnly, leftOut = survey.leftOut, sparse = survey.sparse
+        let skip = Set(options.excluded)
+        func kept(_ rels: [String]) -> [String] { skip.isEmpty ? rels : rels.filter { !isWithin($0, skip) } }
+        let readOnly = kept(survey.readOnly), leftOut = survey.leftOut, sparse = kept(survey.sparse)
+        let delete = options.inPlace ? [] : ["--delete", "--partial"]
         defer { removeLeftOut(in: next) }
-        guard !readOnly.isEmpty || !leftOut.isEmpty || !sparse.isEmpty else {
-            try execute(ArchivePlan.rsync(root: source, into: next))
+        guard !readOnly.isEmpty || !leftOut.isEmpty || !sparse.isEmpty || !skip.isEmpty else {
+            try execute(ArchivePlan.rsync(root: source, into: next, inPlace: options.inPlace))
             return []
+        }
+        // A name holding a backslash can't be matched by a filter, and is then copied
+        // with no filter at all (see below), which would copy what is to be left out.
+        if !skip.isEmpty, let named = (readOnly + leftOut + sparse + options.excluded).first(where: { $0.contains("\\") }) {
+            throw MirrorCopyError.cantLeaveOut(named)
         }
         let fm = FileManager.default
         let lists = fm.temporaryDirectory.appendingPathComponent("cf-rsync-\(UUID().uuidString)")
@@ -417,7 +468,7 @@ enum MirrorCopy {
         let exclude = lists.appendingPathComponent("exclude"), files = lists.appendingPathComponent("files")
         // NUL-separated (-0), so no name can break a line; excludes anchored to the
         // top of the transfer, with rsync's pattern characters escaped
-        try Data((readOnly + leftOut + sparse).map { "/" + escapedPattern($0) + "\0" }.joined().utf8).write(to: exclude)
+        try Data((readOnly + leftOut + sparse + options.excluded).map { "/" + escapedPattern($0) + "\0" }.joined().utf8).write(to: exclude)
         // "./" first: openrsync reads a --files-from line starting with "#" or ";" as a
         // comment, even NUL-separated, and skipped those files without a word
         try Data(readOnly.map { "./" + $0 + "\0" }.joined().utf8).write(to: files)
@@ -434,11 +485,11 @@ enum MirrorCopy {
             // whole; copySparse then puts it back with its holes.)
             let others = lists.appendingPathComponent("others")
             try Data(everythingBut(readOnly + leftOut + sparse, in: source).map { "./" + $0 + "\0" }.joined().utf8).write(to: others)
-            try execute(Command("/usr/bin/rsync", ["-rlptgo", "-S", "--delete", "--partial", source.path + "/", next.path + "/"]))
+            try execute(Command("/usr/bin/rsync", ["-rlptgo", "-S"] + delete + [source.path + "/", next.path + "/"]))
             try execute(Command("/usr/bin/rsync", ["-lptgoDE", "-S", "-0", "--files-from=\(others.path)", source.path + "/", next.path + "/"]))
             try copyAttributes(from: source, to: next)
         } else {
-            try execute(ArchivePlan.rsync(root: source, into: next, extra: ["-0", "--exclude-from=\(exclude.path)"]))
+            try execute(ArchivePlan.rsync(root: source, into: next, extra: ["-0", "--exclude-from=\(exclude.path)"], inPlace: options.inPlace))
             if !readOnly.isEmpty {
                 try execute(Command("/usr/bin/rsync", ["-a", "-S", "-0", "--files-from=\(files.path)", source.path + "/", next.path + "/"]))
             }
@@ -659,10 +710,12 @@ enum MirrorCopy {
     /// Deepest first, so a folder is made read-only, dated and locked only once
     /// everything in it is done. Anything that can't be set is left for the read-back
     /// to name.
-    static func finish(from source: URL, to copy: URL, control: RunControl?) throws {
+    static func finish(from source: URL, to copy: URL, control: RunControl?, excluded: Set<String> = []) throws {
         var rels = [""]
         if let walker = FileManager.default.enumerator(atPath: source.path) {
-            while let rel = walker.nextObject() as? String { rels.append(rel) }
+            while let rel = walker.nextObject() as? String {
+                if excluded.isEmpty || !isWithin(rel, excluded) { rels.append(rel) }
+            }
         }
         let depth = rels.map { $0.isEmpty ? 0 : $0.utf8.reduce(1) { $1 == UInt8(ascii: "/") ? $0 + 1 : $0 } }
         let order = rels.indices.sorted { depth[$0] > depth[$1] }
@@ -930,6 +983,9 @@ public enum MirrorCopyError: Error, Equatable {
     case imageWentAway(String)
     case swapFailed(String)
     case driveFilled
+    /// an item a plain-files copy leaves out has a backslash in its name, which no rsync
+    /// filter can match (see MirrorCopy.sync)
+    case cantLeaveOut(String)
     /// the drive came close to full while the image was being written: another program
     /// was writing to it too. `swapped`: the new copy had already gone in place.
     case driveFilledByAnother(swapped: Bool)
@@ -979,6 +1035,8 @@ extension MirrorCopyError: LocalizedError {
             return "the mirror was updated, but its top folder didn't come through as the library has it (\(why)), so this run doesn't count. Everything inside it is in place; the next run puts it right."
         case .swapFailed(let why):
             return "couldn't put the updated copy in place (\(why)); the previous copy is untouched — run again"
+        case .cantLeaveOut(let name):
+            return "couldn't update the copy: “\(name)” has a backslash in its name, and while other items have to be left out of the copy, one with a backslash can't be told apart from them. Rename it and run again."
         }
     }
 }

@@ -179,6 +179,14 @@ public struct ArchiveReader: Sendable {
                 let borrowed = try attach(result.artifacts[0], at: mnt, work: work, encrypted: enc, stdin: stdin)
                 return OpenedArchive(root: mnt, work: work) { Self.close(mnt, borrowed: borrowed, runner: teardown) }
 
+            case .plainFiles:
+                // nothing to open: the copy is ordinary files in its library folder,
+                // read where they are (see PlainCopy)
+                guard let copy = result.artifacts.first, fm.fileExists(atPath: copy.path) else {
+                    throw ArchiveError.sourceMissing(result.artifacts.first?.path ?? "")
+                }
+                return OpenedArchive(root: copy.deletingLastPathComponent(), work: work) {}
+
             case .sealedZip:
                 let zip = try singleFile(result.artifacts, work: work, name: "reassembled.zip", fm: fm)
                 // a zip is unpacked whole into the work folder (on the startup disk)

@@ -109,6 +109,7 @@ public enum RecoveryKit {
         case .sealedDMG: return .sealedDMG
         case .sealedZip: return .sealedZip
         case .liveMirror: return .liveMirror
+        case .plainFiles: return .plainFiles
         }
     }
 

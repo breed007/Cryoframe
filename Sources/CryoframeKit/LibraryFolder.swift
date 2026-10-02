@@ -63,6 +63,32 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
     /// that does and said yes (see BackupJob.adoptionConsents); until then each is
     /// left as it is.
     public var adoptedVersions: [String]?
+    /// Set when the folder holds a plain-files copy (see PlainCopy): the drive it was
+    /// last written to and what that drive doesn't keep. An older version ignores it,
+    /// and, the folder holding no versions and no disk image, has nothing to do with it.
+    public var files: PlainFiles?
+
+    public struct PlainFiles: Codable, Sendable, Equatable {
+        /// how the drive is called ("an exFAT drive")
+        public var fileSystem: String
+        /// what it doesn't keep of the library (see FileSystemProfile.dropped)
+        public var dropped: [String]
+        /// the copy's folder name, in the library folder (the library's own name on disk)
+        public var copy: String?
+        /// what the library took when it was last copied
+        public var bytes: UInt64?
+        /// when the copy was last brought up to date
+        public var updated: Date?
+        /// the copy's file list, beside it (see ContentsListing)
+        public var contents: ContentsDigest?
+
+        public init(fileSystem: String, dropped: [String], copy: String? = nil, bytes: UInt64? = nil,
+                    updated: Date? = nil, contents: ContentsDigest? = nil) {
+            self.fileSystem = fileSystem; self.dropped = dropped; self.copy = copy; self.bytes = bytes
+            self.updated = updated; self.contents = contents
+        }
+        public init(_ profile: FileSystemProfile) { self.init(fileSystem: profile.described, dropped: profile.dropped) }
+    }
 
     public struct KeptMirror: Codable, Sendable, Equatable {
         /// the disk image's file name
@@ -79,7 +105,9 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
 
     public init(job: BackupJob, library: ContentType) {
         self.init(jobID: job.id, libraryID: library.id, name: library.displayName, jobName: job.name)
-        mirror = job.format.isSealed ? nil : true
+        // a plain-files job's folder is neither: nil reads as sealed versions to an
+        // older version, which then finds none here and leaves the folder alone
+        mirror = job.format.isSealed || job.format.isPlainFiles ? nil : true
     }
 
     public static func key(jobID: String, libraryID: String) -> String { "\(jobID)/\(libraryID)" }
@@ -112,6 +140,7 @@ public struct LibraryIdentity: Codable, Sendable, Equatable {
         out.ownHeldVersions = previous.ownHeldVersions
         out.keptMirror = previous.keptMirror
         out.adoptedVersions = previous.adoptedVersions
+        out.files = previous.files
         return out
     }
 

@@ -15,6 +15,7 @@ ab
 abcdef
 about
 above
+accents
 access
 acl
 add
@@ -24,6 +25,7 @@ administrator's
 adobe
 ae
 aes
+afpfs
 afresh
 after
 afterwards
@@ -48,6 +50,7 @@ anchor
 and
 angled
 another
+another's
 answer
 answering
 any
@@ -58,6 +61,7 @@ apfs
 apfsvolumeuuid
 aplibrary
 app
+app's
 appeared
 append
 apple
@@ -76,6 +80,7 @@ arrow
 artifact
 artifactnames
 as
+aside
 asking
 asks
 at
@@ -94,6 +99,7 @@ axo
 back
 backed
 backing
+backslash
 backup
 backup's
 backups
@@ -134,10 +140,12 @@ came
 can
 can't
 canceled
+capitals
 capture
 captureone
 cat
 catalog
+caught
 cd
 certificate
 cf
@@ -172,6 +180,7 @@ cloud
 clouddocs
 cloudprovider
 cloudstorage
+cluster
 com
 come
 comes
@@ -181,6 +190,7 @@ compact
 compacting
 compare
 compared
+comparing
 complete
 completed
 compressed
@@ -217,6 +227,7 @@ covers
 cp
 create
 creates
+creation
 critical
 cryoframe
 cryoframe's
@@ -232,6 +243,7 @@ data
 database
 date
 dated
+dates
 day
 days
 db
@@ -262,7 +274,9 @@ device
 diagnostics
 did
 didn't
+differ
 different
+differently
 differs
 digits
 dir
@@ -291,6 +305,7 @@ drive
 drive's
 drives
 dropbox
+dropped
 ds
 during
 each
@@ -316,6 +331,7 @@ entries
 entry
 errno
 error
+especially
 etc
 even
 every
@@ -362,6 +378,7 @@ finder's
 finds
 finish
 finished
+finishes
 finishing
 first
 fit
@@ -411,6 +428,8 @@ group
 gz
 had
 hand
+happens
+hard
 hardware
 has
 hasn't
@@ -480,7 +499,6 @@ isactive
 isempty
 isencrypted
 isn't
-issealed
 it
 it's
 item
@@ -517,6 +535,7 @@ lastnotified
 later
 leaf
 least
+leave
 leaves
 left
 leftovers
@@ -531,6 +550,7 @@ lightroomclassiccc
 likely
 limits
 link
+links
 list
 listlocalsnapshots
 lists
@@ -552,6 +572,7 @@ lost
 low
 lptgode
 ls
+lt
 mac
 mac's
 machine
@@ -568,6 +589,7 @@ makes
 manage
 manifest
 manual
+many
 map
 mark
 marked
@@ -601,6 +623,8 @@ mm
 mnt
 mobile
 mobilesms
+modification
+modify
 month
 monthly
 months
@@ -612,6 +636,7 @@ mountpoint
 move
 moved
 movies
+moving
 ms
 msdos
 much
@@ -632,6 +657,7 @@ new
 newer
 newest
 next
+nfs
 nightly
 no
 noautofsck
@@ -643,6 +669,7 @@ none
 not
 note
 nothing
+nouchg
 noverify
 now
 ntfy
@@ -670,6 +697,8 @@ operation
 opt
 or
 order
+ordinary
+os
 other
 others
 ou
@@ -712,6 +741,7 @@ pid
 pipe
 pipes
 place
+plain
 plist
 pluginpayloadattachment
 plus
@@ -745,6 +775,7 @@ puppetstrings
 purgeable
 put
 puts
+putting
 quarantine
 quick
 quiet
@@ -851,6 +882,7 @@ separator
 sequesterrsrc
 service
 set
+setting
 settings
 setxattr
 sha
@@ -867,12 +899,14 @@ size
 sizes
 skipped
 skips
+smbfs
 snap
 snapshot
 snapshots
 so
 socket
 sockets
+some
 something
 somewhere
 sort
@@ -882,6 +916,7 @@ spaces
 spare
 sparse
 sparsebundle
+spelled
 split
 spotlight
 sqlite
@@ -907,6 +942,7 @@ still
 stolen
 stop
 stopped
+storage
 store
 strerror
 string
@@ -1008,6 +1044,7 @@ update
 updated
 upload
 uploaded
+uploads
 url
 us
 use
@@ -1043,6 +1080,7 @@ was
 wasn't
 way
 web
+webdav
 webhook
 week
 weekly

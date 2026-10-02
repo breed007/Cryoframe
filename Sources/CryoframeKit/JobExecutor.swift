@@ -257,8 +257,10 @@ public struct JobExecutor: Sendable {
         let runner = ProcessCommandRunner(control: control)
         let sealed = Self.sealedKind(job.format)
         let count = job.libraries.count
-        let passphrase = job.encrypted ? passphraseProvider(job.id) : nil
-        if job.encrypted, passphrase?.isEmpty ?? true { throw ArchiveError.passphraseUnavailable }
+        // plain files can't be encrypted (the editor doesn't offer it)
+        let encrypted = job.encrypted && !job.format.isPlainFiles
+        let passphrase = encrypted ? passphraseProvider(job.id) : nil
+        if encrypted, passphrase?.isEmpty ?? true { throw ArchiveError.passphraseUnavailable }
 
         // Each library's folder at each destination it can reach, found by identity:
         // taken over from 1.5 or made new (see LibraryFolders), before anything is
@@ -463,6 +465,47 @@ public struct JobExecutor: Sendable {
                     catch {
                         poller.cancel()
                         for t in live { results.append(.failed(library: library.displayName, destination: t.displayName, error: Self.failureText(error))) }
+                    }
+                } else if job.format.isPlainFiles {
+                    // PLAIN FILES: the copy brought up to date per destination, from the
+                    // snapshot (see PlainCopy). It checks its own room.
+                    if let note = stats.dmgBlockers.leftOutOfPlainCopy(library: library.displayName) { notes.append(note) }
+                    for d in dests {
+                        if control.isCancelled { cancelled = true; break libraryLoop }
+                        let t = d.target
+                        guard d.available else {
+                            results.append(.failed(library: library.displayName, destination: t.displayName,
+                                                   error: "\(t.displayName) is unavailable — \(d.reason ?? "not reachable")"))
+                            continue
+                        }
+                        guard let libDir = folderOf[t.id]?[library.id] else {
+                            results.append(.failed(library: library.displayName, destination: t.displayName,
+                                                   error: folderFailures[t.id]?[library.id] ?? "\(t.displayName) is unavailable"))
+                            continue
+                        }
+                        let profile = FileSystemProfile.of(libDir, target: t)
+                        if library.kind == .liveDB, let why = profile.refusal(appLibrary: library.owningProcess?.displayName ?? library.displayName) {
+                            results.append(.failed(library: library.displayName, destination: t.displayName, error: why))
+                            continue
+                        }
+                        onStage(.archiving)
+                        let poller = self.archivePoller(total: stats.copyBytes, outputDir: libDir, idx: idx, count: count,
+                                                        control: control, onStage: onStage, onProgress: onProgress)
+                        do {
+                            // read live, not from a snapshot: the list may not say what the copy holds
+                            let live = placement.volume.map { mounts[$0.mountPoint] == nil } ?? true
+                            let (result, said) = try Self.plainFiles(job: job, library: library, source: source, folder: libDir, target: t,
+                                                                     profile: profile, bytes: stats.copyBytes, partial: live,
+                                                                     now: now, runner: runner)
+                            poller.cancel()
+                            results.append(result)
+                            notes.append(contentsOf: said)
+                        } catch is CancelledError {
+                            poller.cancel(); cancelled = true; break libraryLoop
+                        } catch {
+                            poller.cancel()
+                            results.append(.failed(library: library.displayName, destination: t.displayName, error: Self.failureText(error)))
+                        }
                     }
                 } else {
                     // LIVE MIRROR: an in-place incremental rsync per destination, from
@@ -1329,6 +1372,40 @@ public struct JobExecutor: Sendable {
                           parts: archive.artifacts.count, bytes: bytes, verified: verified)
     }
 
+    /// Bring a library's plain-files copy in `folder` up to date (see PlainCopy), and
+    /// record in its identity what the drive keeps. What the run says: what it left
+    /// out, and, the first time, what a drive that isn't a Mac's doesn't keep.
+    static func plainFiles(job: BackupJob, library: ContentType, source: ArchiveSource, folder: URL, target: Target,
+                           profile: FileSystemProfile, bytes: UInt64, partial: Bool, now: Date,
+                           runner: CommandRunner) throws -> (LibraryRunResult, [String]) {
+        // the copy's file list, for Find a File, bound to the folder it sits in (a
+        // plain-files copy has no versions); never encrypted, as the copy isn't
+        let listing = ContentsListing.Collector(binding: ContentsCrypto.Binding(jobID: job.id, libraryID: library.id,
+                                                                                version: folder.lastPathComponent))
+        if partial { listing.markPartial() }
+        // recorded before the first copy starts, so a first run stopped part way is
+        // still found by Restore, which says it didn't finish
+        let finishedBefore = LibraryIdentity.read(in: folder)?.files?.updated != nil
+        if var identity = LibraryIdentity.read(in: folder), identity.files == nil {
+            identity.files = LibraryIdentity.PlainFiles(fileSystem: profile.described, dropped: profile.dropped,
+                                                        copy: source.root.lastPathComponent)
+            try? identity.write(in: folder)
+        }
+        let out = try PlainCopy(profile: profile, runner: runner).run(source.root, in: folder, listing: listing)
+        var said = out.notes.map { "\(library.displayName) at \(target.displayName): \($0)" }
+        let contents = ContentsListing.write(listing, master: nil, encrypted: false, into: folder)?.digest
+        if var identity = LibraryIdentity.read(in: folder) {
+            let record = LibraryIdentity.PlainFiles(fileSystem: profile.described, dropped: profile.dropped,
+                                                    copy: source.root.lastPathComponent, bytes: bytes, updated: now, contents: contents)
+            if !finishedBefore, !record.dropped.isEmpty {
+                said.append("\(library.displayName) is kept as plain files on \(target.displayName), \(profile.described), which doesn't keep \(record.dropped.joined(separator: ", ")). Names, contents, modification dates and folders are all there.")
+            }
+            identity.files = record
+            try? identity.write(in: folder)
+        }
+        return (.completed(library: library.displayName, destination: target.displayName, parts: 1, bytes: bytes, verified: nil), said)
+    }
+
     private func cleanupBuild(_ b: SealedBuild) {
         FilteredCopy.remove(in: b.buildDir, runner: ProcessCommandRunner())
         try? FileManager.default.removeItem(at: b.buildDir)
@@ -1340,7 +1417,7 @@ public struct JobExecutor: Sendable {
         switch format {
         case .sealedDMG: return .dmg
         case .sealedZip: return .zip
-        case .liveMirror: return nil
+        case .liveMirror, .plainFiles: return nil
         }
     }
 

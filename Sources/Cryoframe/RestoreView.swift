@@ -603,6 +603,9 @@ struct RestoreView: View {
                     Label(warning, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2).foregroundStyle(.cryoWarn).lineLimit(3)
                 }
+                ForEach(plainFilesNotes(v), id: \.self) { note in
+                    Text(note).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if effectiveMode == .inPlace {
                     Text("This version is verified and copied beside your live library, then swapped in; the live library moves to the Trash.")
                         .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
@@ -644,6 +647,11 @@ struct RestoreView: View {
             }
             Button("Browse…") { r.browse(v) }
                 .disabled(v.encrypted && r.passphrase.isEmpty)
+            if v.format == .plainFiles, !isPackage(v.dir.appendingPathComponent(v.bundleName)) {
+                // an app's library isn't offered: opened from Finder, its app would
+                // change the backup (see plainFilesNotes)
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([v.dir.appendingPathComponent(v.bundleName)]) }
+            }
             if MediaExportScope.isOffered(v) {
                 Button("Export Media…") { exporting = v }
                     .disabled(v.encrypted && r.passphrase.isEmpty)
@@ -656,6 +664,27 @@ struct RestoreView: View {
     }
 
     // MARK: - actions & helpers
+
+    /// What Restore says of a plain-files copy: an update stopped part way, what the
+    /// drive doesn't keep, and that an app's library is copied back before it is opened.
+    private func plainFilesNotes(_ v: RestorableArchive) -> [String] {
+        guard v.format == .plainFiles else { return [] }
+        var out: [String] = []
+        if PlainCopyLayout.isOpen(v.dir) {
+            out.append("The last update was stopped before it finished; some files may be from the update before.")
+        }
+        if let files = LibraryIdentity.read(in: v.dir)?.files, !files.dropped.isEmpty {
+            out.append("Plain files on \(files.fileSystem), which doesn't keep \(files.dropped.joined(separator: ", ")).")
+        }
+        if isPackage(v.dir.appendingPathComponent(v.bundleName)) {
+            out.append("Restore it to open it: opened where it is, its app would change the backup.")
+        }
+        return out
+    }
+
+    private func isPackage(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isPackageKey]))?.isPackage == true
+    }
 
     private func doRestore(_ v: RestorableArchive) {
         switch effectiveMode {
@@ -711,7 +740,7 @@ struct RestoreView: View {
     }
 
     private func formatLabel(_ f: ArchiveFormat) -> String {
-        switch f { case .sealedDMG: "Sealed DMG"; case .sealedZip: "Sealed zip"; case .liveMirror: "Live mirror" }
+        switch f { case .sealedDMG: "Sealed DMG"; case .sealedZip: "Sealed zip"; case .liveMirror: "Live mirror"; case .plainFiles: "Plain files" }
     }
 
     private func sizeStr(_ b: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .file) }

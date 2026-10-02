@@ -234,7 +234,7 @@ struct FindFileView: View {
     }
 
     private func versionName(_ a: RestorableArchive) -> String {
-        a.version.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "Current mirror"
+        a.version.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? (a.format == .plainFiles ? "Plain files" : "Current mirror")
     }
 
     private func lookInside(_ a: RestorableArchive) -> some View {

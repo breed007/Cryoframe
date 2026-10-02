@@ -201,7 +201,7 @@ public struct RecoveryRehearsal: Sendable {
             // A mirror holds the library at <volume>/<name>, which is what a restore
             // copies. Its volume root is never empty (.fseventsd), so looking there
             // passed a mirror a restore would find nothing in.
-            let look = a.format == .liveMirror ? opened.root.appendingPathComponent(a.bundleName) : opened.root
+            let look = a.format == .liveMirror || a.format == .plainFiles ? opened.root.appendingPathComponent(a.bundleName) : opened.root
             let entries = (try? FileManager.default.contentsOfDirectory(atPath: look.path)) ?? []
             guard !entries.isEmpty else {
                 return LibraryOutcome(library: a.libraryName, key: LibraryFolders.checkKey(of: a), version: a.version, ok: false,
@@ -249,6 +249,7 @@ public struct RecoveryRehearsal: Sendable {
         if let r = e as? RestoreError {
             switch r {
             case .noManifest:                return "no checksum manifest beside the archive"
+            case .unfinishedPlainCopy(let name): return "the last update of “\(name)” was stopped before it finished, so it may be part old and part new; run its backup again, then restore it"
             case .verificationFailed(let d): return "checksums don't match — \(d)"
             case .libraryNotFound:           return "the archive didn't contain the library"
             case .destinationExists:         return "something is already in the way"

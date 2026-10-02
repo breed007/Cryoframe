@@ -98,6 +98,21 @@ public struct HealthChecker: Sendable {
                 }
                 CloudFile.materialize(archive)
             }
+            // Plain files have no checksums to compare: they were read back against the
+            // library when they were copied. The check is that the copy is there, and
+            // that its last update finished; one stopped part way is finished by the
+            // next backup, and isn't counted either way.
+            if archive.format == .plainFiles {
+                let present = FileManager.default.fileExists(atPath: archive.dir.appendingPathComponent(archive.bundleName).path)
+                let open = PlainCopyLayout.isOpen(archive.dir)
+                checks.append(ArchiveCheck(library: archive.libraryName, version: nil, passed: present,
+                                           detail: !present ? "the copy is missing"
+                                               : open ? "the last update was stopped before it finished; the next backup finishes it"
+                                               : "plain files: the copy is there, read back when it was last updated",
+                                           destination: multiDest ? t.displayName : nil, skipped: present && open,
+                                           libraryKey: archive.libraryKey))
+                continue
+            }
             // a checksum that wasn't compared isn't a verified archive: say so,
             // and don't count it either way (see MirrorSeal)
             let report = try? verifier.reverify(archiveDir: archive.dir)

@@ -29,6 +29,9 @@ public struct ArchiveSource: Sendable, Equatable {
 
 public enum ArchiveFormat: String, Sendable, Equatable, Codable {
     case sealedDMG, sealedZip, liveMirror
+    /// ordinary files and folders in a library folder (see PlainCopy). Never written
+    /// into anything an older version reads: a plain folder has no manifest.
+    case plainFiles
 }
 
 public enum SplitPolicy: Sendable, Equatable {
@@ -138,8 +141,12 @@ public enum ArchivePlan {
     /// -S keeps a sparse file sparse. Without it a virtual machine's 1 GiB disk
     /// holding 8 KB was written out whole inside the image (1 GB of bands, measured),
     /// where the room check and the image's cap count what the file takes on disk.
-    public static func rsync(root: URL, into destination: URL, extra: [String] = []) -> Command {
-        Command("/usr/bin/rsync", ["-aE", "-S", "--delete", "--partial"] + extra + [root.path + "/", destination.path + "/"])
+    ///
+    /// `inPlace`: a plain-files copy updated where it is (see PlainCopy), which keeps
+    /// what the library no longer holds itself, and can't keep a partly sent file
+    /// (--partial would put it in place of the file it was replacing).
+    public static func rsync(root: URL, into destination: URL, extra: [String] = [], inPlace: Bool = false) -> Command {
+        Command("/usr/bin/rsync", ["-aE", "-S"] + (inPlace ? [] : ["--delete", "--partial"]) + extra + [root.path + "/", destination.path + "/"])
     }
 }
 

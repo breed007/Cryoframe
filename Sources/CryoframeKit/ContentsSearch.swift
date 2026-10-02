@@ -287,7 +287,7 @@ public enum ArchiveLayout {
         switch archive.format {
         case .sealedDMG:
             return (try? named.resourceValues(forKeys: [.isPackageKey]))?.isPackage == true ? named : opened
-        case .sealedZip, .liveMirror:
+        case .sealedZip, .liveMirror, .plainFiles:
             return named
         }
     }

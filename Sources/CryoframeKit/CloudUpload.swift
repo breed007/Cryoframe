@@ -397,6 +397,7 @@ public struct UploadCheck: Sendable {
     /// instead (a cloud folder backed up before this check existed).
     public func refresh(job: BackupJob, target: Target, now: Date = Date()) -> UploadSummary {
         let key = DestinationKey(jobID: job.id, targetID: target.id)
+        if let plain = Self.plainFiles(job) { return plain }
         if let away = Self.folderAway(target) { return away }
         guard let d = ledger.destination(key), d.scannedAt != nil else { return rescan(job: job, target: target, now: now) }
         let provider = target.cloudProvider ?? CloudProvider.identify(target.destinationDir)
@@ -423,6 +424,7 @@ public struct UploadCheck: Sendable {
     /// record over from what is found.
     public func rescan(job: BackupJob, target: Target, now: Date = Date()) -> UploadSummary {
         let key = DestinationKey(jobID: job.id, targetID: target.id)
+        if let plain = Self.plainFiles(job) { return plain }
         if let away = Self.folderAway(target) { return away }
         let provider = target.cloudProvider ?? CloudProvider.identify(target.destinationDir)
         let versions = Self.versions(job: job, target: target)
@@ -452,6 +454,12 @@ public struct UploadCheck: Sendable {
     static func versions(job: BackupJob, target: Target) -> [RestorableArchive] {
         job.libraries.flatMap { LibraryFolders.archives(job: job, library: $0, in: target.destinationDir, downloading: false) }
             .filter { $0.version != nil }
+    }
+
+    /// Plain files (see PlainCopy) are many files, each uploaded on its own, with no
+    /// version to follow: never recorded, and said to be unknown.
+    static func plainFiles(_ job: BackupJob) -> UploadSummary? {
+        job.format.isPlainFiles ? .unknown("Plain files are uploaded one by one, so whether all of them are uploaded can't be told here.") : nil
     }
 
     /// A cloud folder that isn't there (the provider signed out or removed, the folder

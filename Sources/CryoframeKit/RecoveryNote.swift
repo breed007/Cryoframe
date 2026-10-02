@@ -153,6 +153,18 @@ public enum RecoveryNote {
                     "Don't change anything on that disk or inside the .sparsebundle: that is the backup.",
                     "In Terminal, to open it read-only:  hdiutil attach -readonly \"NAME.sparsebundle\"",
                     ""]
+        case .plainFiles:
+            return ["TO OPEN PLAIN FILES",
+                    "",
+                    "1. Open the library's folder. The folder inside it named after the library is the",
+                    "   backup: ordinary files and folders. Copy what you need to your Mac.",
+                    "2. \"Removed items\" beside it holds what was deleted from the library, in a",
+                    "   folder for each day.",
+                    "",
+                    "Don't change or open anything there in place (an app's library especially): copy",
+                    "it to your Mac first. If the folder holds .cryoframe-copy-open, the last update was",
+                    "stopped before it finished, and some files may be from the update before.",
+                    ""]
         }
     }
 
@@ -188,11 +200,12 @@ public enum RecoveryNote {
         case .sealedDMG: return "sealed disk image (.dmg)"
         case .sealedZip: return "sealed zip (.zip)"
         case .liveMirror: return "live mirror (.sparsebundle)"
+        case .plainFiles: return "plain files (ordinary folders)"
         }
     }
 }
 
 extension ArchiveFormat {
     /// the order the note and the kit explain formats in
-    public static let noteOrder: [ArchiveFormat] = [.sealedDMG, .sealedZip, .liveMirror]
+    public static let noteOrder: [ArchiveFormat] = [.sealedDMG, .sealedZip, .liveMirror, .plainFiles]
 }
