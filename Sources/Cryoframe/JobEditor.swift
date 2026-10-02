@@ -175,7 +175,7 @@ struct JobEditor: View {
             }
             .buttonStyle(.link)
             issueList(sourceIssues)
-            ForEach(draft.libraryNameClashes, id: \.self) { c in
+            ForEach(draft.libraryNameClashes + draft.state.libraryOverlaps, id: \.self) { c in
                 Label(c, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
             }
         } header: { Text("Back up") }

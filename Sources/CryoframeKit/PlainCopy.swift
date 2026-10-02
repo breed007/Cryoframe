@@ -80,6 +80,8 @@ public enum PlainCopyExclusion: Sendable, Equatable {
     case nameRefused
     /// a FAT32 folder has no room left for it
     case folderFull
+    /// the library leaves it out of every backup (see ContentType.leavesOut); not said
+    case leftOutByLibrary
 }
 
 /// What a plain-files copy will do, worked out before it changes anything.
@@ -143,10 +145,13 @@ struct PlainCopyPlanner {
     /// kind that leaves them. Otherwise it is the library's own (".backup.2026100201"
     /// beside "backup"), kept in Removed items when the library deletes it.
     let sweepsTemps: Bool
+    /// what the library leaves out of its backups, relative to it (see ArchiveSource)
+    let leftOutByLibrary: Set<String>
 
     init(profile: FileSystemProfile, accepts: @escaping (String) -> Bool = { _ in true }, control: RunControl? = nil,
-         sweepsTemps: Bool = false) {
+         sweepsTemps: Bool = false, excluded: [String] = []) {
         self.profile = profile; self.accepts = accepts; self.control = control; self.sweepsTemps = sweepsTemps
+        self.leftOutByLibrary = Set(excluded)
     }
 
     /// Characters a drive that isn't a Mac's may refuse in a name (Windows' rules). On
@@ -200,6 +205,7 @@ struct PlainCopyPlanner {
             guard lstat(sourceDir + "/" + name, &st) == 0 else { continue }
             let id = profile.identity(of: name)
             allIdentities.insert(id)
+            if leftOutByLibrary.contains(join(name)) { plan.excluded.append((join(name), .leftOutByLibrary)); continue }
             if MirrorCopy.isLeftOut(st.st_mode) { plan.leftOut.append(join(name)); continue }
             if !profile.keepsMacDetails, name.hasPrefix("._"), nameSet.contains(String(name.dropFirst(2))) {
                 plan.excluded.append((join(name), .companionName)); continue
@@ -415,8 +421,10 @@ public struct PlainCopy {
 
     /// Bring the copy of `source` in `folder` (the library's folder) up to date.
     /// `listing`, when given, is handed every item the copy holds once it is up to
-    /// date (Find a File's list; see ContentsListing).
-    public func run(_ source: URL, in folder: URL, listing: ContentsListing.Collector? = nil) throws -> PlainCopyOutcome {
+    /// date (Find a File's list; see ContentsListing). `excluded`: what the library
+    /// leaves out of its backups (see ArchiveSource), copied by no run.
+    public func run(_ source: URL, in folder: URL, listing: ContentsListing.Collector? = nil,
+                    excluded: [String] = []) throws -> PlainCopyOutcome {
         let fm = FileManager.default
         guard fm.fileExists(atPath: source.path) else { throw ArchiveError.sourceMissing(source.path) }
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -426,8 +434,8 @@ public struct PlainCopy {
         let probed = (probe ?? DriveAllocation.probe(at:))(folder)
         if profile.companions { profile.companions = companions ?? probed.companion ?? true }
         profile.cluster = DriveAllocation.cluster(statfsBlockSize: profile.cluster, fsType: profile.fsType, probed: probed)
-        let (outcome, plan) = profile.swapsWholeCopy ? try swapped(source, in: folder, profile: profile)
-                                                     : try inPlace(source, in: folder, profile: profile)
+        let (outcome, plan) = profile.swapsWholeCopy ? try swapped(source, in: folder, profile: profile, excluded: excluded)
+                                                     : try inPlace(source, in: folder, profile: profile, excluded: excluded)
         if let listing {
             for item in plan.items {
                 listing.add(item.rel, size: item.size, modified: Date(timeIntervalSince1970: TimeInterval(item.modified)),
@@ -439,13 +447,14 @@ public struct PlainCopy {
 
     // MARK: updated in place
 
-    private func inPlace(_ source: URL, in folder: URL, profile: FileSystemProfile) throws -> (PlainCopyOutcome, PlainCopyPlan) {
+    private func inPlace(_ source: URL, in folder: URL, profile: FileSystemProfile,
+                         excluded: [String]) throws -> (PlainCopyOutcome, PlainCopyPlan) {
         let fm = FileManager.default
         let copy = PlainCopyLayout.copy(named: source.lastPathComponent, in: folder)
         let probe = NameProbe(in: folder)
         defer { probe.finish() }
         let planner = PlainCopyPlanner(profile: profile, accepts: accepts ?? probe.accepts, control: control,
-                                       sweepsTemps: PlainCopyLayout.isOpen(folder))
+                                       sweepsTemps: PlainCopyLayout.isOpen(folder), excluded: excluded)
         let plan = try planner.plan(source: source, copy: fm.fileExists(atPath: copy.path) ? copy : nil)
         try checkRoom(plan, folder: folder)
 
@@ -617,7 +626,8 @@ public struct PlainCopy {
 
     // MARK: swapped in whole
 
-    private func swapped(_ source: URL, in folder: URL, profile: FileSystemProfile) throws -> (PlainCopyOutcome, PlainCopyPlan) {
+    private func swapped(_ source: URL, in folder: URL, profile: FileSystemProfile,
+                         excluded: [String]) throws -> (PlainCopyOutcome, PlainCopyPlan) {
         let fm = FileManager.default
         let name = source.lastPathComponent
         let current = PlainCopyLayout.copy(named: name, in: folder)
@@ -630,7 +640,7 @@ public struct PlainCopy {
             if control?.isCancelled == true { throw CancelledError() }
             if fm.fileExists(atPath: staging.path) { throw PlainCopyError.stagingStuck(staging.path) }
         }
-        let planner = PlainCopyPlanner(profile: profile, control: control)
+        let planner = PlainCopyPlanner(profile: profile, control: control, excluded: excluded)
         let plan = try planner.plan(source: source, copy: fm.fileExists(atPath: current.path) ? current : nil)
         try checkRoom(plan, folder: folder)
 
@@ -720,22 +730,7 @@ public struct PlainCopy {
     /// swapped). One a run stopped after this already kept (the previous copy is
     /// still in place then) isn't kept twice.
     private func cloneToRemoved(_ rels: [String], from copy: URL, in folder: URL) throws -> Int {
-        guard !rels.isEmpty else { return 0 }
-        control?.begin("Moving deleted items to Removed items", stage: .finishing, total: UInt64(rels.count))
-        let day = PlainCopyLayout.removedDay(folder, now, calendar: calendar)
-        var kept = 0
-        for rel in rels {
-            if control?.isCancelled == true { throw CancelledError() }
-            control?.advance()
-            let from = copy.appendingPathComponent(rel)
-            if RemovedItems.alreadyKept(from, as: rel, in: day) { kept += 1; continue }
-            let to = try RemovedItems.place(rel, in: day)
-            try Self.withOwnerWrite([to.deletingLastPathComponent().path]) {
-                try MirrorCopy.clone(from, to: to, runner: runner)
-            }
-            kept += 1
-        }
-        return kept
+        try RemovedItems.keep(rels, from: copy, in: folder, now: now, calendar: calendar, runner: runner)
     }
 
     /// Rename `from` to `to`; nil once done, else why not. A Mac's drive keeps a
@@ -870,7 +865,15 @@ public struct PlainCopy {
 
 /// What a plain-files copy keeps of what was deleted from its library: a folder for
 /// each day in Removed items (see PlainCopy). Nothing prunes it but the person, in
-/// Storage.
+/// Storage. A mirror of a library that keeps what is deleted from it (see
+/// ContentType.keepsRemoved) keeps it the same way, at the top of its image:
+///
+///    <volume>/<name>                          the copy
+///    <volume>/Removed items/<date>/<path>     what the library no longer holds
+///
+/// Restore copies <volume>/<name> alone; Browse shows both. A 1.6.0 run of the mirror
+/// updates <volume>/.cryoframe-staging/<name> and swaps it in, and never touches
+/// Removed items (it keeps no new ones meanwhile).
 public enum RemovedItems {
     /// Where `rel` (a path in the copy) is kept in Removed items under `day`, its
     /// folders made as needed. Each deletion keeps a name of its own: a name already
@@ -956,6 +959,60 @@ public enum RemovedItems {
         return "\((name as NSString).deletingPathExtension) (\(n)).\(ext)"
     }
 
+    /// What `current` (the previous copy) holds that `next` (the new one, read back)
+    /// doesn't, each the topmost such item, in order: what the library no longer
+    /// holds. An item of another kind in `next` (a folder where a file was) counts:
+    /// the previous one is gone. Names are looked up as the volume does (an image's
+    /// APFS ignores case), so a name whose capitals changed isn't one.
+    static func missing(from next: URL, in current: URL, control: RunControl?) throws -> [String] {
+        var out: [String] = []
+        var seen = 0
+        control?.begin("Looking for deleted items", stage: .finishing)
+        func walk(_ rel: String) throws {
+            let dir = rel.isEmpty ? current.path : current.path + "/" + rel
+            for name in PlainCopy.list(dir).sorted() {
+                seen += 1
+                if seen % 512 == 0, control?.isCancelled == true { throw CancelledError() }
+                control?.advance()
+                let itemRel = rel.isEmpty ? name : rel + "/" + name
+                var a = stat(), b = stat()
+                guard lstat(dir + "/" + name, &a) == 0 else { continue }
+                guard lstat(next.path + "/" + itemRel, &b) == 0, a.st_mode & S_IFMT == b.st_mode & S_IFMT else {
+                    out.append(itemRel); continue
+                }
+                if a.st_mode & S_IFMT == S_IFDIR { try walk(itemRel) }
+            }
+        }
+        if FileManager.default.fileExists(atPath: current.path) { try walk("") }
+        return out
+    }
+
+    /// A clone of each of `rels` in `copy`, in `folder`'s Removed items under the day
+    /// of `now`, each under a name of its own (see place). One a run that stopped after
+    /// this already kept (see alreadyKept) isn't kept twice. Says how far it has got,
+    /// and Stop ends it. Returns how many are kept.
+    @discardableResult
+    static func keep(_ rels: [String], from copy: URL, in folder: URL, now: Date, calendar: Calendar = .current,
+                     runner: CommandRunner) throws -> Int {
+        guard !rels.isEmpty else { return 0 }
+        let control = runner.control
+        control?.begin("Moving deleted items to Removed items", stage: .finishing, total: UInt64(rels.count))
+        let day = PlainCopyLayout.removedDay(folder, now, calendar: calendar)
+        var kept = 0
+        for rel in rels {
+            if control?.isCancelled == true { throw CancelledError() }
+            control?.advance()
+            let from = copy.appendingPathComponent(rel)
+            if alreadyKept(from, as: rel, in: day) { kept += 1; continue }
+            let to = try place(rel, in: day)
+            try PlainCopy.withOwnerWrite([to.deletingLastPathComponent().path]) {
+                try MirrorCopy.clone(from, to: to, runner: runner)
+            }
+            kept += 1
+        }
+        return kept
+    }
+
     /// the days held in `removed` (a library folder's Removed items), oldest first
     public static func days(in removed: URL, calendar: Calendar = .current) -> [(day: Date, folder: URL)] {
         PlainCopy.list(removed.path).compactMap { name -> (Date, URL)? in
@@ -999,7 +1056,7 @@ public struct PlainCopyEngine: ArchiveEngine {
 
     public func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
         let profile = FileSystemProfile.of(destinationDir, target: target)
-        let out = try PlainCopy(profile: profile, runner: runner).run(source.root, in: destinationDir)
+        let out = try PlainCopy(profile: profile, runner: runner).run(source.root, in: destinationDir, excluded: source.excluded)
         return ArchiveResult(artifacts: [out.copy], format: .plainFiles)
     }
 }

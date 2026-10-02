@@ -22,8 +22,15 @@ public struct ArchiveSource: Sendable, Equatable {
     /// bytes the source takes up, when the caller has measured it (JobExecutor walks
     /// every source before archiving). The mirror checks the destination against it.
     public let sizeHint: UInt64?
-    public init(name: String, root: URL, sizeHint: UInt64? = nil) {
+    /// items of the library left out of its backup, relative to `root`, each the
+    /// topmost such item (see ContentType.leavesOut): no format copies them
+    public var excluded: [String] = []
+    /// what the library no longer holds is kept (see ContentType.keepsRemoved): the
+    /// mirror moves it to Removed items in its image rather than deleting it
+    public var keepsRemoved = false
+    public init(name: String, root: URL, sizeHint: UInt64? = nil, excluded: [String] = [], keepsRemoved: Bool = false) {
         self.name = name; self.root = root; self.sizeHint = sizeHint
+        self.excluded = excluded; self.keepsRemoved = keepsRemoved
     }
 }
 

@@ -380,12 +380,13 @@ public struct JobExecutor: Sendable {
                     : ContentsListing.Collector(binding: ContentsCrypto.Binding(jobID: job.id, libraryID: library.id, version: plannedStamp))
                 if let listing, placement.volume.map({ mounts[$0.mountPoint] == nil }) ?? true { listing.markPartial() }
                 let stats = Self.directoryStats(root, forDMG: sealed == .dmg, forZip: sealed == .zip, forMirror: sealed == nil,
-                                                listing: listing)
+                                                listing: listing, leavesOut: library.leavesOut)
                 let sourceSize = stats.bytes
                 // a mirror writes every file out whole (see copySize); a sealed archive
                 // compresses, and is held to the bytes the library takes on disk
                 let source = ArchiveSource(name: root.lastPathComponent, root: root,
-                                           sizeHint: sealed == nil ? stats.copyBytes : sourceSize)
+                                           sizeHint: sealed == nil ? stats.copyBytes : sourceSize,
+                                           excluded: stats.excluded, keepsRemoved: library.keepsRemoved)
 
                 // An empty source seals into an archive that reports success and then
                 // cannot be restored: RestoreEngine finds nothing to rebuild the bundle
@@ -420,7 +421,10 @@ public struct JobExecutor: Sendable {
                 // What's left are named pipes, sockets and devices, on which hdiutil and
                 // ditto both hang or fail, and locks: the build may read a copy without
                 // them (see SealedReadPlan).
-                let plan = sealed.map { SealedReadPlan.of(stats.dmgBlockers, $0, diskImageKeepsLocks: self.diskImageKeepsLocks) } ?? .direct
+                // what the library leaves out (see ContentType.leavesOut) neither sealed
+                // format can be told to skip: the build reads a copy without it
+                let plan = sealed.map { SealedReadPlan.of(stats.dmgBlockers, $0, diskImageKeepsLocks: self.diskImageKeepsLocks,
+                                                          excluding: !stats.excluded.isEmpty) } ?? .direct
                 let filtered = plan.fromCopy
                 onStage(.archiving)
 
@@ -967,7 +971,7 @@ public struct JobExecutor: Sendable {
     /// confirm a distributed copy matches the verified build. A single file is hashed
     /// against the build's digest; split parts must sum to the build's byte size (their
     /// per-part manifest covers content integrity at restore/health time).
-    private static func copyMatches(_ result: ArchiveResult, expectedDigest: String, expectedBytes: UInt64) -> Bool {
+    static func copyMatches(_ result: ArchiveResult, expectedDigest: String, expectedBytes: UInt64) -> Bool {
         if result.artifacts.count == 1 {
             guard let d = try? Checksum.sha256(of: result.artifacts[0]) else { return false }
             return expectedDigest.isEmpty || d == expectedDigest   // empty = couldn't hash at build; don't block
@@ -1147,6 +1151,9 @@ public struct JobExecutor: Sendable {
         /// what a copy of the tree written out by the mirror's copier takes (see
         /// `copySize`): more than `bytes` where files are stored compressed
         var copyBytes: UInt64 = 0
+        /// what the library leaves out of its backups (see ContentType.leavesOut),
+        /// relative to the tree, each the topmost such item; not counted or listed
+        var excluded: [String] = []
     }
 
     /// What one file takes once copied by the mirror's copier (MirrorCopy.sync), which
@@ -1166,8 +1173,11 @@ public struct JobExecutor: Sendable {
     /// with `forMirror`, the same, which a live mirror leaves out (see MirrorCopy.isLeftOut).
     /// With `listing`, the version's file list is gathered on the same walk (see
     /// ContentsListing): every folder, file and link, and none of what is left out.
+    /// With `leavesOut`, an item whose name it takes is passed over, what is in it
+    /// too, and named in `excluded` (see ContentType.leavesOut).
     static func directoryStats(_ url: URL, forDMG: Bool = false, forZip: Bool = false,
-                               forMirror: Bool = false, listing: ContentsListing.Collector? = nil) -> DirectoryStats {
+                               forMirror: Bool = false, listing: ContentsListing.Collector? = nil,
+                               leavesOut: ((String) -> Bool)? = nil) -> DirectoryStats {
         var out = DirectoryStats()
         var keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey, .isSymbolicLinkKey,
                                          .totalFileSizeKey]
@@ -1193,6 +1203,13 @@ public struct JobExecutor: Sendable {
         let locks = forDMG || forZip
         if sealed { out.dmgBlockers.inspect(url.path, relative: url.lastPathComponent, groups: &groups, forDMG: forDMG, locks: locks) }   // copied too
         for case let u as URL in e {
+            if let leavesOut, leavesOut(u.lastPathComponent) {
+                out.excluded.append(relative(u))
+                // only for a folder: after a file, it skipped the folder enumerated next
+                var st = stat()
+                if lstat(u.path, &st) == 0, st.st_mode & S_IFMT == S_IFDIR { e.skipDescendants() }
+                continue
+            }
             if sealed {
                 out.dmgBlockers.inspect(u.path, relative: DMGBlockers.relative(u.path, to: root), groups: &groups, forDMG: forDMG, locks: locks)
             }
@@ -1391,7 +1408,8 @@ public struct JobExecutor: Sendable {
                                                         copy: source.root.lastPathComponent)
             try? identity.write(in: folder)
         }
-        let out = try PlainCopy(profile: profile, runner: runner).run(source.root, in: folder, listing: listing)
+        let out = try PlainCopy(profile: profile, runner: runner).run(source.root, in: folder, listing: listing,
+                                                                      excluded: source.excluded)
         var said = out.notes.map { "\(library.displayName) at \(target.displayName): \($0)" }
         let contents = ContentsListing.write(listing, master: nil, encrypted: false, into: folder)?.digest
         if var identity = LibraryIdentity.read(in: folder) {

@@ -81,7 +81,20 @@ private func job(_ name: String, _ libs: [ContentType], enabled: Bool = true) ->
 @Test func gapsKeepRegistryOrderSoPhotosLeads() {
     let gaps = CoverageAdvisor.gaps(types: ContentTypeRegistry.builtIns, jobs: [], resolve: allPresent)
     #expect(gaps.first?.typeID == ContentType.photos.id)
-    #expect(gaps.count == ContentTypeRegistry.builtIns.count)
+    // every built-in but Messages attachments, which is part of Messages
+    #expect(gaps.count == ContentTypeRegistry.builtIns.count - 1)
+    #expect(!gaps.contains { $0.typeID == ContentType.messagesAttachments.id })
+}
+
+@Test func messagesAttachmentsAreNeverAGapOfTheirOwn() {
+    let types = [ContentType.messages, .messagesAttachments]
+    // nothing backed up: Messages asks, once
+    #expect(CoverageAdvisor.gaps(types: types, jobs: [], resolve: allPresent).map(\.typeID) == [ContentType.messages.id])
+    // only the attachments backed up: Messages (its conversations) is still a gap
+    #expect(CoverageAdvisor.gaps(types: types, jobs: [job("a", [.messagesAttachments])], resolve: allPresent).map(\.typeID)
+            == [ContentType.messages.id])
+    // Messages backed up covers its attachments
+    #expect(CoverageAdvisor.gaps(types: types, jobs: [job("m", [.messages])], resolve: allPresent).isEmpty)
 }
 
 @Test func gapCarriesTheRootToBackUp() {

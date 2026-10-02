@@ -191,6 +191,15 @@ public struct JobDraftState: Sendable, Equatable {
     /// libraries in THIS job with one name: allowed, with a note (see LibraryNames)
     public var libraryNameClashes: [String] { LibraryNames.clashMessages(selectedLibraries) }
 
+    /// a library chosen with the one it is part of (see ContentType.partOf): allowed,
+    /// with a note, since its files are then kept twice
+    public var libraryOverlaps: [String] {
+        selectedLibraries.compactMap { part in
+            guard let whole = part.partOf, let lib = selectedLibraries.first(where: { $0.id == whole }) else { return nil }
+            return "\(lib.displayName) already includes \(part.displayName), so this job keeps them twice. To keep only the photos, videos and files, choose \(part.displayName) alone."
+        }
+    }
+
     /// Each chosen library against each chosen destination, by path alone: a
     /// destination inside a library backs up its own backups; a library inside a
     /// destination is copied into itself. Checked on every save, so a library chosen

@@ -46,7 +46,9 @@ public enum CoverageAdvisor {
                             resolve: (ContentType) -> URL?) -> [Gap] {
         let covered = Set(jobs.flatMap { $0.libraries.map(\.id) })
         return types.compactMap { type in
-            guard !covered.contains(type.id), !dismissed.contains(type.id),
+            // a part of another library (Messages attachments, of Messages) is never a
+            // gap of its own: the whole library's gap asks the question once
+            guard type.partOf == nil, !covered.contains(type.id), !dismissed.contains(type.id),
                   let root = resolve(type) else { return nil }
             return Gap(typeID: type.id, displayName: type.displayName, root: root)
         }

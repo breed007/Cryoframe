@@ -44,8 +44,9 @@ enum MirrorCopy {
 
     /// Make the new copy of `source` in staging: a fresh clone of the previous copy,
     /// brought up to date. `execute` runs a tool as the run does (honoring Stop,
-    /// throwing on failure). The previous copy is untouched.
-    static func stage(volume: URL, name: String, source: URL, runner: CommandRunner,
+    /// throwing on failure). The previous copy is untouched. `excluded`: what the
+    /// library leaves out of its backups (see ArchiveSource).
+    static func stage(volume: URL, name: String, source: URL, runner: CommandRunner, excluded: [String] = [],
                       execute: (Command) throws -> Void) throws -> Staged {
         let fm = FileManager.default
         let current = volume.appendingPathComponent(name, isDirectory: true)
@@ -72,7 +73,7 @@ enum MirrorCopy {
         }
 
         do {
-            try sync(source, into: next, runner: runner, execute: execute)
+            try sync(source, into: next, runner: runner, options: SyncOptions(excluded: excluded), execute: execute)
         } catch ArchiveError.toolFailed(_, _, let stderr) where stderr.localizedCaseInsensitiveContains("No space left on device") {
             // Updating beside the previous copy needs room for everything that changed
             // as well as the library. When the drive runs out, the staging copy is what

@@ -173,7 +173,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         }
         compact(bundle, stdin: stdin)
         do {
-            try confirm(bundle, name: source.root.lastPathComponent, against: source.root, in: destinationDir, stdin: stdin)
+            try confirm(bundle, name: source.root.lastPathComponent, against: source.root, in: destinationDir, stdin: stdin,
+                        excluded: Set(source.excluded))
         } catch MirrorCopyError.updateNotConfirmed(let count, let examples) {
             // sound, and holding a complete copy that isn't the new one
             try? MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted)
@@ -194,7 +195,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// read-back, and a drive that runs out of room for an instant while they are would
     /// otherwise go unseen: a damaged directory, or a swap that never landed, with the
     /// run reported a success.
-    private func confirm(_ bundle: URL, name: String, against source: URL, in destinationDir: URL, stdin: Data?) throws {
+    private func confirm(_ bundle: URL, name: String, against source: URL, in destinationDir: URL, stdin: Data?,
+                         excluded: Set<String> = []) throws {
         let teardown = runner.forTeardown
         runner.control?.begin("Checking the disk image", stage: .verifying)
         // Stop ends a wait for the image (see ImageLock.attaching), which the teardown
@@ -233,7 +235,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             }
         }
         let found = try MirrorCopy.structure(of: mnt.appendingPathComponent(name), against: source, previous: nil,
-                                             control: runner.control, title: "Confirming the update")
+                                             control: runner.control, title: "Confirming the update", excluded: excluded)
         guard found.count == 0 else { throw MirrorCopyError.updateNotConfirmed(count: found.count, examples: found.examples) }
         // The swap lifts and restores the top folder's access list after the read-back
         // (see MirrorCopy.putInPlace), so it is the one thing written unverified.
@@ -388,7 +390,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // rsync into a clone of the previous copy, so the copy restore reads is never
         // half-updated; then prove the new copy reached the drive before swapping it in
         let staged = try MirrorCopy.stage(volume: mountpoint, name: source.root.lastPathComponent, source: source.root,
-                                          runner: runner, execute: { try execute($0) })
+                                          runner: runner, excluded: source.excluded, execute: { try execute($0) })
         do {
             // on the drive, and the drive never came close to full while it was written
             runner.control?.begin("Writing the copy to the drive", stage: .finishing)
@@ -399,9 +401,15 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             MountPoint.detach(mountpoint, runner: teardown)
             guard !MountPoint.isMounted(mountpoint) else { throw MountPointError.stillMounted(mountpoint.path) }
             try attach()
-            try MirrorCopy.verify(staged, against: source.root, control: runner.control)
+            try MirrorCopy.verify(staged, against: source.root, control: runner.control, excluded: Set(source.excluded))
             drive.sample()
             if drive.dipped { throw MirrorCopyError.driveFilledByAnother(swapped: false) }
+            // what the library no longer holds is kept in the image before the previous
+            // copy goes (see RemovedItems.keep): a clone of each, which costs no room
+            if source.keepsRemoved {
+                try RemovedItems.keep(RemovedItems.missing(from: staged.next, in: staged.current, control: runner.control),
+                                      from: staged.current, in: mountpoint, now: Date(), runner: runner)
+            }
         } catch let stop as CancelledError {
             // Stopped: the unfinished copy stays in staging, where the next run removes
             // it before it starts. Removing it now is as many deletes as the library has

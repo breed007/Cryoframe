@@ -15,7 +15,8 @@ public struct ContentTypeRegistry: Sendable {
         self.types = types
     }
 
-    public static let builtIns: [ContentType] = [.photos, .appleMusic, .iMovie, .garageBand, .messages, .mail, .outlook]
+    public static let builtIns: [ContentType] = [.photos, .appleMusic, .iMovie, .garageBand, .messages, .messagesAttachments,
+                                                  .mail, .outlook]
 
     public func type(id: String) -> ContentType? {
         types.first { $0.id == id }

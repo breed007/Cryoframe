@@ -21,7 +21,23 @@ import Foundation
     #expect(r.type(id: "com.apple.mail")?.owningProcess?.bundleIdentifier == "com.apple.mail")
     #expect(r.type(id: "com.microsoft.outlook") != nil)
     #expect(r.type(id: "com.apple.garageband")?.kind == .staticContent)
-    #expect(r.types.count == 7)
+    #expect(r.types.count == 8)
+}
+
+@Test func messagesAttachmentsAreALibraryOfTheirOwn() {
+    let a = ContentType.messagesAttachments
+    #expect(ContentTypeRegistry().type(id: "com.apple.messages.attachments") == a)
+    #expect(a.paths == [.home("Library/Messages/Attachments")])
+    #expect(a.owningProcess == nil)                 // read frozen; Messages may stay open
+    #expect(a.kind == .staticContent)               // kept on any drive, as plain files too
+    #expect(a.keepsRemoved && a.partOf == ContentType.messages.id)
+    #expect(!ContentType.messages.keepsRemoved && ContentType.messages.partOf == nil && ContentType.messages.leavesOut == nil)
+    #expect(ContentType.photos.leavesOut == nil)
+    let leaves = try! #require(a.leavesOut)
+    #expect(leaves("A1B2.pluginPayloadAttachment") && leaves("x.PLUGINPAYLOADATTACHMENT"))
+    #expect(leaves("Info.plist") && leaves(".DS_Store"))
+    #expect(!leaves("IMG_0001.HEIC") && !leaves("IMG_0001.MOV") && !leaves("notes.pdf") && !leaves("plist"))
+    #expect(!leaves("odd\\name.plist"))            // a backslash can't be filtered: copied
 }
 
 @Test func addReplacesByID() {
