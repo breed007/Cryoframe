@@ -374,17 +374,23 @@ final class AppModel: ObservableObject {
     }
 
     private var lastSizeRefresh = Date.distantPast
+    private var sizeRefreshGeneration = 0
     /// recompute the total protected footprint (off-main, du-style) for the dashboard.
     /// Debounced — it walks every archive, so it's throttled to avoid re-scanning on
     /// every window focus; pass force after a job or run changes the archives.
     func refreshProtectedSize(force: Bool = false) {
+        sizeRefreshGeneration += 1
         guard !jobs.isEmpty else { protectedBytes = 0; return }
         guard force || Date().timeIntervalSince(lastSizeRefresh) > 30 else { return }
         lastSizeRefresh = Date()
-        let jobs = self.jobs
+        let jobs = self.jobs, generation = sizeRefreshGeneration
         Task.detached {
             let total = StorageReporter.report(jobs).reduce(UInt64(0)) { $0 + $1.archiveBytes }
-            await MainActor.run { self.protectedBytes = total }
+            // a walk started before a run finished can end after the one started
+            // after it, so only the newest request's total is shown
+            await MainActor.run {
+                if generation == self.sizeRefreshGeneration { self.protectedBytes = total }
+            }
         }
     }
 
@@ -913,6 +919,7 @@ final class AppModel: ObservableObject {
             jobs = store.load().jobs
             revalidate()
             armWake()                               // lastRun changed — re-point the wake
+            refreshProtectedSize(force: true)       // the run wrote (or pruned) archives
             finishRun(id)
         }
     }

@@ -298,7 +298,7 @@ struct RestoreView: View {
         .alert("Delete this archive version?",
                isPresented: Binding(get: { r.pendingDelete != nil }, set: { if !$0 { r.pendingDelete = nil } })) {
             Button("Cancel", role: .cancel) { r.pendingDelete = nil }
-            Button("Delete", role: .destructive) { r.confirmDelete() }
+            Button("Delete", role: .destructive) { r.confirmDelete(); model.refreshProtectedSize(force: true) }
         } message: {
             Text("Permanently delete this version of “\(r.pendingDelete?.bundleName ?? "")”\(r.pendingDelete?.version.map { " from " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")? This can't be undone.")
         }
