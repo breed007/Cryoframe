@@ -479,7 +479,8 @@ public struct PlainCopy {
         if profile.keepsMacDetails {
             control?.begin("Copying what changed", stage: .archiving)
             try MirrorCopy.sync(source, into: copy, runner: runner,
-                                options: .init(excluded: plan.excluded.map(\.rel), inPlace: true), execute: execute)
+                                options: .init(excluded: plan.excluded.map(\.rel) + Self.currentUndated(plan), inPlace: true),
+                                execute: execute)
         } else {
             try copyFiles(plan, from: source, to: copy, profile: profile)
             try finishDates(plan, from: source, to: copy)
@@ -522,6 +523,17 @@ public struct PlainCopy {
             if batch.count >= batchFiles || bytes >= batchBytes { try send() }
         }
         try send()
+    }
+
+    /// Files dated outside what a Mac drive keeps (Mac OS Extended: 1904 to 2040) whose
+    /// copy is already current, by the date the drive keeps for them. rsync compares
+    /// the library's own date with the copy's, which can never match, so it would copy
+    /// each of them again whole on every run: it is told to pass them over. None when
+    /// a name holds a backslash, which an rsync filter can't match (see MirrorCopy.sync).
+    static func currentUndated(_ plan: PlainCopyPlan) -> [String] {
+        guard !plan.outOfRange.isEmpty, !plan.items.contains(where: { $0.rel.contains("\\") }) else { return [] }
+        let written = Set(plan.written)
+        return plan.outOfRange.filter { !written.contains($0) }
     }
 
     /// files given their library dates where the drive rounded them, and folders theirs,

@@ -105,6 +105,51 @@ private let exfatLike = FileSystemProfile(kind: .exfat, fsType: "exfat", foldsCa
         #expect(try pc.run(src, in: folder).written == 0)
     }
 
+    // Mac OS Extended keeps 1904 to 2040. A file dated outside that is copied once and
+    // dated the nearest it keeps; later runs pass it over (rsync, comparing the
+    // library's date, used to copy it again whole every time), and copy it again once
+    // it changes.
+    @Test func aFileAMacDriveCantDateIsCopiedOnce() throws {
+        let base = tempDir("hfsdate")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let image = base.appendingPathComponent("drive.dmg"), mount = base.appendingPathComponent("vol", isDirectory: true)
+        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
+        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "32m", "-fs", "HFS+", "-volname", "MAC",
+                                                                       "-type", "UDIF", image.path], stdin: nil)
+        try #require(made.ok, "\(made.stderr)")
+        let attached = try DiskImageGate.serialized {
+            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
+        }
+        try #require(attached.ok, "\(attached.stderr)")
+        defer { MountPoint.detach(mount, runner: ProcessCommandRunner()) }
+
+        let src = base.appendingPathComponent("Old"), folder = mount.appendingPathComponent("Old-plain")
+        try put(src, "1900.txt", "old", date: -2_208_988_800)
+        try put(src, "2200.txt", "late", date: 7_258_118_400)
+        try put(src, "now.txt", "now")
+        let profile = FileSystemProfile.of(folder)
+        #expect(profile.kind == .hfs)
+        func run() throws -> PlainCopyOutcome { try PlainCopy(profile: profile, runner: ProcessCommandRunner()).run(src, in: folder) }
+        func inode(_ name: String) -> ino_t {
+            var st = stat()
+            return lstat(folder.appendingPathComponent("Old/\(name)").path, &st) == 0 ? st.st_ino : 0
+        }
+        _ = try run()
+        let first = ["1900.txt", "2200.txt", "now.txt"].map(inode)
+        #expect(!first.contains(0))
+        let again = try run()
+        #expect(again.written == 0)
+        #expect(["1900.txt", "2200.txt", "now.txt"].map(inode) == first, "copied again")
+        #expect(!PlainCopyLayout.isOpen(folder))
+
+        try put(src, "1900.txt", "changed", date: -2_208_988_800)
+        let changed = try run()
+        #expect(changed.written == 1)
+        #expect((try? String(contentsOf: folder.appendingPathComponent("Old/1900.txt"), encoding: .utf8)) == "changed")
+        var st = stat()
+        #expect(lstat(folder.appendingPathComponent("Old/1900.txt").path, &st) == 0 && st.st_mtimespec.tv_sec == -2_082_758_400)
+    }
+
     // MARK: Removed items
 
     @Test func eachDeletionGetsANameOfItsOwn() throws {
