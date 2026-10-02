@@ -6,9 +6,11 @@ Encryption protects an archive that leaves your Mac: a copy on an external drive
 
 ## Turning on encryption
 
-When you make a job, turn on "Encrypt with AES-256." It applies to the sealed-DMG and live-mirror formats. A sealed zip cannot be strongly encrypted, so the option is off for that format.
+When you make a job, turn on "Encrypt with a passphrase" under Details. Backups are encrypted with AES-256. It applies to one up-to-date copy and to dated versions kept as disk images. A zip file cannot be strongly encrypted, so the option is off for that format.
 
-You set a passphrase when you enable it. The archive is encrypted with that passphrase, and the archive is unreadable without it. There is no back door and no reset.
+You set a passphrase when you turn it on. The backup is encrypted with that passphrase, and it is unreadable without it. There is no back door and no reset.
+
+Encryption and the passphrase stay as they are once a job exists. To change either, make a new job. (The 1.5.6 release notes said passphrase rotation was planned for 1.6. It was dropped, and isn't in this release.)
 
 ## Where the passphrase lives
 
@@ -17,7 +19,9 @@ Cryoframe stores the passphrase in your login Keychain, keyed to the job. It is 
 - Scheduled runs encrypt without prompting, because the app and the background agent are the same signed program and share the Keychain item.
 - Verifying or restoring an encrypted archive asks for the passphrase, unless it is still in this Mac's Keychain.
 
-You can see a job's saved passphrase with Copy passphrase in its ⋯ menu, or reveal it while editing the job. Keep a copy somewhere safe.
+You can see a job's saved passphrase with Copy passphrase in its ⋯ menu, or with Show the saved passphrase… while editing the job. Keep a copy somewhere safe.
+
+Deleting a job doesn't delete its passphrase. It stays in the Keychain, and Restore offers it for that job's backups.
 
 ## The risk you are managing
 
@@ -41,6 +45,18 @@ On the new Mac, open Settings ▸ Security and click "Restore from a recovery fi
 
 You then type the passphrase into the restore prompt for the matching archive. Recovery does not put the passphrases back into the new Mac's Keychain automatically, because a freshly created job has a different identity than the old one. The recovered passphrase is what you paste when you restore.
 
+### The printed recovery kit
+
+A recovery file holds passphrases. It doesn't say where your backups are, and someone helping you after a lost Mac may not know. The recovery kit is a printed page that does.
+
+Click Print Recovery Kit… in Settings ▸ Security. The kit lists your jobs, where each keeps its backups (with each drive's name and volume UUID), how to open each kind of backup without Cryoframe, and when you last exported a recovery file, with blank lines to write where you keep the kit and the recovery file. It holds no passphrases.
+
+<!-- SHOT: recovery-kit.png — the Print a recovery kit dialog, with the passphrase box unticked -->
+
+If you want the passphrases on paper too, tick "Also print the passphrases, on a separate page". Cryoframe then warns you before printing that page, because anyone holding it can open your encrypted backups. The page goes through the print queue like any other, and the PDF menu in the print panel (Save as PDF, Mail, Preview) writes or sends a copy, so choose a printer, not PDF. The choice is never remembered; the box starts unticked every time.
+
+When your jobs change after you printed the kit, the main window and Settings ▸ Security say the kit is out of date. Print a new one and replace the old.
+
 ### What to do today
 
-If you keep any encrypted backup, export a recovery file now and store it away from the backups. That one file is the difference between a recoverable archive and a locked one after hardware loss.
+If you keep any encrypted backup, export a recovery file now and store it away from the backups. Without it, an encrypted backup can't be opened after the Mac that made it is lost. Then print a recovery kit and keep it with your important papers.

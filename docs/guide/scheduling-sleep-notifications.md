@@ -8,9 +8,9 @@ This page covers running jobs unattended: how the schedule works, how Cryoframe 
 
 Turn on the schedule from the top of the main window, or in Settings ▸ Schedule. It installs a launchd agent that wakes about once an hour and runs any job that is due.
 
-Each job sets its own frequency when you make or edit it. A job set to Manual has no schedule and only runs from Run now. Scheduled jobs run while you are logged in.
+Each job sets its own frequency when you make or edit it. A job set to "Only when I say" has no schedule and only runs from Run now. Scheduled jobs run while you are logged in.
 
-The "If app is open" setting on a job decides what happens when the library's owning app is running at the scheduled time. You can proceed anyway, warn, or defer the run until the app is closed. For most libraries you can proceed, because the snapshot captures a consistent copy whether or not the app is open.
+The "If the app is open" setting on a job decides what happens when the library's owning app is running at the scheduled time: back up anyway, back up and say so, or wait until it's closed. For most libraries you can proceed, because the snapshot captures a consistent copy whether or not the app is open.
 
 ### Missed runs
 
@@ -18,9 +18,13 @@ A job whose time passed while the Mac was asleep or shut down is not skipped unt
 
 ### Low battery
 
-An unattended run can spin disks and move gigabytes for a while, which is not what you want on a laptop that is nearly flat. When the Mac is on battery and below 20% charge, a scheduled run waits and tries again at the next hourly check — by which time it may well be plugged in. The wait is recorded in the run history with the battery level, so a backup never quietly fails to happen.
+An unattended run can spin disks and move gigabytes for a while, which is not what you want on a laptop that is nearly flat. When the Mac is on battery and below 20% charge, a scheduled run waits and tries again at the next hourly check, by which time it may well be plugged in. The wait is recorded in the run history with the battery level, so a backup never quietly fails to happen.
 
-Run now is never held back. Plugged in, on a desktop, or when the level cannot be read, runs proceed as normal. Turn the behaviour off, or move the threshold, in Settings ▸ General ▸ Running.
+Run now is never held back. Plugged in, on a desktop, or when the level cannot be read, runs proceed as normal. Turn the behavior off, or move the threshold, in Settings ▸ General ▸ Running.
+
+### Overdue jobs
+
+A scheduled job that has gone twice its interval without a good run is overdue: a nightly job with nothing good for two days, say. The dashboard turns that job yellow, and later red, because it judges each job by when it last ran well rather than by whether its last attempt happened. Cryoframe posts a notification while the app is running, and the scheduled agent sends a remote alert if you have set them up, at most once a day per job and again if it gets worse. The alerts stop once the job runs well.
 
 ## Keeping the Mac awake
 
@@ -46,7 +50,7 @@ Choose when to be notified in Settings ▸ General ▸ Notifications: never, on 
 
 ## Remote alerts
 
-A Notification Center banner is no help when you are away from the Mac. Remote alerts push a message to your phone or a chat channel when a backup fails, finishes as a partial backup, or an archive health check fails. Set them up in Settings ▸ General ▸ Remote alerts.
+A Notification Center banner is no help when you are away from the Mac. Remote alerts push a message to your phone or a chat channel when a backup fails, finishes as a partial backup, is overdue, or an archive health check fails. Set them up in Settings ▸ General ▸ Remote alerts.
 
 Two kinds:
 

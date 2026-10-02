@@ -8,12 +8,14 @@ A backup you cannot read is not a backup. Cryoframe checks archives at two point
 
 Every archive gets a checksum manifest when it is written, listing each file and its hash. This is always on. It is how Cryoframe knows later whether an archive still matches what was written.
 
-A job's verify level adds an optional second check:
+"Check each backup", under Details in the job editor, sets how far the check after writing goes:
 
-- Checksum hashes the archive after writing and compares it to the manifest. This is the default.
-- Mount & open does that, then also mounts the finished archive and confirms the library's database opens clean. It is slower, and it catches the case where the bytes are intact but the library itself is damaged.
+- Quick check hashes the archive after writing and compares it to the manifest. This is the default.
+- Full check (opens it) does that, then also mounts the finished archive and confirms the library's database opens clean. It is slower, and it catches the case where the bytes are intact but the library itself is damaged.
 
-Set the level when you make the job, or set a default in Settings ▸ General.
+Set it when you make the job, or set a default in Settings ▸ General.
+
+A live mirror also reads back what each run copied before it puts the new copy in place, comparing contents, attributes, and access lists. A difference fails the run and leaves the previous mirror as it was.
 
 ## Archive health (re-checking cold archives)
 
@@ -40,36 +42,39 @@ Each job shows its last health check. A failure turns the menu-bar item red and 
 
 ### Restore drills
 
-A checksum check proves the bytes haven't rotted. It does not prove the archive will actually restore — that the split parts reassemble, the image mounts, and the library reopens. A restore drill does exactly that: for each archive it reassembles the parts, mounts or extracts it, and reopens the library (a database integrity check on Photos, Music, and other database libraries). If anything in the restore path is broken, the drill fails even when the checksums pass.
+A checksum check proves the bytes haven't rotted. It does not prove the archive will actually restore: that the split parts reassemble, the image mounts, and the library reopens. A restore drill does exactly that: for each archive it reassembles the parts, mounts or extracts it, and reopens the library (a database integrity check on Photos, Music, and other database libraries). If anything in the restore path is broken, the drill fails even when the checksums pass.
 
 Set the depth in Settings ▸ General ▸ Archive health: Checksum (fast, the default) or Restore drill. The depth applies to the scheduled check and respects the same scope. You can also run a drill on demand from a job's ⋯ menu (Run restore drill), alongside the checksum-only Verify archives. An encrypted job's drill reads its passphrase from the Keychain, so it runs without prompting.
 
-A drill is heavier than a checksum check — it opens every archive in scope — so "Latest version only" is usually the right scope for a scheduled drill on a job with many versions.
+A drill is heavier than a checksum check, since it opens every archive in scope, so "Latest version only" is usually the right scope for a scheduled drill on a job with many versions.
 
 ### Recovery rehearsals
 
-A drill proves an archive opens. It cannot prove a *recovery* works, because it looks for each archive at the path the job says it should be. If a destination is reorganised, a library folder renamed, or a job quietly stops writing one library, the drill keeps checking the paths it computed and keeps passing — while someone restoring on a new Mac would find nothing there.
+A drill proves an archive opens. It cannot prove a *recovery* works, because it looks for each archive at the path the job says it should be. If a destination is reorganized, a library folder renamed, or a job quietly stops writing one library, the drill keeps checking the paths it computed and keeps passing, while someone restoring on a new Mac would find nothing there.
 
 A rehearsal starts where a recovery starts. It scans the destination, works out the newest moment it could restore to, and for each library verifies the checksums, opens the archive, and confirms there is something readable inside. It stops before copying anything back: moving the bytes is the slow part, and finding the archives, matching the keys, choosing the versions and opening them is the part that goes wrong.
 
 What it adds is the question no per-archive check can answer: **is everything you think you're protecting actually here?** A library your jobs claim to back up that a restore would not find is named in the result. An empty destination fails loudly rather than reporting that nothing went wrong.
 
-Rehearsals run monthly, and you can run one at any time from a job's ⋯ menu (Rehearse recovery).
+Rehearsals run monthly, and you can run one at any time from a job's ⋯ menu (Rehearse recovery…). Only the newest version of each library is opened, so the work depends on how much you protect rather than how long you have kept it. Turn the schedule off in Settings ▸ General ▸ Running.
 
 ![A job's ⋯ menu, with Verify archives, Run restore drill, and Rehearse recovery](../screenshots/rehearse-recovery.png)
- Only the newest version of each library is opened, so the work depends on how much you protect rather than how long you have kept it. Turn the schedule off in Settings ▸ General ▸ Running.
+
+### Stopping a check
+
+While a job's archives are being checked, its row shows Stop. A check, drill, or rehearsal you stop doesn't count: it isn't recorded as a pass, no version gets a badge from it, and the last check that finished still stands. Anything it had already found wrong is still listed, with how many archives it got through. Stop never interrupts a disk image while macOS is attaching it; the attach finishes and is then detached.
 
 ### What a check tells the restore timeline
 
 Every check records its result per version, and the [restore timeline](restoring.md) shows it: a version a drill opened is marked **Restore-tested**, one whose checksums were re-read is marked **Checksum verified**, and one nothing has looked at yet carries no badge at all.
 
-That last case is the point of keeping them separate. Scheduled checks default to the latest version only, so on a job with a long history most versions have never been read — and a badge on those would be a claim Cryoframe cannot support. If you want the whole history badged, set the scope to all versions, knowing it costs proportionally more I/O.
+That last case is the point of keeping them separate. Scheduled checks default to the latest version only, so on a job with a long history most versions have never been read, and a badge on those would be a claim Cryoframe cannot support. If you want the whole history badged, set the scope to all versions, knowing it costs proportionally more I/O.
 
 A version is only marked when every copy checked in that run passed. If a job writes to two destinations and one copy has rotted, the version stays unbadged rather than vouching for a copy that might be the one you restore from.
 
 ### Cloud archives that have been offloaded
 
-A cloud-sync client may replace a local archive with a placeholder to save space. Reading it re-downloads it. So a scheduled health check or drill **skips** an offloaded cloud archive rather than silently pulling gigabytes back down, and reports it as "not downloaded" — which is neither a pass nor a failure, just "couldn't check it without downloading." Turn on "Download cloud archives to check them" (Settings ▸ General ▸ Archive health) to download and verify them anyway. Either way, an on-demand check from the ⋯ menu honors the same setting.
+A cloud-sync client may replace a local archive with a placeholder to save space. Reading it re-downloads it. So a scheduled health check or drill **skips** an offloaded cloud archive rather than silently pulling gigabytes back down, and reports it as "not downloaded". That is neither a pass nor a failure, just "couldn't check it without downloading." Turn on "Download cloud archives to check them" (Settings ▸ General ▸ Archive health) to download and verify them anyway. Either way, an on-demand check from the ⋯ menu honors the same setting.
 
 ### What gets verified, exactly
 

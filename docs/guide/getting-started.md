@@ -28,36 +28,33 @@ You can skip this and run every job by hand with Run now. Scheduling is only nee
 
 ## Make your first job
 
-Click New Job to open the guided wizard. You can also drag a folder onto the window to start one pre-filled.
+Click New Job to open the job editor. You can also drag a folder onto the window to start one with that folder already in it.
 
-The wizard walks four steps:
+<!-- SHOT: editor-create.png — the job editor in create mode with quick-start presets -->
 
-**1. What to back up.** Pick a template (Photos nightly, Music mirror) to set everything at once, or choose libraries yourself. Each library shows its size once measured.
+**Quick start.** A new job begins with presets: Photos nightly, Music kept up to date, Photos and Music together, or start from scratch. A preset fills in everything below it, and you can change any of it.
 
-![Wizard step one: templates and detected libraries with sizes](../screenshots/wizard-1-what.png)
+**Back up.** The libraries and folders in the job. Each library shows its size once measured. Add a folder with Back up another folder…, or a Final Cut Pro, Lightroom, Capture One, or Logic Pro library with A library from another app….
 
-**2. Where.** Choose one or more destinations. Each shows its free space, and the total to back up is checked against it — so you know it fits before you create the job. The first destination is the primary; the rest are extra copies.
+**Copies go to.** Add destination… and choose a folder: on this Mac, on an external drive, on a network share, or in a cloud folder. Cryoframe works out which kind it is. The first destination is the main one, which every backup has to reach; the rest are extra copies. If the backup may not fit on the main destination, the editor says so before you create the job.
 
-![Wizard step two: choosing destinations with free space shown](../screenshots/wizard-2-where.png)
+**When.** Every day, every few hours, once, or only when you say. Here you also choose whether each backup keeps one up-to-date copy or dated versions, and for dated versions, how many to keep.
 
-**3. How often.** Every night, every few hours, or manual.
+**Details.** Encryption, how each backup is checked, and what to do if the library's app is open. The defaults are set for a trustworthy backup.
 
-![Wizard step three: choosing how often the job runs](../screenshots/wizard-3-schedule.png)
-
-**4. Review.** Confirm what you're about to create. Advanced options — format, encryption, verification, and how many versions to keep — sit in an expandable section and are all editable; the defaults are set for a trustworthy backup.
-
-![Wizard step four: the review, with advanced options expanded](../screenshots/wizard-4-review.png)
-
-Create the job, then click Run now once to confirm it works end to end. The job row turns green when the archive is written and verified. You do not need to quit Photos or Music first.
+Before the job is created, a summary says what its first backup will do, including anything it would delete at a destination that already holds backups. Then click Run now once to confirm it works end to end. The job row turns green when the backup is written and checked. You do not need to quit Photos or Music first.
 
 ## The dashboard
 
-Once you have a job, the top of the window is a status panel that answers "am I backed up?" at a glance: a green shield when everything is healthy, or an amber warning naming the job that needs attention. Below it are four figures — the last successful backup, the total size protected, the number of destinations, and free space on the tightest one — so you can see your headroom without opening anything.
+Once you have a job, the top of the window is a status panel that answers "am I backed up?" at a glance: a green shield when everything is healthy, or an amber warning naming the job that needs attention. Below it are four figures: the last successful backup, the total size protected, the number of destinations, and free space on the tightest one.
 
+A few cards can appear under it when something needs a decision from you: backups from an earlier version of Cryoframe that a job is keeping until you say otherwise (see [Versions, retention, and storage](versions-retention-storage.md)), and a reminder when your recovery file or printed recovery kit is out of date (see [Encryption and recovery keys](encryption-and-recovery-keys.md)).
+
+<!-- SHOT: main-window.png — the main window: protection dashboard, a decision card, and the job list -->
 ![The main window with the protection dashboard, job list, and activity log](../screenshots/main-window.png)
 
 ## What to read next
 
 - [Jobs](jobs.md) for running, pausing, and managing backups.
 - [Encryption and recovery keys](encryption-and-recovery-keys.md) if any backup leaves your Mac, for example to a NAS or a cloud folder.
-- [Restoring](restoring.md) for getting a library back.
+- [Restoring](restoring.md) for getting a library, or a single file, back.
