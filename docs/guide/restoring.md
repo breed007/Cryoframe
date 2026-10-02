@@ -8,7 +8,7 @@ Restoring reads a library back out of an archive. There are two doors, depending
 
 If you don't have Cryoframe at hand, every destination has a note at its top, "READ ME - How to restore without Cryoframe.txt", that explains how to open each backup with tools built into macOS.
 
-Everything here verifies an archive's checksums before writing anything, checks there is room first, and never overwrites what is already on the Mac. An archive in a cloud folder that the provider has offloaded is downloaded before it is opened.
+Everything here verifies an archive's checksums before writing anything, checks there is room first, and never overwrites what is already on the Mac unless you switch the restore to In place, which moves your current library to the Trash first. An archive in a cloud folder that the provider has offloaded is downloaded before it is opened.
 
 ## Find the archives
 

@@ -58,7 +58,7 @@ What it adds is the question no per-archive check can answer: **is everything yo
 
 Rehearsals run monthly, and you can run one at any time from a job's ⋯ menu (Rehearse recovery…). Only the newest version of each library is opened, so the work depends on how much you protect rather than how long you have kept it. Turn the schedule off in Settings ▸ General ▸ Running.
 
-![A job's ⋯ menu, with Verify archives, Run restore drill, and Rehearse recovery](../screenshots/rehearse-recovery.png)
+<!-- SHOT: rehearse-recovery.png — a job's ⋯ menu with Verify, Run restore drill, Rehearse recovery -->
 
 ### Stopping a check
 

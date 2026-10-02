@@ -34,7 +34,7 @@ If you go back to Cryoframe 1.5.6 and then return to 1.6, the go-aheads are lost
 
 ## Kept versions
 
-A version marked "Kept" in Restore and Storage is one a job no longer manages, usually because the job changed between one up-to-date copy and dated versions. The versions in its folder from before the change, and a mirror left behind, are kept and nothing deletes them. Delete one yourself from Restore when you no longer need it.
+A version marked "Kept" in Restore and Storage is one a job no longer manages, usually because the job changed between one up-to-date copy and dated versions. The versions in its folder from before the change, and a mirror left behind, are kept and nothing deletes them. Cryoframe never deletes them for you, and Restore has no delete action, so to remove one, delete its files in Finder.
 
 ## When a destination is filling up
 
@@ -63,7 +63,7 @@ A backup in a cloud-sync folder is on this Mac until the provider uploads it, wh
 - "Upload not known", in gray: Cryoframe can't tell yet. This is the usual answer, and it is normal.
 - "Not offsite yet", in yellow: a version still isn't uploaded a day after its run.
 
-Cryoframe counts a version as uploaded only with proof. macOS lets a provider report upload status, but no provider's report is trusted until it has been tested against a real account, and none has been yet. Until then the only proof is a file the provider has offloaded to a placeholder, which it can only do once it holds the file. So most cloud destinations read "Upload not known" in gray, and "Not offsite yet" won't appear until a provider's report is trusted. To be sure, check the provider's own menu-bar app. Check Again looks at every version in the folder again.
+Cryoframe counts a version as uploaded only with proof. macOS lets a provider report upload status, but no provider's report is trusted until it has been tested against a real account, and none has been yet. Until then the only proof is a file the provider has offloaded to a placeholder, which it can only do once it holds the file. So most cloud destinations read "Upload not known" in gray, and neither "Uploading" nor "Not offsite yet" can appear until a provider's report is trusted. To be sure, check the provider's own menu-bar app. Check Again looks at every version in the folder again.
 
 ## A worked example
 

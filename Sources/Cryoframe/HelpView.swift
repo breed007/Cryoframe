@@ -38,7 +38,8 @@ struct HelpView: View {
                         para("Press New Job. The job editor starts with quick-start presets; pick one, or start from scratch, and change anything below it. New Job and Edit… open the same editor.")
                         bullet("Back up: the libraries and folders in the job. Everything chosen is frozen in one snapshot and backed up together, each into its own folder at every destination, so they're a consistent point-in-time set. Add a folder with Back up another folder….")
                         bullet("Copies go to: the destinations. Add destination… takes a folder on this Mac, an external drive, a network share or a cloud folder, and Cryoframe works out which it is. The main destination is the one every backup has to reach.")
-                        bullet("When: how often, whether each backup keeps one up-to-date copy or dated versions (as disk images or zip files), and how many to keep.")
+                        bullet("When: how often the job runs: every day, every few hours, once, or only when you say.")
+                        bullet("Keep: whether each backup keeps one up-to-date copy or dated versions (as disk images or zip files), and how many versions to keep.")
                         bullet("Details: encryption, how each backup is checked, and what to do if the library's app is open.")
                         bullet("Before you save, a summary says what the change does to the backups already at each destination.")
                     }
@@ -117,10 +118,10 @@ struct HelpView: View {
                     section("Restoring a library") {
                         bullet("Click Restore (top right), point it at the folder holding your archives (or use a Quick pick for a destination you back up to), and it lists the libraries it finds.")
                         bullet("Pick what to restore and a destination folder. Cryoframe verifies the checksums, then mounts or extracts the archive and copies the library out with its original folder name.")
-                        bullet("It restores next to anything already there, never over your live library. If something there has the same name, Restore Alongside brings it back beside it under a new name. Once it's done, move the restored library into place, or double-click it to open in its app.")
+                        bullet("The restore bar's Beside / In place switch chooses where the library goes. Beside, the default, copies it into the folder you picked and never over your live library. If something there has the same name, Restore Alongside brings it back beside it under a new name. Once it's done, move the restored library into place, or double-click it to open in its app.")
                         bullet("Find a File… (top of the Restore window) searches each version's list of files for a name or a path, newest first. Show opens the version at the match. Versions made before 1.6, and live mirrors, have no list; use Look inside… for those.")
-                        bullet("Each archive's ⋯ menu also offers Restore in place (replaces your live library: the current one moves to the Trash, so it's reversible; quit the owning app first) and Browse contents (opens the archive in an in-app file browser so you can drill in and extract just the files you need).")
-                        bullet("The ⋯ menu also lets you delete a single archive version you no longer need.")
+                        bullet("In place replaces your live library with the version you picked. The current one moves to the Trash, so it's reversible; quit the owning app first.")
+                        bullet("Browse… opens the picked version in an in-app file browser so you can drill in and extract just the files you need.")
                     }
 
                     section("Verification") {
@@ -128,11 +129,11 @@ struct HelpView: View {
                         bullet("Full check (opens it) also mounts the finished archive and confirms the library's database opens clean, so you aren't holding a backup that only looks fine.")
                     }
 
-                    section("Example: back up Apple Photos weekly") {
+                    section("Example: back up Apple Photos nightly") {
                         bullet("Library: Photos")
                         bullet("Copies go to: an external drive, or a folder")
                         bullet("Each backup keeps: Dated versions, as disk images")
-                        bullet("Back up: Every day at a quiet hour like 2:00, or Only when I say, and run it by hand")
+                        bullet("When: Every day, at a quiet hour like 2:00")
                         bullet("Check each backup: Full check (opens it)")
                         para("Press Run now once to confirm it works. The job row turns green when the archive verifies. You don't need to quit Photos first.")
                     }

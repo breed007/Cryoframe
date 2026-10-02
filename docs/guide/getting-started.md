@@ -32,13 +32,15 @@ Click New Job to open the job editor. You can also drag a folder onto the window
 
 <!-- SHOT: editor-create.png — the job editor in create mode with quick-start presets -->
 
-**Quick start.** A new job begins with presets: Photos nightly, Music kept up to date, Photos and Music together, or start from scratch. A preset fills in everything below it, and you can change any of it.
+**Quick start.** A new job begins with presets: "Photos, nightly", "Music, kept up to date", "Photos and Music", or start from scratch. A preset fills in everything below it, and you can change any of it.
 
 **Back up.** The libraries and folders in the job. Each library shows its size once measured. Add a folder with Back up another folder…, or a Final Cut Pro, Lightroom, Capture One, or Logic Pro library with A library from another app….
 
 **Copies go to.** Add destination… and choose a folder: on this Mac, on an external drive, on a network share, or in a cloud folder. Cryoframe works out which kind it is. The first destination is the main one, which every backup has to reach; the rest are extra copies. If the backup may not fit on the main destination, the editor says so before you create the job.
 
-**When.** Every day, every few hours, once, or only when you say. Here you also choose whether each backup keeps one up-to-date copy or dated versions, and for dated versions, how many to keep.
+**When.** Every day, every few hours, once, or only when you say.
+
+**Keep.** Whether each backup keeps one up-to-date copy or dated versions, and for dated versions, their format and how many to keep.
 
 **Details.** Encryption, how each backup is checked, and what to do if the library's app is open. The defaults are set for a trustworthy backup.
 

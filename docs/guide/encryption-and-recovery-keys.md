@@ -53,7 +53,7 @@ Click Print Recovery Kit… in Settings ▸ Security. The kit lists your jobs, w
 
 <!-- SHOT: recovery-kit.png — the Print a recovery kit dialog, with the passphrase box unticked -->
 
-If you want the passphrases on paper too, tick "Also print the passphrases, on a separate page". Cryoframe then warns you before printing that page, because anyone holding it can open your encrypted backups. The page goes through the print queue like any other, and the PDF menu in the print panel (Save as PDF, Mail, Preview) writes or sends a copy, so choose a printer, not PDF. The choice is never remembered; the box starts unticked every time.
+If you want the passphrases on paper too, tick "Also print the passphrases, on a separate page". Cryoframe then warns you before printing that page, because anyone holding it can open your encrypted backups. The page goes through the print queue like any other, and macOS keeps a copy of each print job's file for about a day afterward. The PDF menu in the print panel (Save as PDF, Save to iCloud Drive, Mail, Preview) writes or sends a copy, so choose a printer, not PDF. The choice is never remembered; the box starts unticked every time.
 
 When your jobs change after you printed the kit, the main window and Settings ▸ Security say the kit is out of date. Print a new one and replace the old.
 

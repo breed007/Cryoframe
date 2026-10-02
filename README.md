@@ -57,9 +57,7 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - A menu-bar status item and notifications, so you know at a glance whether the last run succeeded, scheduled ones included.
 - Owns its snapshots end to end. It never touches Time Machine's snapshots.
 
-<div align="center">
-  <img src="docs/screenshots/rehearse-recovery.png" alt="A job's ⋯ menu: Verify archives, Run restore drill, and Rehearse recovery" width="640">
-</div>
+<!-- SHOT: rehearse-recovery.png — a job's ⋯ menu with Verify, Run restore drill, Rehearse recovery -->
 
 ## Supported libraries
 
@@ -120,11 +118,12 @@ Three one-time steps, shown at the top of the window:
 
 ## Using it
 
-Press New Job. The editor opens with quick-start presets (Photos nightly, Music kept up to date, both together, or start from scratch), and everything a preset sets is shown below it to change:
+Press New Job. The editor opens with quick-start presets ("Photos, nightly", "Music, kept up to date", "Photos and Music", or start from scratch), and everything a preset sets is shown below it to change:
 
 - **Back up**: the libraries and folders in the job. Everything chosen is backed up from one moment in time, each in a folder of its own.
 - **Copies go to**: the destinations. **Add destination…** takes a folder on this Mac, an external drive, a network share, or a cloud folder; Cryoframe works out which it is. The first is the main destination, which a backup has to reach. Drives can take turns, so each backup goes to whichever is connected.
-- **When**: every day, every few hours, once, or only when you say. Each backup keeps one up-to-date copy (a live mirror) or dated versions, as disk images or zip files, with a Keep rule for how many.
+- **When**: every day, every few hours, once, or only when you say.
+- **Keep**: each backup keeps one up-to-date copy (a live mirror) or dated versions, as disk images or zip files, with a rule for how many versions to keep.
 - **Details**: encryption, how each backup is checked, and what to do if the library's app is open.
 
 <!-- SHOT: editor-create.png — the job editor in create mode with quick-start presets -->
@@ -169,9 +168,9 @@ Not sure which night still had the file? **Find a File…** in Restore searches 
   <img src="docs/screenshots/recovery-point-in-time.png" alt="Choosing a moment to rebuild to: one slider, and each library shows the version it had at that moment" width="560">
 </p>
 
-In this example the moment is 2:00 AM on 31 July. Photos, which runs nightly, contributes its 31 July version. Messages runs every few days at 3:00 AM, so its last version before that moment is the 28th; restoring its 31st would pull in changes that had not happened yet.
+In this example the moment is 2:00 AM on July 31. Photos, which runs nightly, contributes its July 31 version. Messages runs every few days at 3:00 AM, so its last version before that moment is the 28th; restoring its 31st would pull in changes that had not happened yet.
 
-Both verify an archive before writing it, and neither overwrites anything already on the Mac. If something already has the name a library would come back under, you can restore alongside it under a new name.
+Both verify an archive before writing it. Recover to this Mac never overwrites anything already on the Mac, and neither does Restore unless you switch it to In place, which replaces the live library and moves the old one to the Trash. If something already has the name a library would come back under, you can restore alongside it under a new name.
 
 Without Cryoframe, every destination has a plain-text note, "READ ME - How to restore without Cryoframe.txt", that says what is there and how to open it with tools built into macOS. For the day this Mac is gone, print a recovery kit from Settings ▸ Security: it lists every job and where its backups are, with each drive's name and volume UUID.
 

@@ -6,7 +6,7 @@ A job is one backup definition: which libraries and folders to back up, where th
 
 ## The job editor
 
-New Job and Edit… open the same editor, so making a job and changing one look the same and use the same words. It has four parts.
+New Job and Edit… open the same editor, so making a job and changing one look the same and use the same words. It has up to six parts: Quick start (new jobs only), Back up, Copies go to, When, Keep, and Details.
 
 **Back up** lists the libraries and folders in the job. Everything chosen is backed up from one moment in time, each into a folder of its own at every destination, so the set is consistent to the same instant. A job can hold one library or a dozen. Add a folder with Back up another folder…, or a library another app keeps anywhere it likes with A library from another app… (Final Cut Pro, Lightroom Classic, Capture One, Logic Pro). Two libraries with the same name can be in one job; the editor notes it, and each gets its own folder.
 
@@ -19,7 +19,9 @@ Each library's menu has:
 
 **Copies go to** lists the destinations. See [Formats and destinations](formats-and-destinations.md) for what each kind does. The first destination is the main one: a backup has to reach it, while one that can't reach another finishes with a warning. Make main moves that role to another destination, and drives can take turns as one destination.
 
-**When** sets how often the job runs (every day, every few hours, once, or only when you say), whether each backup keeps one up-to-date copy or dated versions, and for dated versions, their format and how many to keep.
+**When** sets how often the job runs: every day, every few hours, once, or only when you say.
+
+**Keep** sets whether each backup keeps one up-to-date copy or dated versions, and for dated versions, their format and how many to keep.
 
 **Details** holds encryption, how each backup is checked (a quick check, or a full check that opens it), and what to do if the library's app is open: back up anyway, back up and say so, or wait until it's closed.
 
