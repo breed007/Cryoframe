@@ -66,6 +66,8 @@ private func shownText(source: String) throws -> [String] {
         "Sources/CryoframeKit/JobPreset.swift",
         "Sources/CryoframeKit/Source.swift",
         "Sources/CryoframeKit/LibraryNames.swift",
+        "Sources/CryoframeKit/MediaExport.swift",
+        "Sources/Cryoframe/ExportMediaView.swift",
     ])
     func theEditorSpeaksOneVocabulary(file: String) throws {
         let shown = try shownText(file)

@@ -39,6 +39,7 @@ allow
 allows
 alone
 already
+alreadythere
 also
 always
 an
@@ -53,6 +54,7 @@ anything
 apart
 apfs
 apfsvolumeuuid
+aplibrary
 app
 appeared
 append
@@ -66,6 +68,7 @@ archive
 archived
 archives
 are
+aren't
 arm
 arrow
 artifact
@@ -77,6 +80,7 @@ at
 attach
 attached
 attaches
+attachments
 attention
 attribute
 attributes
@@ -311,6 +315,7 @@ entry
 errno
 error
 etc
+even
 every
 everything
 examples
@@ -322,6 +327,7 @@ exists
 exit
 export
 exported
+exporting
 exports
 extended
 external
@@ -335,6 +341,7 @@ fake
 false
 fast
 fat
+fcpbundle
 few
 fewer
 file
@@ -448,6 +455,7 @@ imovieapp
 imovielibrary
 in
 included
+including
 incomplete
 incorrect
 index
@@ -491,6 +499,7 @@ kept
 key
 kib
 kind
+kinds
 kit
 kmdlabel
 kmgt
@@ -533,6 +542,7 @@ long
 longer
 look
 looked
+looking
 loses
 lost
 low
@@ -589,6 +599,7 @@ mobile
 mobilesms
 month
 monthly
+months
 more
 most
 mount
@@ -698,6 +709,7 @@ pipe
 pipes
 place
 plist
+pluginpayloadattachment
 plus
 point
 points
@@ -849,6 +861,7 @@ since
 size
 sizes
 skipped
+skips
 snap
 snapshot
 snapshots
@@ -920,6 +933,7 @@ their
 them
 then
 there
+there's
 these
 they
 they're
@@ -939,6 +953,7 @@ told
 too
 took
 tool
+toolarge
 tools
 top
 transfer
@@ -954,6 +969,7 @@ try
 turn
 turned
 turns
+tvlibrary
 txt
 type
 ubf
@@ -1008,6 +1024,7 @@ version
 version's
 versions
 versionstamp
+videos
 volname
 volume
 volumename
@@ -1039,6 +1056,7 @@ which
 whichever
 while
 white
+who
 whole
 whose
 why

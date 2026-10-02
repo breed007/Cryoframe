@@ -236,6 +236,7 @@ struct RestoreView: View {
     @State private var selectedVersionID: String?
     @State private var mode: RestoreMode = .beside
     @State private var finding = false
+    @State private var exporting: RestorableArchive?
 
     // effective selection, with fallbacks so the view is always coherent
     private var activeLibrary: String? { selectedLibrary ?? r.orderedLibraries.first }
@@ -284,6 +285,10 @@ struct RestoreView: View {
         }
         .sheet(isPresented: $finding) {
             FindFileView(restore: r) { finding = false }
+        }
+        .sheet(item: $exporting) { a in
+            let job = a.libraryKey?.split(separator: "/", maxSplits: 1).first.map(String.init)
+            ExportMediaView(archive: a, passphrases: FindFileModel.passphrases(typed: r.passphrase, jobID: job)) { exporting = nil }
         }
         .alert("Replace your live library?",
                isPresented: Binding(get: { r.pendingInPlace != nil }, set: { if !$0 { r.pendingInPlace = nil } })) {
@@ -635,6 +640,11 @@ struct RestoreView: View {
             }
             Button("Browse…") { r.browse(v) }
                 .disabled(v.encrypted && r.passphrase.isEmpty)
+            if MediaExportScope.isOffered(v) {
+                Button("Export Media…") { exporting = v }
+                    .disabled(v.encrypted && r.passphrase.isEmpty)
+                    .help("Copy this version's photos, videos or other files into month folders")
+            }
             Button(effectiveMode == .inPlace ? "Replace live library" : "Restore this version") { doRestore(v) }
                 .buttonStyle(.borderedProminent)
                 .disabled(v.encrypted && r.passphrase.isEmpty)
