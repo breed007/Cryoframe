@@ -243,7 +243,9 @@ private func names(_ p: MediaExportPlan) -> [String] { p.copies.map { "\($0.fold
         let card = MediaExportDrive(name: "Card", cluster: 131_072, companions: true)
         let floor: UInt64 = 16 * 1024 * 1024
         #expect(MediaExportRoom.needed(p, drive: mac) == 4096 + 135_168 + 4096 + floor)
-        #expect(MediaExportRoom.needed(p, drive: card) == (131_072 + 262_144) + 2 * 131_072 + 2 * 131_072 + floor)
+        // typed parts: Xcode 16's type checker gives up on the literal sum
+        let files: UInt64 = 131_072 + 262_144, companions: UInt64 = 2 * 131_072, folders: UInt64 = 2 * 131_072
+        #expect(MediaExportRoom.needed(p, drive: card) == files + companions + folders + floor)
         var tight = card; tight.free = MediaExportRoom.needed(p, drive: card) - 1
         let refusal = MediaExportRoom.refusal(p, drive: tight)
         #expect(refusal != nil)
