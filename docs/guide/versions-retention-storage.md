@@ -34,7 +34,7 @@ If you go back to Cryoframe 1.5.6 and then return to 1.6, the go-aheads are lost
 
 ## Kept versions
 
-A version marked "Kept" in Restore and Storage is one a job no longer manages, usually because the job changed between one up-to-date copy and dated versions. The versions in its folder from before the change, and a mirror left behind, are kept and nothing deletes them. Cryoframe never deletes them for you, and Restore has no delete action, so to remove one, delete its files in Finder.
+A version marked "Kept" in Restore and Storage is one a job no longer manages, usually because the job changed between one up-to-date copy and dated versions. The versions in its folder from before the change, and a mirror left behind, are kept, and Cryoframe never deletes them. Restore has no delete action, so to remove one you no longer need, quit Cryoframe and delete that version's folder (or the left-behind mirror image) in Finder.
 
 ## When a destination is filling up
 
