@@ -19,6 +19,17 @@ private func tempDir(_ tag: String) -> URL {
 
 private let hdiutil = "/usr/bin/hdiutil"
 
+/// `body` once the image it opens is free: macOS sometimes attaches a freshly
+/// written image itself, with nothing mounted, for longer than a run waits (see the
+/// QA notes on the OS scanner).
+private func onceFree<T>(_ body: () throws -> T) throws -> T {
+    let until = Date().addingTimeInterval(60)
+    while true {
+        do { return try body() }
+        catch let e as DiskImageInUse where e.attachedWithoutMount && Date() < until { Thread.sleep(forTimeInterval: 1) }
+    }
+}
+
 /// a library of `n` small files, half of them in a subfolder.
 private func library(files n: Int) throws -> URL {
     let lib = tempDir("lib").appendingPathComponent("Lib")
@@ -436,7 +447,7 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
         let src = try library(files: 4)
         let real = tempDir("real"), links = tempDir("links"), base = tempDir("base"), back = tempDir("back")
         defer { for d in [real, links, base, back, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
-        _ = try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: real.appendingPathComponent("Lib"))
+        _ = try onceFree { try SparseBundleMirrorEngine(sizeGB: 1, mountBase: base).archive(ArchiveSource(name: "Lib", root: src), to: real.appendingPathComponent("Lib")) }
         let dest = links.appendingPathComponent("Backups")
         try FileManager.default.createSymbolicLink(at: dest, withDestinationURL: real)
 
@@ -445,11 +456,12 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
             let found = RestoreDiscovery.scan(place)
             #expect(found.map(\.libraryName) == ["Lib"], "scanning \(place.lastPathComponent) found \(found.map(\.libraryName))")
             if let archive = found.first {
-                let check = try ChecksumVerifier().reverify(archiveDir: archive.dir)
+                let check = try onceFree { try ChecksumVerifier().reverify(archiveDir: archive.dir) }
                 #expect(check.passed, "\(check.details)")
             }
         }
-        let restored = try RestoreEngine().restore(try #require(RestoreDiscovery.scan(dest).first), to: back, verify: true)
+        let found = try #require(RestoreDiscovery.scan(dest).first)
+        let restored = try onceFree { try RestoreEngine().restore(found, to: back, verify: true) }
         #expect(tree(restored) == tree(src))
     }
 
