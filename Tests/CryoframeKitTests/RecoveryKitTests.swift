@@ -30,6 +30,8 @@ private func jobs() -> [BackupJob] {
                   frequency: .manual, createdAt: printed),
         BackupJob(id: "j3", name: "Notes mirror", libraries: [notes], target: drive, format: .liveMirror(sizeGB: 1),
                   frequency: .manual, createdAt: printed),
+        BackupJob(id: "j4", name: "Notes plain", libraries: [notes], target: drive, format: .plainFiles,
+                  frequency: .manual, createdAt: printed),
     ]
 }
 
