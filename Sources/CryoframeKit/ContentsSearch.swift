@@ -239,8 +239,46 @@ public struct ContentsSearch: Sendable {
         switch outcome {
         case .stopped: return nil
         case .unavailable(let why): return VersionSearchResult(archive: archive, answer: .noList(why))
-        case .read(_, let partial): return VersionSearchResult(archive: archive, answer: .listed(hits: hits, more: more, partial: partial))
+        case .read(_, let partial):
+            if archive.format == .plainFiles {
+                let finished = Self.searchRemoved(in: archive.dir, control: control) { entry in
+                    guard query.matches(entry) else { return }
+                    if hits.count < limit { hits.append(entry) } else { more = true }
+                }
+                guard finished else { return nil }
+            }
+            return VersionSearchResult(archive: archive, answer: .listed(hits: hits, more: more, partial: partial))
         }
+    }
+
+    /// Hand `visit` every item kept in a plain-files copy's Removed items (see
+    /// PlainCopy), as the library had it, with the day it was removed and where it is
+    /// kept. What was deleted from the library is still on the drive, and a search
+    /// that said otherwise would send someone to a file they have. Read from the drive
+    /// as it is: the list holds the copy only. false when stopped part way.
+    static func searchRemoved(in folder: URL, control: RunControl?, visit: (ContentsEntry) -> Void) -> Bool {
+        let removed = folder.appendingPathComponent(PlainCopyLayout.removedFolder, isDirectory: true)
+        var seen = 0
+        for (day, dayFolder) in RemovedItems.days(in: removed) {
+            guard let walker = FileManager.default.enumerator(atPath: dayFolder.path) else { continue }
+            while let rel = walker.nextObject() as? String {
+                seen += 1
+                if seen % 512 == 0, control?.isCancelled == true { return false }
+                var st = stat()
+                guard lstat(dayFolder.appendingPathComponent(rel).path, &st) == 0 else { continue }
+                let kind: ContentsEntry.Kind
+                switch st.st_mode & S_IFMT {
+                case S_IFDIR: kind = .folder
+                case S_IFLNK: kind = .link
+                case S_IFREG: kind = .file
+                default: continue
+                }
+                visit(ContentsEntry(path: rel, size: kind == .file ? UInt64(max(st.st_size, 0)) : 0, modified: Int64(st.st_mtimespec.tv_sec),
+                                    kind: kind, removedOn: day,
+                                    keptAt: PlainCopyLayout.removedFolder + "/" + dayFolder.lastPathComponent + "/" + rel))
+            }
+        }
+        return control?.isCancelled != true
     }
 
     static func short(_ error: Error) -> String {
@@ -295,6 +333,14 @@ public enum ArchiveLayout {
     /// the item a list's `path` names, in an opened archive
     public static func item(_ path: String, in opened: URL, for archive: RestorableArchive) -> URL {
         libraryRoot(in: opened, for: archive).appendingPathComponent(path)
+    }
+
+    /// where a search's match is in an opened archive: an item kept in a plain-files
+    /// copy's Removed items is beside the copy, not in it (an opened plain-files copy
+    /// is its library's folder)
+    public static func item(_ entry: ContentsEntry, in opened: URL, for archive: RestorableArchive) -> URL {
+        if let kept = entry.keptAt, archive.format == .plainFiles { return opened.appendingPathComponent(kept) }
+        return item(entry.path, in: opened, for: archive)
     }
 
     /// For the file browser opened at a match: the folders from `root` down to the

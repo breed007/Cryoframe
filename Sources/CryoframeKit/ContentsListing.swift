@@ -59,8 +59,20 @@ public struct ContentsEntry: Sendable, Hashable {
     public var modified: Int64
     public var kind: Kind
 
+    /// a plain-files copy's item deleted from the library: the day it was moved into
+    /// Removed items, and where it is kept, from the library's folder (see PlainCopy)
+    public var removedOn: Date? = nil
+    public var keptAt: String? = nil
+
+    public init(path: String, size: UInt64, modified: Int64, kind: Kind, removedOn: Date? = nil, keptAt: String? = nil) {
+        self.path = path; self.size = size; self.modified = modified; self.kind = kind
+        self.removedOn = removedOn; self.keptAt = keptAt
+    }
+
     public var name: String { path.split(separator: "/").last.map(String.init) ?? path }
     public var modifiedDate: Date { Date(timeIntervalSince1970: TimeInterval(modified)) }
+    /// one item in a search's answer: where it is
+    public var key: String { keptAt ?? path }
 }
 
 public enum ContentsListing {
@@ -297,7 +309,10 @@ public enum ContentsListing {
             return .unavailable(.damaged)
         }
         guard parser.count == digest.entries, parser.partial == digest.partial else { return .unavailable(.damaged) }
-        return .read(entries: parser.count, partial: parser.partial)
+        // a plain-files copy whose last update was stopped holds what that update
+        // copied, which its list (the update's before) doesn't: not sure of an absence
+        let stopped = archive.format == .plainFiles && PlainCopyLayout.isOpen(archive.dir)
+        return .read(entries: parser.count, partial: parser.partial || stopped)
     }
 
     /// Splits inflated bytes into lines and checks them: the first says what the list

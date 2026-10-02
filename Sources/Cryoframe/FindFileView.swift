@@ -82,7 +82,7 @@ final class FindFileModel: ObservableObject {
     /// Open `a` and show it in the file browser, at `path` (from its list) or at its
     /// top. An encrypted version takes the typed passphrase, or the one saved for
     /// the job its folder says made it.
-    func open(_ a: RestorableArchive, at path: String?, passphrase: String) {
+    func open(_ a: RestorableArchive, at hit: ContentsEntry?, passphrase: String) {
         guard opening == nil else { return }
         let job = a.libraryKey?.split(separator: "/", maxSplits: 1).first.map(String.init)
         let candidates = a.encrypted ? Self.passphrases(typed: passphrase, jobID: job) : [""]
@@ -97,7 +97,7 @@ final class FindFileModel: ObservableObject {
             switch outcome {
             case .opened(let o):
                 self.browsing = Browse(name: a.bundleName, root: o.root,
-                                       reveal: path.map { ArchiveLayout.item($0, in: o.root, for: a) }, warning: o.warning)
+                                       reveal: hit.map { ArchiveLayout.item($0, in: o.root, for: a) }, warning: o.warning)
             case .failed(let why):
                 self.errorMessage = why
             case .canceled:
@@ -212,7 +212,7 @@ struct FindFileView: View {
     @ViewBuilder private func rows(_ r: VersionSearchResult) -> some View {
         switch r.answer {
         case .listed(let hits, let more, let partial):
-            ForEach(hits, id: \.path) { hit in hitRow(hit, in: r.archive) }
+            ForEach(hits, id: \.key) { hit in hitRow(hit, in: r.archive) }
             if partial {
                 // an incomplete list can miss it: the version itself can't
                 HStack(spacing: 8) {
@@ -251,6 +251,10 @@ struct FindFileView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(hit.name).lineLimit(1)
                 Text(hit.path).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                if let removed = hit.removedOn {
+                    Text("Removed from the library on \(removed.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.caption2).foregroundStyle(Color.cryoWarn)
+                }
             }
             Spacer()
             if hit.kind == .file {
@@ -259,7 +263,7 @@ struct FindFileView: View {
             }
             Text(hit.modifiedDate.formatted(date: .abbreviated, time: .omitted))
                 .font(.caption2).foregroundStyle(.tertiary)
-            Button("Show") { f.open(a, at: hit.path, passphrase: restore.passphrase) }
+            Button("Show") { f.open(a, at: hit, passphrase: restore.passphrase) }
                 .disabled(f.opening != nil)
                 .help("Open this version at \(hit.name), to extract it")
                 .accessibilityLabel("Show \(hit.name)")
