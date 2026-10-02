@@ -17,6 +17,8 @@ struct StorageView: View {
     /// cloud destinations' upload state; a key with no value is being looked at
     @State private var uploads: [DestinationKey: UploadSummary] = [:]
     @State private var checking: Set<DestinationKey> = []
+    /// a plain-files copy's Removed items to empty, and from before when (nil: all)
+    @State private var emptying: (folder: URL, before: Date?, label: String)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,6 +47,20 @@ struct StorageView: View {
         }
         .frame(width: 580, height: 500)
         .task { await load() }
+        .alert("Delete removed items?", isPresented: Binding(get: { emptying != nil }, set: { if !$0 { emptying = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let e = emptying {
+                    emptying = nil
+                    Task {
+                        _ = await Task.detached { RemovedItems.delete(in: e.folder, before: e.before) }.value
+                        await load()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { emptying = nil }
+        } message: {
+            Text("What was deleted from the library \(emptying?.label ?? "") is deleted from the backup too. This can't be undone.")
+        }
     }
 
     private func load() async {
@@ -102,6 +118,7 @@ struct StorageView: View {
                                     .help("Kept from before its job changed kind: nothing deletes it.")
                             }
                             Spacer()
+                            if let removed = a.removedItems { emptyMenu(removed) }
                             Text(size(a.bytes)).monospacedDigit()
                         }
                         .font(.caption2).foregroundStyle(.secondary)
@@ -120,6 +137,21 @@ struct StorageView: View {
         .cryoCard(padding: 13)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(s.jobName), \(size(s.archiveBytes)) of archives on \(s.targetName)")
+    }
+
+    /// Delete what a plain-files copy kept of what was deleted from its library, from
+    /// before a day (see RemovedItems): nothing else ever deletes it.
+    private func emptyMenu(_ removed: URL) -> some View {
+        Menu("Delete…") {
+            let now = Date(), cal = Calendar.current
+            Button("Older than 30 days") { emptying = (removed, cal.date(byAdding: .day, value: -30, to: now), "more than 30 days ago") }
+            Button("Older than 90 days") { emptying = (removed, cal.date(byAdding: .day, value: -90, to: now), "more than 90 days ago") }
+            Button("Older than a year") { emptying = (removed, cal.date(byAdding: .year, value: -1, to: now), "more than a year ago") }
+            Divider()
+            Button("All of them") { emptying = (removed, nil, "at any time") }
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .help("Removed items are what was deleted from the library, kept beside its copy until you delete them here.")
     }
 
     /// "Last 30 runs: 29 good, 1 failed", a bar per run, and a gray note when the

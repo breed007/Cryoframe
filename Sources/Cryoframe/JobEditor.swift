@@ -40,6 +40,10 @@ struct JobEditor: View {
     @State private var computingSummary = false
     @State private var deleting: BackupJob?
     @State private var revealedPassphrase: String?
+    /// what plain files mean for this job (see JobDraftState.plainFilesNotice), worked
+    /// out when the format or the destinations change: it asks each drive whether it
+    /// is encrypted
+    @State private var plainNotice: String?
 
     init(model: AppModel, isPresented: Binding<Bool>, editing: BackupJob? = nil,
          initialFolder: URL? = nil, initialLibraryID: String? = nil) {
@@ -412,6 +416,29 @@ struct JobEditor: View {
                 Text("Dated versions").tag("versions")
             }
             .pickerStyle(.radioGroup)
+            .disabled(draft.formatLocked)
+            if !draft.isSealed {
+                Picker("As", selection: copyAs) {
+                    Text("A disk image").tag("mirror")
+                    if draft.plainFilesOffered || draft.formatLocked { Text("Plain files").tag("plain") }
+                }
+                .pickerStyle(.radioGroup)
+                .disabled(draft.isEditing)
+                if draft.isEditing {
+                    Text(draft.formatLocked
+                         ? "A job keeping plain files stays that way. For a disk image or dated versions, make a new job."
+                         : "Plain files are chosen when a job is made. For plain files, make a new job.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if draft.isPlainFiles {
+                    ForEach(draft.state.plainFilesIssues(), id: \.self) { issue in
+                        Label(issue, systemImage: "xmark.octagon").font(.caption).foregroundStyle(.cryoWarn)
+                    }
+                    if let plainNotice {
+                        Label(plainNotice, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.cryoWarn)
+                    }
+                }
+            }
             if draft.isSealed {
                 Picker("As", selection: $draft.formatKind) {
                     Text("Disk images").tag("dmg")
@@ -437,14 +464,28 @@ struct JobEditor: View {
         footer: {
             Text(draft.isSealed
                  ? "Each backup is saved as a dated version you can go back to. Versions beyond what you keep are deleted after a backup; the one last proven to restore never is."
+                 : draft.isPlainFiles
+                 ? "Each backup brings one copy up to date as ordinary files and folders that any computer can open, with no history to go back to."
                  : "Each backup brings one copy up to date, fast, with no history to go back to.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+        .task(id: plainNoticeInputs) { plainNotice = draft.isPlainFiles ? draft.state.plainFilesNotice() : nil }
     }
 
     private var keepKind: Binding<String> {
         Binding(get: { draft.isSealed ? "versions" : "copy" },
                 set: { draft.formatKind = $0 == "copy" ? "mirror" : (draft.formatKind == "zip" && !draft.encrypt ? "zip" : "dmg") })
+    }
+
+    /// a disk image or plain files, for one up-to-date copy
+    private var copyAs: Binding<String> {
+        Binding(get: { draft.isPlainFiles ? "plain" : "mirror" },
+                set: { draft.formatKind = $0; if $0 == "plain" { draft.encrypt = false } })
+    }
+
+    /// what the plain-files notice depends on
+    private var plainNoticeInputs: [String] {
+        [draft.formatKind] + draft.dedupedTargets.map(\.destinationDir.path) + draft.selectedLibraries.map(\.id)
     }
 
     // MARK: Details
@@ -454,7 +495,11 @@ struct JobEditor: View {
             TextField("Name", text: $draft.name, prompt: Text(draft.defaultName))
             Toggle("Encrypt with a passphrase", isOn: $draft.encrypt)
                 .onChange(of: draft.encrypt) { _, on in if on, draft.formatKind == "zip" { draft.formatKind = "dmg" } }
-                .disabled(draft.encryptionLocked)
+                .disabled(draft.encryptionLocked || draft.isPlainFiles)
+            if draft.isPlainFiles, !draft.encryptionLocked {
+                Text("Plain files can't be encrypted. For an encrypted copy, keep it as a disk image.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if draft.encryptionLocked {
                 Text(draft.encrypt
                      ? "The passphrase can't be changed for an existing job: the backups made with it would stop opening. For another passphrase, make a new job."
@@ -477,9 +522,11 @@ struct JobEditor: View {
                 Text("The passphrase is kept only in this Mac's Keychain. Keep a copy in your password manager, and export your recovery file: without it, nobody can open these backups on another Mac.")
                     .font(.caption).foregroundStyle(.cryoWarn)
             }
-            Picker("Check each backup", selection: $draft.verification) {
-                Text("Quick check").tag(VerificationPolicy.checksumOnly)
-                Text("Full check (opens it)").tag(VerificationPolicy.mountAndOpen)
+            if !draft.isPlainFiles {
+                Picker("Check each backup", selection: $draft.verification) {
+                    Text("Quick check").tag(VerificationPolicy.checksumOnly)
+                    Text("Full check (opens it)").tag(VerificationPolicy.mountAndOpen)
+                }
             }
             Picker("If the app is open", selection: $draft.runPolicy) {
                 Text("Back up anyway").tag(RunPolicy.proceed)
