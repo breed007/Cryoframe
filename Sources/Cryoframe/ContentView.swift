@@ -16,6 +16,7 @@ struct ContentView: View {
     @ObservedObject var model: AppModel
     @State private var droppedFolder: URL?
     @State private var showOnboarding = false
+    @State private var confirmClearActivity = false
     @AppStorage("onboarding.completed") private var onboardingCompleted = false
     @State private var editingJob: BackupJob?
     @State private var deletingJob: BackupJob?
@@ -112,6 +113,12 @@ struct ContentView: View {
                 model.showHelp = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { model.showReportProblem = true }
             })
+        }
+        .alert("Clear the activity list?", isPresented: $confirmClearActivity) {
+            Button("Clear") { model.clearActivity() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Backups and their versions aren't affected.")
         }
         .sheet(isPresented: $model.showReportProblem) { ReportProblemView(model: model, isPresented: $model.showReportProblem) }
         .sheet(isPresented: $model.showHistory) { HistoryView(model: model, isPresented: $model.showHistory) }
@@ -227,6 +234,10 @@ struct ContentView: View {
                     ProgressView().controlSize(.small)
                     Text("\(model.allRunningJobIDs.count) running").font(.caption).foregroundStyle(.cryoAccent)
                 }
+                Spacer()
+                Button("Clear") { confirmClearActivity = true }
+                    .buttonStyle(.link).font(.caption)
+                    .help("Empty this list. Your backups and the run history are not touched.")
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {

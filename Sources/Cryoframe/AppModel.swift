@@ -100,7 +100,10 @@ final class AppModel: ObservableObject {
         if loaded.droppedJobs > 0 {             // a partial decode shouldn't be silent
             log("⚠︎ \(loaded.droppedJobs) job\(loaded.droppedJobs == 1 ? "" : "s") couldn't be read and were skipped — they may have been written by a newer version.")
         }
-        for r in history.all().prefix(8).reversed() { log(Self.historyLine(r)) }   // seed the activity log
+        let clearedAt = UserDefaults.standard.object(forKey: Prefs.activityClearedAt) as? Double
+        for r in ActivityList.seed(history.all(), clearedAt: clearedAt.map(Date.init(timeIntervalSince1970:)), limit: 8).reversed() {
+            log(Self.historyLine(r))                // seed the activity log
+        }
         reloadHealth()
         notifiedIDs = Set(history.all().map(\.id))   // don't notify for runs that predate this launch
         notifiedHealthIDs = Set(healthStore.all().map(\.id))
@@ -984,6 +987,15 @@ final class AppModel: ObservableObject {
     /// the one place the "started" line is formatted — the finish path has to find
     /// the exact string the start path wrote, and two literals drift.
     static func startedLine(_ jobName: String) -> String { "▶ \(jobName)" }
+
+    /// empty the Activity list, except the lines of runs still going. Only the list
+    /// and a "cleared at" time change: the run history, backups, and versions stay as
+    /// they are (see ActivityList).
+    func clearActivity() {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Prefs.activityClearedAt)
+        let running = Set(jobs.filter { runningJobIDs.contains($0.id) }.map { Self.startedLine($0.name) })
+        activity = activity.filter { running.contains($0) }
+    }
 
     private func log(_ line: String) {
         activity.insert(line, at: 0)
