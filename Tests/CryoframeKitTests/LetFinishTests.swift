@@ -28,7 +28,8 @@ private func standIn(in dir: URL, seconds: Int) throws -> URL {
     #!/bin/sh
     trap 'echo term > \(dir.appendingPathComponent("term").path)' TERM
     echo $$ > \(dir.appendingPathComponent("started").path)
-    i=0; while [ $i -lt \(seconds * 10) ]; do /bin/sleep 0.1; i=$((i+1)); done
+    /bin/sleep \(seconds) >/dev/null 2>&1 &
+    wait $!
     echo done > \(dir.appendingPathComponent("finished").path)
     echo /dev/disk99
     exit 0
