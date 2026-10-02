@@ -73,6 +73,10 @@ final class AppModel: ObservableObject {
     static weak var current: AppModel?
     /// the user chose to stop the running backups and quit (see QuitGuard)
     var quittingAfterStop = false
+    /// a logout or restart is waiting for the runs to stop (see QuitGuard)
+    var waitingForSystemQuit = false
+    /// when the workspace last said the Mac is logging out, restarting or shutting down
+    var powerOffAnnouncedAt: Date?
 
     private var queue: [String] = []                    // job ids waiting for a run slot
     private var controls: [String: RunControl] = [:]
@@ -123,6 +127,11 @@ final class AppModel: ObservableObject {
             }
         }
         watchOtherRuns()
+        // a logout, restart or shutdown quits without asking (see QuitGuard)
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil,
+                                                          queue: .main) { _ in
+            MainActor.assumeIsolated { AppModel.current?.powerOffAnnouncedAt = Date() }
+        }
         resumeTransfers()
         armWake()                               // align the optional pmset wake with the schedule
         refreshProtectedSize()                  // dashboard "backed up" total
@@ -258,7 +267,7 @@ final class AppModel: ObservableObject {
     /// A check of the job's archives starting here, with its own Stop; nil when one
     /// is already under way.
     private func beginCheck(_ id: String) -> RunControl? {
-        guard !verifyingJobIDs.contains(id) else { return nil }
+        guard !quittingAfterStop, !verifyingJobIDs.contains(id) else { return nil }
         verifyingJobIDs.insert(id)
         let control = RunControl()
         checkControls[id] = control
@@ -269,6 +278,7 @@ final class AppModel: ObservableObject {
         verifyingJobIDs.remove(id)
         stoppingCheckIDs.remove(id)
         checkControls[id] = nil
+        quitIfIdle()
     }
 
     /// Stop a check of the job's archives, whether this app or the scheduled agent is
@@ -765,15 +775,17 @@ final class AppModel: ObservableObject {
         pausedJobIDs.remove(id)
     }
 
-    /// Stop every backup this app is running, and start no more: the app quits once
-    /// they have ended (see finishRun). Runs of the scheduled agent go on; quitting the
-    /// app doesn't end them.
+    /// Stop every backup, check and export this app is running, and start no more:
+    /// the app quits once they have ended (see QuitGuard). Runs of the scheduled agent
+    /// go on; quitting the app doesn't end them.
     func stopAllForQuit() {
         queue.removeAll()
         for id in runningJobIDs {
             log("⏹ \(jobs.first { $0.id == id }?.name ?? "Job"): stopping to quit")
             stopJob(id)
         }
+        for id in verifyingJobIDs { stopCheck(id) }
+        QuitWatch.shared.stopAll()
     }
 
     // MARK: runs in other processes
@@ -949,9 +961,9 @@ final class AppModel: ObservableObject {
         runningJobIDs.remove(id); controls[id] = nil; jobStage[id] = nil; jobLibrary[id] = nil; jobProgress[id] = nil
         pausedJobIDs.remove(id)
         refreshSleepGuard()
-        // the user asked to quit once the backups had stopped (see QuitGuard)
+        // the user asked to quit once everything had stopped (see QuitGuard)
         if quittingAfterStop {
-            if runningJobIDs.isEmpty { NSApp.terminate(nil) }
+            quitIfIdle()
             return
         }
         pump()

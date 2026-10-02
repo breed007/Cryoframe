@@ -72,9 +72,11 @@ final class RestoreModel: ObservableObject {
         pendingInPlace = nil
         let pass = a.encrypted ? passphrase : nil
         running = true; stage = "\(a.bundleName): replacing in place…"; results = []
+        let quit = QuitWatch.shared.begin(.restore)
         Task {
             results = [await Self.inPlace(a, liveURL: liveURL, passphrase: pass)]
             running = false; stage = ""
+            QuitWatch.shared.end(quit)
         }
     }
 
@@ -122,7 +124,9 @@ final class RestoreModel: ObservableObject {
         guard let dest = destFolder, !running else { return }
         let pass = passphrase
         running = true; results = []
+        let quit = QuitWatch.shared.begin(.restore)
         Task {
+            defer { QuitWatch.shared.end(quit) }
             stage = "\(a.bundleName): starting"
             // always verify before writing — a restore you can't trust isn't a restore.
             let o = await Self.restoreOne(a, to: dest, verify: true, passphrase: a.encrypted ? pass : nil, onClash: onClash) { s in

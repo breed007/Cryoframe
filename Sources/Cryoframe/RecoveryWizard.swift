@@ -165,7 +165,9 @@ final class RecoveryModel: ObservableObject {
         let items = selections
         guard !items.isEmpty else { return }
         running = true; results = []
+        let quit = QuitWatch.shared.begin(.restore)
         Task {
+            defer { QuitWatch.shared.end(quit) }
             var out: [Outcome] = []
             for s in items {
                 let lib = s.library
@@ -217,7 +219,9 @@ final class RecoveryModel: ObservableObject {
         let items = which.filter { $0.clashed != nil && $0.dest != nil }
         guard !items.isEmpty else { return }
         running = true
+        let quit = QuitWatch.shared.begin(.restore)
         Task {
+            defer { QuitWatch.shared.end(quit) }
             for o in items {
                 guard let a = o.clashed, let dest = o.dest else { continue }
                 stage = "\(o.library): starting"

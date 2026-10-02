@@ -35,6 +35,8 @@ final class ExportMediaModel: ObservableObject {
 
     private let opener = ArchiveOpener()
     private var control: RunControl?
+    /// the export as the quit guard knows it (see QuitWatch)
+    private var quitWatch: UUID?
 
     // a sheet closed mid-open: the open is stopped, and what it still opens is closed
     deinit { opener.close() }
@@ -60,6 +62,7 @@ final class ExportMediaModel: ObservableObject {
         let filter = self.filter, opener = self.opener
         running = true; stopping = false; result = nil; failed = false; warned = false; progress = nil
         openingSince = Date()
+        quitWatch = QuitWatch.shared.begin(.export) { [weak self] in self?.stop() }
         Task {
             let outcome = await opener.open(a, passphrases: a.encrypted ? passphrases : [])
             openingSince = nil
@@ -99,6 +102,7 @@ final class ExportMediaModel: ObservableObject {
     private func finish(_ text: String, failed: Bool, warned: Bool = false) {
         result = text; self.failed = failed; self.warned = warned
         running = false; stopping = false; progress = nil; openingSince = nil
+        QuitWatch.shared.end(quitWatch); quitWatch = nil
     }
 
     func stop() {
