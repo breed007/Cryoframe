@@ -87,7 +87,7 @@ private func entry(_ p: String, _ k: ContentsEntry.Kind = .file) -> ContentsEntr
         let result = ArchiveResult(artifacts: [dmg], format: .sealedDMG)
         let work = base.appendingPathComponent("work")
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
-        var opened = 0, canceled = 0
+        var opened = 0, canceled = 0, failed: [String] = []
         for delay in [0, 20, 80, 150, 300, 500, 800, 1200] as [UInt64] {
             let o = ArchiveOpener()
             let t = Task {
@@ -98,9 +98,19 @@ private func entry(_ p: String, _ k: ContentsEntry.Kind = .file) -> ContentsEntr
             try await Task.sleep(nanoseconds: delay * 1_000_000)
             o.close()
             let r = await t.value
-            switch r { case .canceled: canceled += 1; case .opened: opened += 1; default: break }
+            switch r {
+            case .canceled: canceled += 1
+            case .opened: opened += 1
+            case .failed(let why): failed.append("\(delay) ms: \(why)")
+            }
+            // The window goes. On a busy Mac the task can start only after the close
+            // above, as a fresh open that nothing stopped: what it opened is the
+            // caller's, closed here as every window closes it. Left open, it failed
+            // this test and every later round ("in use").
+            o.close()
         }
-        print("REAL opened=\(opened) canceled=\(canceled)")
+        // a round may fail while macOS scans the fresh image; said, not asserted
+        print("REAL opened=\(opened) canceled=\(canceled) failed=\(failed)")
         let left = (try? fm.contentsOfDirectory(atPath: work.path)) ?? []
         #expect(left.isEmpty, "work left: \(left)")
         let info = Process(); info.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil"); info.arguments = ["info"]

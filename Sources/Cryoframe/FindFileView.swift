@@ -92,7 +92,9 @@ final class FindFileModel: ObservableObject {
         // weak: a sheet closed mid-open lets its model go, whose deinit stops the open
         Task { [weak self] in
             let outcome = await opener.open(a, passphrases: candidates)
-            guard let self else { return }
+            // A sheet closed before this task began ran its close() first, so the open
+            // wasn't stopped and landed as this sheet's: nothing would ever close it.
+            guard let self else { opener.close(); return }
             self.opening = nil
             switch outcome {
             case .opened(let o):
