@@ -524,6 +524,21 @@ private func names(_ p: MediaExportPlan) -> [String] { p.copies.map { "\($0.fold
         #expect(FileManager.default.fileExists(atPath: card.appendingPathComponent("._tagged.jpg").path))
     }
 
+    // FileVault encrypts the startup disk, though its volumes say they aren't
+    // encrypted: a folder there counts as encrypted when FileVault is on.
+    @Test func aFolderOnTheStartupDiskCountsAsEncryptedWithFileVault() throws {
+        let (_, dest, cleanup) = try scratch()
+        defer { cleanup() }
+        #expect(MediaExportDrive.isOnStartupDisk(dest))
+        #expect(MediaExportDrive.isEncrypted(dest, driveSays: false) { true })
+        #expect(!MediaExportDrive.isEncrypted(dest, driveSays: false) { false })
+        #expect(MediaExportDrive.isEncrypted(dest, driveSays: true) { false })
+        #expect(!MediaExportDrive.isOnStartupDisk(URL(fileURLWithPath: "/dev")))
+        #expect(!MediaExportDrive.isEncrypted(URL(fileURLWithPath: "/dev"), driveSays: false) { true })
+        // and the real thing: this Mac's answer
+        #expect(MediaExportDrive.of(dest).encrypted == MediaExportDrive.fileVaultIsOn())
+    }
+
     @Test func aMissingAttachmentsFolderSaysSo() throws {
         let (source, dest, cleanup) = try scratch()
         defer { cleanup() }

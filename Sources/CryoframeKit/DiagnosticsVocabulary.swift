@@ -344,6 +344,7 @@ false
 fast
 fat
 fcpbundle
+fdesetup
 few
 fewer
 file
@@ -475,6 +476,7 @@ interrupted
 into
 ipv
 is
+isactive
 isempty
 isencrypted
 isn't

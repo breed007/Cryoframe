@@ -257,8 +257,31 @@ public struct MediaExportDrive: Sendable, Equatable {
                                 cluster: cluster,
                                 companions: !["apfs", "hfs"].contains(fsType),
                                 maxFileSize: fsType == "msdos" ? fat32Limit : nil,
-                                encrypted: v?.volumeIsEncrypted ?? false,
+                                encrypted: isEncrypted(folder, driveSays: v?.volumeIsEncrypted ?? false),
                                 free: JobExecutor.freeSpace(for: folder))
+    }
+
+    /// Whether what is written into `folder` is encrypted where it lands: the drive
+    /// says so, or the folder is on the startup disk and FileVault is on. The startup
+    /// disk's volumes say they aren't encrypted even with FileVault on (measured on
+    /// macOS 27: volumeIsEncrypted is false there, true for an encrypted disk image).
+    static func isEncrypted(_ folder: URL, driveSays: Bool,
+                            fileVaultOn: () -> Bool = { MediaExportDrive.fileVaultIsOn() }) -> Bool {
+        if driveSays { return true }
+        return isOnStartupDisk(folder) && fileVaultOn()
+    }
+
+    /// whether `folder` is where home folders are, on the startup disk
+    static func isOnStartupDisk(_ folder: URL) -> Bool {
+        var a = stat(), b = stat()
+        guard stat(folder.path, &a) == 0, stat(FileManager.default.homeDirectoryForCurrentUser.path, &b) == 0 else { return false }
+        return a.st_dev == b.st_dev
+    }
+
+    /// `fdesetup isactive` answers "true" without an administrator (measured)
+    static func fileVaultIsOn() -> Bool {
+        guard let r = try? ProcessCommandRunner().run("/usr/bin/fdesetup", ["isactive"], stdin: nil) else { return false }
+        return r.ok && r.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
     }
 
     /// the name as the drive compares it
