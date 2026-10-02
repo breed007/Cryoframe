@@ -446,15 +446,50 @@ private func names(_ p: MediaExportPlan) -> [String] { p.copies.map { "\($0.fold
         }
     }
 
-    @Test func aLeftoverPartFileIsSweptOnceItIsOld() throws {
+    // A crash part way leaves the export's list and a part-written file under its
+    // real name: the next export removes it, writes it whole under the same name,
+    // and keeps the files that were finished. A Stop leaves no list.
+    @Test func aFileACrashLeftPartWrittenIsWrittenAgain() throws {
+        let (source, dest, cleanup) = try scratch()
+        defer { cleanup() }
+        for i in 0..<3 { try write(source, "f\(i).heic", String(repeating: "x", count: 1000 + i), day(2024, 5, 3)) }
+        let drive = MediaExportDrive(name: "Out", free: 1 << 40)
+        let export = MediaExport(calendar: utc, interval: 0)
+        // the crash: the list written, f0 finished, f1 half written, f2 not started
+        let files = try MediaExport.look(in: source, control: RunControl()) { _ in }
+        let plan = try MediaExportPlanner.plan(MediaCatalog.entries(files), drive: drive,
+                                               probe: MediaExport.probe(source: source, destination: dest, control: RunControl()), calendar: utc)
+        try MediaExport.writeList(plan, in: dest)
+        let month = dest.appendingPathComponent("2024-05")
+        try FileManager.default.createDirectory(at: month, withIntermediateDirectories: true)
+        var partLeft = false
+        try MediaExport.copyFile(source.appendingPathComponent("f0.heic"), into: month, as: "f0.heic", modified: day(2024, 5, 3),
+                                 control: RunControl(), partLeft: &partLeft) { _ in }
+        try Data(String(repeating: "x", count: 500).utf8).write(to: month.appendingPathComponent("f1.heic"))
+
+        let after = try export.run(from: source, to: dest, filter: MediaExportFilter(), drive: drive, control: RunControl()) { _ in }
+        #expect(after.copied == 2 && after.alreadyThere == 1, "\(after)")
+        #expect(everything(dest) == ["2024-05/f0.heic", "2024-05/f1.heic", "2024-05/f2.heic"], "no list left, no \"(2)\"")
+        #expect(FileManager.default.contentsEqual(atPath: month.appendingPathComponent("f1.heic").path, andPath: source.appendingPathComponent("f1.heic").path))
+        let date = try FileManager.default.attributesOfItem(atPath: month.appendingPathComponent("f1.heic").path)[.modificationDate] as? Date
+        #expect(date == day(2024, 5, 3))
+    }
+
+    // A file of someone else's under a name the list never had is left alone, even
+    // when it doesn't match anything
+    @Test func theListOnlyTouchesTheNamesItHas() throws {
         let (_, dest, cleanup) = try scratch()
         defer { cleanup() }
-        let old = dest.appendingPathComponent(MediaExport.tempPrefix + "old"), fresh = dest.appendingPathComponent(MediaExport.tempPrefix + "new")
-        try Data("x".utf8).write(to: old); try Data("y".utf8).write(to: fresh)
-        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: old.path)
-        MediaExport.sweep(dest)
-        #expect(!FileManager.default.fileExists(atPath: old.path))
-        #expect(FileManager.default.fileExists(atPath: fresh.path))
+        let month = dest.appendingPathComponent("2024-05")
+        try FileManager.default.createDirectory(at: month, withIntermediateDirectories: true)
+        try Data("mine".utf8).write(to: month.appendingPathComponent("mine.jpg"))
+        try Data("half".utf8).write(to: month.appendingPathComponent("IMG_1.JPG"))
+        var plan = MediaExportPlan()
+        plan.copies = [.init(source: "a/IMG_1.JPG", folder: "2024-05", name: "IMG_1.JPG", size: 100, modified: day(2024, 5, 3))]
+        try MediaExport.writeList(plan, in: dest)
+        #expect(MediaExport.finishInterrupted(in: dest) == 1)
+        #expect(everything(dest) == ["2024-05/mine.jpg"])
+        #expect(MediaExport.finishInterrupted(in: dest) == 0)
     }
 
     @Test func aMissingAttachmentsFolderSaysSo() throws {
