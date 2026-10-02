@@ -175,4 +175,24 @@ private func run(_ src: URL, _ folder: URL, control: RunControl = RunControl()) 
         #expect(out.excluded["a.txt"] == .sameName(kept: "A.txt"))
         #expect(try String(contentsOf: fresh.appendingPathComponent("Papers/A.txt"), encoding: .utf8) == "UPPER")
     }
+
+    // The free-space measure a probe falls back on where a file written shows no
+    // blocks (macOS 15's exFAT and FAT drivers), tried where the blocks are known.
+    @Test func theProbesFreeSpaceMeasureFindsAnExFATCluster() throws {
+        try #expect(unitByFreeSpace("ExFAT", mb: 64, cluster: 131072) == 131072)
+    }
+
+    @Test func theProbesFreeSpaceMeasureFindsAFAT32Cluster() throws {
+        try #expect(unitByFreeSpace("MS-DOS FAT32", mb: 100) == 512)
+    }
+
+    private func unitByFreeSpace(_ fs: String, mb: Int, cluster: Int? = nil) throws -> UInt64? {
+        let base = realTemp("unit")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let (card, detach) = try drive(fs, mb: mb, cluster: cluster, in: base)
+        defer { detach() }
+        let probed = DriveAllocation.probe(at: card, readingBlocks: false)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: card.path).filter { $0.hasPrefix(".cryoframe-probe-") }.isEmpty)
+        return probed.allocationUnit
+    }
 }

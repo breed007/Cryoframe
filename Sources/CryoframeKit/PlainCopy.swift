@@ -398,9 +398,9 @@ public struct PlainCopy {
     /// whether the drive takes a name; nil: try it on the drive (see NameProbe)
     let accepts: ((String) -> Bool)?
     /// what a file written in a folder takes there, and whether it gets a companion;
-    /// nil: a file is written there and measured (see DriveAllocation). The room check
-    /// counts the larger of this and what statfs says: statfs alone said 4 KiB for an
-    /// exFAT drive of 128 KiB clusters on macOS 15.
+    /// nil: a file is written there and measured (see DriveAllocation). On exFAT and
+    /// FAT the room check counts what this measured, as statfs said 512 bytes for a
+    /// drive of 128 KiB clusters on macOS 15; elsewhere the larger of the two.
     let probe: ((URL) -> DriveAllocation)?
     /// files given to one rsync, at most, so the copy can say how far it has got
     let batchFiles: Int

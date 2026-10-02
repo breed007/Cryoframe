@@ -38,8 +38,9 @@ public struct FileSystemProfile: Sendable, Equatable, Codable {
     public var fsType: String
     /// "a" and "A" are one name on it
     public var foldsCase: Bool
-    /// the smallest amount of space a file takes on it: what statfs says, until a run
-    /// measures it (see DriveAllocation)
+    /// the smallest amount of space a file takes on it: what statfs says (on exFAT and
+    /// FAT, at least the largest cluster they commonly use), until a run measures it
+    /// (see DriveAllocation)
     public var cluster: UInt64
     /// a drive that isn't a Mac's keeps a file's extended attributes in a hidden "._"
     /// companion; a copy checks whether what it writes gets one (see PlainCopy)
@@ -186,8 +187,9 @@ public struct FileSystemProfile: Sendable, Equatable, Codable {
         let v = try? url.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
         var s = statfs()
         let found = statfs(folder.path, &s) == 0
-        let cluster: UInt64 = found && s.f_bsize > 0 ? UInt64(s.f_bsize) : 4096
         let fsType = VolumeInspector.volume(for: folder)?.fsType ?? ""
+        let cluster = DriveAllocation.cluster(statfsBlockSize: found && s.f_bsize > 0 ? UInt64(s.f_bsize) : nil,
+                                              fsType: fsType.lowercased(), probed: DriveAllocation())
         let isLocal = found && (s.f_flags & UInt32(MNT_LOCAL)) != 0
         let kind: TargetKind = target?.kind == .cloudSync ? .cloudSync
             : (target?.kind == .networkShare || (found && !isLocal)) ? .networkShare : .local
