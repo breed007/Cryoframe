@@ -2,6 +2,64 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.6.0] — Unreleased
+
+1.6 is about trusting Cryoframe with backups you can't afford to lose. Jobs are made and edited in one editor that uses plain words, drives can take turns, and getting your backups back no longer needs this Mac: each destination says how to open its backups without Cryoframe, and a printed kit records where they all are. Testing for this release also found several ways 1.5 could lose data or fail every run without saying why. Those are listed first.
+
+### Fixed: problems in 1.5.x
+- **A live mirror on a drive that filled up during a run could lose writes without any error.** The run reported success over a damaged mirror. A mirror is now updated in a copy and swapped in only when that copy is complete and has been read back, and a run that sees the drive nearly fill never counts as a good one.
+- **A custom scratch folder that held anything else could lose files at every launch.** Since 1.1.0, each launch deleted any `<folder>/build/<item>` inside the scratch location, so pointing scratch at a folder such as `~/Developer` removed other projects' build output. The default location was never affected. Cryoframe now works only inside a folder of its own named Cryoframe Scratch, and removes only what it marked as its own. If you ever changed the scratch location in Settings ▸ Transfers, check what was in that folder.
+- **A resumed upload to a network share or external drive could be marked complete with parts missing,** or with parts from a rebuilt archive mixed in. Each part is now checked by size and hash before an upload counts as finished, and an interrupted upload only resumes on the drive it started on.
+- **Changing a live-mirror job to a sealed format could delete another job's versions.** Another job's versions are now left alone.
+- **On macOS 26, every tool Cryoframe ran leaked file descriptors,** so a Cryoframe process that stayed running long enough (about 125 tool launches) could no longer start anything.
+- **Live mirrors of folders holding read-only files, such as git repositories, failed every run.**
+- **Live mirrors to an external drive with "Ignore ownership on this volume" turned on failed every run.**
+- **Restore refused the intact copy of a mirror after a run that was stopped or failed.**
+- **On macOS 15, a sealed DMG of a folder holding a locked file failed every run.** It is now built from an unlocked copy.
+- Removing a file's last Finder tag or its access list never reached the mirror, so the mirror kept the old one.
+- A mirror dropped files' hidden and locked flags and its folders' dates.
+- A library holding named pipes or sockets failed to back up. They are left out of a mirror, and a sealed archive is built from a copy without them.
+- A downloaded file's quarantine flag wasn't kept the way the library had it, in the mirror or after a restore.
+- A restored sealed zip gave some folders the date of the restore instead of their own.
+
+### Added
+- **One job editor.** Making a job and editing one happen in the same window, in the same words: what to back up, where copies go, when, and whether each backup keeps one up-to-date copy or dated versions. Quick-start presets are there for a new job, along with a note when it may not fit on the main destination. Before you save, a summary says what the change does to existing backups.
+- **Add destination and Back up another folder.** A destination is chosen as a folder; Cryoframe works out whether it is on this Mac, an external drive, a network share or a cloud folder, and knows the drive by its identity, so a renamed drive is still found and a different drive with the same name isn't used by mistake.
+- **Drives that take turns.** Two or more drives can share one place in a job, and each backup goes to whichever is connected. The one that's away isn't treated as a fault. If you took turns in 1.5 by giving two drives the same name, the editor offers "Is this one of your drives?" and can rename one drive so each is known for itself.
+- **Renaming a library** within a job. Its backup folders are renamed at the next backup that reaches each destination.
+- **Find a File**, in Restore. Type a name or part of a path and see which versions hold it, newest first, then open the version at that file and extract it. Each sealed version made by 1.6 carries a list of its files (encrypted for an encrypted job) to make this fast. Versions made before 1.6, and live mirrors, have no list; use Look inside… for those. A version whose list is incomplete never says a file isn't there.
+- **A recovery note in every destination.** A plain-text file, "READ ME - How to restore without Cryoframe.txt", says what is in that folder and how to open it with tools built into macOS.
+- **A printable recovery kit** (Settings ▸ Security ▸ Print Recovery Kit…). It lists your jobs, where each keeps its backups, each drive's name and volume UUID, and how to open each format without Cryoframe. It holds no passphrases. Passphrases can be printed on a separate page, after a warning that the page goes through the print queue and that the print panel's PDF options save or send a copy. Cryoframe tells you when the printed kit is out of date.
+- **Upload status for cloud folders,** in Storage. A version counts as uploaded only when the provider has offloaded its local copy, which proves it holds the file. Until then it reads "Upload not known" in gray. Gray is normal and isn't a problem: no provider's own upload status is trusted until it has been tested against a real account.
+- **A run trend for each destination,** in Storage: the last runs as bars, how many were good, and a note when the latest took much longer than usual.
+- **Report a Problem** (Help menu). It builds a plain-text report for a GitHub issue with versions, how your jobs are set up and what recent runs said, and leaves out your names, paths and file names. You read it before you save it.
+- **Restore alongside.** When something already has the name a restore would use, Restore and Recover to this Mac offer to keep what's there and restore beside it under a new name, such as "Photos Library (2)".
+- **Overdue alerts.** A scheduled job that hasn't run when it should have is reported on this Mac and through remote alerts.
+- **macOS 27** is supported, and this release is built with Xcode 27.
+
+### Changed
+- **Backups made by 1.5 are never deleted until you say so.** When a job takes over a folder an earlier version of Cryoframe made, or versions are moved into it, those versions are kept until you confirm how many its Keep rule may delete. The main window shows the count and a "Let Keep apply" button; under "Keep the last few", one yes covers each version later backups push out.
+- Versions a job keeps from before it changed between one up-to-date copy and dated versions are shown as "Kept", in Restore and Storage, and nothing deletes them.
+- Deleting a job keeps its backups and its passphrase. Restore still finds the backups and offers the passphrase for them.
+- Each library's backups live in a folder Cryoframe finds by the library's identity, so two libraries with the same name can be in one job. Folders made by 1.5 are taken over in place.
+- A live mirror no longer asks for a size. It sizes and grows itself, up to what its drive can hold, and a run that can't fit is refused before it starts.
+- A live mirror reads back what it just copied before putting it in place. In testing this added about 17% to a run that changed 2 GB.
+- Stop now ends an archive check, restore drill or recovery rehearsal. A stopped check doesn't count as passed: what it found before you stopped it is listed, and the last finished check still stands.
+- Stop never interrupts a disk image while it is being attached. The attach is allowed to finish and is then detached.
+- A tool that makes no progress for 15 minutes is stopped, and the run says so.
+- Before building a sealed DMG, Cryoframe names anything in the library that would stop the image from being built.
+- A folder holding named pipes or sockets is sealed from a copy without them. On macOS 15, a folder holding locked items is built into a DMG from an unlocked copy. Either copy needs room in the scratch location; an encrypted job's copy is always made on the startup disk.
+- The dashboard judges each job by when it last ran well, so a job that has been failing shows yellow instead of green.
+- "Operation not permitted" from the disk-image tool is reported at once rather than retried.
+- Restore checks for room before it starts, and downloads an offloaded cloud archive before opening it.
+- Scheduled runs and the tools they start no longer run at background priority.
+
+### Dropped
+- Passphrase rotation, which the 1.5.6 notes said was planned for 1.6, isn't in this release. A job's encryption and passphrase still stay as they are once the job exists; to change them, make a new job.
+
+### Going back to 1.5.6
+If you go back to 1.5.6, your jobs and backups still work. Two things don't survive the round trip: the go-aheads you gave for deleting adopted versions (you're asked again, and nothing is deleted meanwhile), and a renamed library's former names.
+
 ## [1.5.6] — 2026-09-27
 
 A full code review of 1.5.5 found three ways to lose a backup without any warning. If you use the live mirror format, which is the default, this update matters most to you.
