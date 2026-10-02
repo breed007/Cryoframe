@@ -15,7 +15,7 @@ Every archive gets a checksum manifest when it is written, listing each file and
 
 Set it when you make the job, or set a default in Settings ▸ General.
 
-A live mirror also reads back what each run copied before it puts the new copy in place, comparing contents, attributes, and access lists. A difference fails the run and leaves the previous mirror as it was.
+A live mirror also reads back what each run copied before it puts the new copy in place, comparing contents, attributes, and access lists. A difference fails the run and leaves the previous mirror as it was. A plain-files copy is read back the same way, as far as its drive keeps those details.
 
 ## Archive health (re-checking cold archives)
 
@@ -79,3 +79,5 @@ A cloud-sync client may replace a local archive with a placeholder to save space
 A sealed archive is verified byte for byte against its checksums, so a single flipped bit is caught.
 
 A live mirror is verified structurally: its files and their sizes are compared to the manifest. This catches dropped or truncated files, which are the common mirror failures, but not an in-place bit flip inside an otherwise intact file. Full-hashing a mirror on every check would mean re-reading the entire library each time, which would undo the reason a mirror is fast. If you need byte-for-byte assurance, use a sealed format.
+
+A plain-files copy has no checksums to compare: it was read back against the library when it was last updated. A health check confirms the copy is there and that its last update finished. A copy whose last update was stopped part way is skipped rather than counted either way, and the next backup finishes it.

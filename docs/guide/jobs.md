@@ -21,7 +21,7 @@ Each library's menu has:
 
 **When** sets how often the job runs: every day, every few hours, once, or only when you say.
 
-**Keep** sets whether each backup keeps one up-to-date copy or dated versions, and for dated versions, their format and how many to keep.
+**Keep** sets whether each backup keeps one up-to-date copy or dated versions. One up-to-date copy is kept as a disk image or as plain files; dated versions as disk images or zip files, with how many to keep. Plain files can only be chosen for a new job. See [Formats and destinations](formats-and-destinations.md).
 
 **Details** holds encryption, how each backup is checked (a quick check, or a full check that opens it), and what to do if the library's app is open: back up anyway, back up and say so, or wait until it's closed.
 
@@ -39,15 +39,31 @@ Backups an earlier version of Cryoframe made, or versions moved into a job's fol
 
 Run now starts a job immediately, whether or not it has a schedule. While it runs, the row shows live progress: the current library, bytes written, speed, time elapsed, and an estimate of time remaining.
 
+A live mirror has more to do after the copy, and the row names each step as it goes, with a count of items or bytes: Finishing the copy, Writing the copy to the drive, Reading the copy back, Checking attributes, Removing the previous copy. A plain-files copy shows its steps the same way. Copying what changed shows how long it has been going but no count, because the copy tool can't report one while it compares the library with the copy. On a first run, reading the copy back means reading the whole library back off the drive, which can take many minutes on a slow drive or SD card.
+
+<!-- SHOT: mirror-reading-back.png — A live-mirror job row in the main window during "Reading the copy back", with its byte count and progress bar -->
+
 You can run several jobs at once. The limit is in Settings ▸ General and defaults to 2. Snapshot creation is serialized inside the helper, so even with jobs running in parallel each one captures a clean point-in-time set. A job never runs twice at once, whether the run was started from the window or by the schedule, and the window shows and can stop a run the schedule started.
 
 ## Pause, resume, and stop
 
 Pause suspends the running tool in place and holds the snapshot, then Resume picks up where it left off. Pause is offered for live mirrors, sealed zips, and transfers to a drive or share. It is not offered while a sealed DMG is being built, because the macOS disk-image tool crashes if it is frozen mid-write, so a DMG job shows only Stop during that stage.
 
-Stop cancels a running or queued job and tears the snapshot down. A sealed archive cannot resume mid-build, so a stopped sealed job starts over next time. An interrupted transfer to a network share or external drive is the exception: it resumes from its last whole part when the same drive reconnects. Stop never interrupts a disk image while macOS is attaching it; the attach finishes, and Cryoframe then detaches it.
+Stop cancels a running or queued job and tears the snapshot down. It also works in each step after a mirror's or plain-files copy. A copy that was stopped before it was fully read back is removed at the start of the next run. A sealed archive cannot resume mid-build, so a stopped sealed job starts over next time. An interrupted transfer to a network share or external drive is the exception: it resumes from its last whole part when the same drive reconnects. Stop never interrupts a disk image while macOS is attaching it; the attach finishes, and Cryoframe then detaches it.
 
 A tool that makes no progress for 15 minutes is stopped, and the run says so.
+
+## Quitting while something runs
+
+If you quit Cryoframe while it is backing up, checking backups, exporting, or restoring, it asks first, for example "A backup is under way. Stop and quit?" Stop and Quit stops everything the way Stop does, then quits once it has all ended; backups it already made stay as they were. A restore can't be stopped part way, so Cryoframe waits for it to finish; when a restore is all that's running, the choice is Quit When Done.
+
+<!-- SHOT: quit-while-running.png — The alert shown when quitting during a backup: "A backup is under way. Stop and quit?" with Stop and Quit and Cancel -->
+
+If you quit again while things are stopping, Cryoframe offers Keep Waiting or Quit Now. Quit Now can leave a mirror's disk image attached until that job's next backup.
+
+A logout, restart, or shutdown doesn't wait on a question, since nobody may be there to answer it. Cryoframe stops everything, waits up to 15 seconds for it to stop, and then lets the logout go ahead. A restore can't be stopped, so one still running then is cut off; let a restore finish before you log out.
+
+A backup the schedule started runs in a background process of its own, so quitting the app neither asks about it nor stops it.
 
 ## The ⋯ menu
 
@@ -68,5 +84,7 @@ Each job shows a green check when its libraries are found, or a red mark when on
 ## Run history
 
 Every run is recorded with its outcome, per-library detail, duration, size, and any error, and the record survives quitting the app. Each job row shows its last run at a glance. The History button at the top of the window lists every past run, including scheduled ones that happened while the app was closed.
+
+The Activity list on the main window narrates runs as they happen. Clear, at its top right, empties it after you confirm. It only hides entries. History still has every run, and the dashboard and alerts still use them. Lines for runs still going stay in the list, and cleared entries don't come back when you reopen Cryoframe.
 
 If a job failed, History is the first place to look. The recorded error is the real reason the run stopped, which is usually more specific than the one-line summary on the job row.

@@ -39,7 +39,7 @@ struct HelpView: View {
                         bullet("Back up: the libraries and folders in the job. Everything chosen is frozen in one snapshot and backed up together, each into its own folder at every destination, so they're a consistent point-in-time set. Add a folder with Back up another folder….")
                         bullet("Copies go to: the destinations. Add destination… takes a folder on this Mac, an external drive, a network share or a cloud folder, and Cryoframe works out which it is. The main destination is the one every backup has to reach.")
                         bullet("When: how often the job runs: every day, every few hours, once, or only when you say.")
-                        bullet("Keep: whether each backup keeps one up-to-date copy or dated versions (as disk images or zip files), and how many versions to keep.")
+                        bullet("Keep: whether each backup keeps one up-to-date copy (as a disk image or plain files) or dated versions (as disk images or zip files), and how many versions to keep. Plain files can only be chosen for a new job.")
                         bullet("Details: encryption, how each backup is checked, and what to do if the library's app is open.")
                         bullet("Before you save, a summary says what the change does to the backups already at each destination.")
                     }
@@ -53,7 +53,10 @@ struct HelpView: View {
                     section("Managing jobs") {
                         bullet("Run now starts a job. While it runs you can Pause it (the tool at work is suspended in place and the snapshot held), then Resume to pick up where it left off. Pause is offered for sealed-zip and live-mirror archives and for transfers; sealed-DMG imaging can't be safely paused (macOS's disk-image tool crashes if frozen), so a DMG job shows only Stop while it's building.")
                         bullet("Stop cancels a running or queued job and tears the snapshot down. A sealed archive can't resume mid-build, so a stopped job starts over; an interrupted transfer to a network or external drive does resume from its last whole part when the same drive reconnects. Stop never interrupts a disk image while macOS is attaching it.")
+                        bullet("After a live mirror's copy, the row names each step that follows (Finishing the copy, Reading the copy back and the rest) with how far it has got, and Stop works in each. On a first run, reading the copy back reads the whole library off the drive, which can take many minutes on an SD card or another slow drive.")
                         bullet("A tool that makes no progress for 15 minutes is stopped, and the run says so.")
+                        bullet("Quitting while a backup, a check, an export or a restore is running asks first. Stop and Quit stops it the way Stop does, then quits; a restore can't be stopped, so Cryoframe waits for it. A logout or restart doesn't ask: everything is stopped, and it goes ahead within 15 seconds.")
+                        bullet("Clear, above the Activity list, empties the list. History keeps every run, and your backups aren't touched.")
                         bullet("The ⋯ menu has Edit…, the archive checks, Copy passphrase for an encrypted job, Disable/Enable schedule, and Delete…. A disabled job won't run automatically (no next-run time) but still runs from Run now.")
                         bullet("Deleting a job keeps its backups and its passphrase. Restore still finds them both.")
                         bullet("Several jobs can run at once, up to the limit in Settings ▸ General (default 2).")
@@ -80,6 +83,8 @@ struct HelpView: View {
                     section("Formats") {
                         bullet("One up-to-date copy (a live mirror, the default): a sparsebundle that updates in place. Only the parts that changed get rewritten, so it's fast for a frequent working backup, and it can be paused mid-run. It sizes itself and grows as needed, up to what its drive can hold, and each run's copy is read back before it replaces the last one.")
                         bullet("Dated versions, as disk images or zip files (sealed DMG or zip): one immutable, checksummed file per run for cold storage. Splits into volumes when the destination caps file size, so it fits cloud limits. (A disk image can't be paused while it's being built.)")
+                        bullet("One up-to-date copy as plain files: ordinary files and folders any computer can open. A changed file replaces the old one; a deleted one moves to Removed items beside the copy, which you empty in Storage. Plain files can't be encrypted. On exFAT, FAT32 and network drives they lose permissions, Finder tags and creation dates, FAT32 can't take a file of 4 GB or more, and macOS may add a hidden \"._\" file beside each file. An app's library, such as Photos, can only be kept as plain files on an APFS drive connected to this Mac.")
+                        bullet("Messages attachments, a library of its own, backs up the photos and files sent in Messages in any format. What you delete in Messages stays in the backup: in Removed items for a mirror or plain files, and in a removed-items archive before old dated versions are deleted. Mirrors and plain files leave out link previews; dated versions keep them.")
                         bullet("Named pipes and sockets are left out of a mirror. A sealed archive of a folder holding them is built from a copy without them; so is a disk image of a folder with append-only items or, on macOS 15, locked files. That copy needs room in the scratch location.")
                     }
 
@@ -87,6 +92,7 @@ struct HelpView: View {
                         bullet("The Storage button (top right) shows how much space each job's backups use and how full each destination's drive is, which helps when a job keeps many versions.")
                         bullet("Each destination also shows its recent runs as bars (red for a failed one), and a gray note when the latest run took over twice as long as usual.")
                         bullet("A cloud folder shows whether its versions have been uploaded. Cryoframe says Uploaded only when the provider has proven it holds the file, so \"Upload not known\" in gray is the usual answer, and it's normal. The provider's own menu-bar app has the details.")
+                        bullet("A plain-files copy shows its Removed items as a row of their own. Its Delete… menu removes the ones older than 30 days, 90 days or a year, or all of them. Nothing else deletes them.")
                         bullet("Before a run, Cryoframe checks the target has room and stops with a clear message if it doesn't, rather than failing partway through.")
                     }
 
@@ -122,6 +128,7 @@ struct HelpView: View {
                         bullet("Find a File… (top of the Restore window) searches each version's list of files for a name or a path, newest first. Show opens the version at the match. Versions made before 1.6, and live mirrors, have no list; use Look inside… for those.")
                         bullet("In place replaces your live library with the version you picked. The current one moves to the Trash, so it's reversible; quit the owning app first.")
                         bullet("Browse… opens the picked version in an in-app file browser so you can drill in and extract just the files you need.")
+                        bullet("Export Media… copies a version's photos, videos or other files into a folder for each month, by the date each file was last changed, with a filter by type and month. Exporting again copies only what isn't there yet, and a file that can't be read is skipped and named. The exported files aren't encrypted. It's offered for folders and Messages, not for app libraries such as Photos, Music, iMovie, Mail or GarageBand.")
                     }
 
                     section("Verification") {

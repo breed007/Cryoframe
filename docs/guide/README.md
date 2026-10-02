@@ -7,14 +7,14 @@ This guide covers everything the app does. If you just want to get a backup runn
 ## Contents
 
 1. [Getting started](getting-started.md): install the helper, grant Full Disk Access, make your first job.
-2. [Jobs](jobs.md): make and edit jobs in the job editor; run, pause, stop, and delete them.
-3. [Formats and destinations](formats-and-destinations.md): one up-to-date copy or dated versions, where the backups go, and drives that take turns.
+2. [Jobs](jobs.md): make and edit jobs in the job editor; run, pause, stop, and delete them; and what happens when you quit during a backup.
+3. [Formats and destinations](formats-and-destinations.md): one up-to-date copy as a disk image or plain files, or dated versions; Messages attachments; where the backups go; and drives that take turns.
 4. [Encryption and recovery keys](encryption-and-recovery-keys.md): encrypted backups, the recovery file, and the printed recovery kit.
 5. [Versions, retention, and storage](versions-retention-storage.md): keep a history of a library, decide what happens to backups from 1.5, and watch disk use, run trends, and cloud uploads.
 6. [Health and verification](health-and-verification.md): prove an archive is still good before you need it.
-7. [Restoring](restoring.md): browse a library's versions on a timeline, find which version holds a file, copy one back or replace in place, pull out a few files, or rebuild a whole Mac.
+7. [Restoring](restoring.md): browse a library's versions on a timeline, find which version holds a file, copy one back or replace in place, pull out a few files, export photos and videos into month folders, or rebuild a whole Mac.
 8. [Scheduling, sleep, and notifications](scheduling-sleep-notifications.md): run unattended and find out how it went.
-9. [Updating and troubleshooting](updating-troubleshooting.md): in-app updates, fixes for common problems, and Report a Problem.
+9. [Updating and troubleshooting](updating-troubleshooting.md): in-app updates, fixes for common problems, going back to an earlier version, and Report a Problem.
 
 ## Requirements
 

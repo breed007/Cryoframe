@@ -29,9 +29,9 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - Libraries on any disk. A Photos or Music library kept on an external SSD is backed up from a snapshot of the drive it actually lives on, and a job spanning two drives still captures a single moment. Drives that can't be snapshotted (exFAT, HFS+) are read directly instead, and the run won't start while that library's app is open, since a closed app is what makes reading it live safe.
 - Several libraries per job, archived from one snapshot into their own subfolders, so a job captures a consistent set in a single pass.
 - Several destinations per job (the 3-2-1 rule): a local drive plus a NAS plus a cloud-sync folder, all from the same snapshot. Sealed archives are compressed once and copied to each. The primary must be reached; a downed secondary finishes the run as a partial backup instead of failing it.
-- Three output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default), or a sealed zip or DMG: immutable, checksummed, split into volumes when the target caps file size.
+- Four output formats: an incremental sparsebundle mirror that only rewrites the bands that changed (the default); plain files, one copy as ordinary files and folders that any computer can open; or a sealed zip or DMG: immutable, checksummed, split into volumes when the target caps file size.
 - Resumable transfers to network shares and external drives: the archive ships in part files and picks up from the last whole part after a dropped connection or unplugged drive.
-- Restore built in: find an archive, verify it, and copy the library back out with its original folder name, beside the live one or in place over it (staged and verified first, with the old copy moved to the Trash). If something already has that name, restore alongside it under a new one. Browse inside an archive and extract just the files you need.
+- Restore built in: find an archive, verify it, and copy the library back out with its original folder name, beside the live one or in place over it (staged and verified first, with the old copy moved to the Trash). If something already has that name, restore alongside it under a new one. Browse inside an archive and extract just the files you need, or export a version's photos and videos into month folders.
 - Find a File: type a name or part of a path, and see which saved versions hold it. Each sealed version carries a list of its files, encrypted when the job is, so the search doesn't have to open every archive.
 - A recovery note in every destination saying what is there and how to open it with tools built into macOS, and a printable recovery kit that lists every job, where its backups are, and each drive's name and volume UUID. The kit holds no passphrases; those print on a separate page, only if you ask, after a warning.
 - A restore timeline for versioned libraries: browse a library's nights, see how its size moved, and bring back the one you want. Versions that passed a restore drill are marked as restore-tested, and ones only checked by checksum say so instead. A version nothing has checked makes no claim at all.
@@ -49,7 +49,7 @@ It also verifies. Every archive gets a checksum manifest, and the strong mode mo
 - In-app updates over an Ed25519-signed appcast, and a first-run walkthrough for the helper and Full Disk Access.
 - Destinations on local disks, external drives, network shares, and cloud-sync folders. Cryoframe works out which kind a folder is when you add it, and checks it is there before a run starts. There's no default destination to accept without thinking, and choosing one that shares a disk with what you're backing up says so.
 - Cloud-sync aware: detects OneDrive/Dropbox/Google Drive/Box/iCloud folders, splits sealed archives under the plan's single-file limit, and skips offloaded (placeholder) archives during scheduled checks instead of silently re-downloading them.
-- Run jobs concurrently up to a configurable limit, with live progress (speed, time elapsed, and time remaining), and pause, resume, or stop a run in flight. Stop also ends an archive check, drill, or rehearsal; a stopped check never counts as passed.
+- Run jobs concurrently up to a configurable limit, with live progress (speed, time elapsed, and time remaining) for every step of a run, and pause, resume, or stop a run in flight. Stop also ends an archive check, drill, or rehearsal; a stopped check never counts as passed. Quitting during a backup asks first and stops it cleanly, and a logout or restart stops it without asking.
 - Durable run history: every run, manual or scheduled, is recorded with its outcome, per-library detail, duration, size, and any error, and survives quitting the app.
 - Scheduling through a launchd agent, with per-job control over what happens if the owning app is open. A run missed while the Mac was asleep or off happens at the next check rather than waiting a whole cycle, and an unattended run holds off while the Mac is on battery and low on charge.
 - Keeps the Mac awake while a backup runs, and can optionally wake it for a scheduled run, so unattended backups actually finish.
@@ -71,7 +71,7 @@ Built in (fixed locations, detected automatically):
 | Mail | `~/Library/Mail` | Mail |
 | Microsoft Outlook | default Outlook profile | Outlook |
 
-**Messages attachments** backs up the photos, videos and files sent and received in Messages, without the conversations. One up-to-date copy and plain files leave out link previews and Messages' own settings files. Dated versions keep them: a disk image or zip file can't skip anything, so leaving them out would mean copying the whole folder first on every run. What you delete in Messages stays in the backup: one up-to-date copy keeps it in a Removed items folder, and dated versions save it in a separate archive before old versions are deleted. Restore lists those archives as "Messages attachments, removed items".
+**Messages attachments** backs up the photos, videos and files sent and received in Messages, without the conversations, in any format. What you delete in Messages stays in the backup: a live mirror or plain files keep it in a Removed items folder, and dated versions save it in an archive of its own before old versions are deleted. Restore lists those archives as "Messages attachments, removed items". A live mirror and plain files leave out link previews and Messages' own settings files. Dated versions keep them, because a disk image or zip file can't skip anything without copying the whole folder first on every run.
 
 Templates (you point at the library, since these live anywhere, often on external drives), under **A library from another app…** in the job editor:
 
@@ -123,7 +123,7 @@ Press New Job. The editor opens with quick-start presets ("Photos, nightly", "Mu
 - **Back up**: the libraries and folders in the job. Everything chosen is backed up from one moment in time, each in a folder of its own.
 - **Copies go to**: the destinations. **Add destination…** takes a folder on this Mac, an external drive, a network share, or a cloud folder; Cryoframe works out which it is. The first is the main destination, which a backup has to reach. Drives can take turns, so each backup goes to whichever is connected.
 - **When**: every day, every few hours, once, or only when you say.
-- **Keep**: each backup keeps one up-to-date copy (a live mirror) or dated versions, as disk images or zip files, with a rule for how many versions to keep.
+- **Keep**: each backup keeps one up-to-date copy, as a disk image (a live mirror) or plain files, or dated versions, as disk images or zip files, with a rule for how many versions to keep.
 - **Details**: encryption, how each backup is checked, and what to do if the library's app is open.
 
 <p align="center">
@@ -135,6 +135,7 @@ Before a new job's first backup, and before an edit is saved, a summary says wha
 Formats:
 
 - One up-to-date copy (live mirror). A sparsebundle with about 8 MB bands. The first run copies everything; later runs only write the bands that changed. It sizes itself to the library and grows as needed, up to what the drive can hold.
+- One up-to-date copy as plain files. Ordinary files and folders that open on any computer, with no Cryoframe needed. What you delete from the library moves to a Removed items folder beside the copy, which you empty in Storage. Plain files can't be encrypted, and on exFAT, FAT32 and network drives they lose what those drives can't hold, such as permissions and creation dates. An app's library, such as Photos, can only be kept as plain files on an APFS drive connected to this Mac.
 - Dated versions, as disk images (sealed DMG) or zip files (sealed zip). One immutable, checksummed file per run for cold storage. An archive larger than the destination's file-size cap splits into volumes, so it fits cloud single-file limits.
 
 Checks:
@@ -157,6 +158,8 @@ Two doors, because there are two situations.
 </p>
 
 A version a restore drill has opened is marked *Restore-tested*; one whose checksums were re-read is marked *Checksum verified*. A version nothing has checked yet carries no badge, because Cryoframe won't claim more than it knows.
+
+Want the photos out of a backup rather than the library? **Export Media…** copies a version's photos, videos, or other files into a folder for each month, filtered by type and date. Exporting again copies only what isn't there yet. It's offered for folders and Messages, not for app libraries such as Photos.
 
 Not sure which night still had the file? **Find a File…** in Restore searches each version's list of files for a name or a path, newest first, and opens the version at the match so you can extract it. Versions made before 1.6 have no list; open those with **Look inside…**.
 

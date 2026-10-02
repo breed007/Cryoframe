@@ -8,7 +8,7 @@ A job that keeps dated versions keeps a history. Each run is its own dated versi
 
 Every run of a job that keeps dated versions (as disk images or zip files) writes a new version into a dated folder under the destination, named by the date and time of the run. The Restore window lists each version with its date, so you pick the point in time you want.
 
-A job that keeps one up-to-date copy (a live mirror) works differently. Each run updates that copy in place, so there are no versions to choose from. If you want a history, keep dated versions.
+A job that keeps one up-to-date copy (a live mirror or plain files) works differently. Each run updates that copy in place, so there are no versions to choose from. If you want a history, keep dated versions.
 
 ## Retention
 
@@ -21,6 +21,8 @@ Keeping every version forever fills a disk. A new job that keeps dated versions 
 Jobs made before this was the default keep whatever you chose then, including "keep all". Cryoframe will tell you if one of them is growing with nothing to stop it, and how much keeping only the recent versions would give back.
 
 After each run, Cryoframe prunes the versions the policy no longer keeps. Only a complete version with a checksum manifest counts toward the policy. A version left half-written by a failed or canceled run is swept away and never occupies a slot that would push out a good archive.
+
+Messages attachments are an exception to pruning. Before pruning deletes the last version that holds a file you deleted in Messages, Cryoframe saves that file in a removed-items archive, and the Keep rule never deletes those archives. If one can't be built, the versions it would have saved from are kept, and the run says so. See [Messages attachments](formats-and-destinations.md#messages-attachments).
 
 ## Backups from an earlier version
 
@@ -47,6 +49,12 @@ The measure is whether there's room for another run of that job, compared agains
 The Storage button at the top of the window shows, for each job, how much space its archives use and how full the destination volume is. Expand a job to see the per-version breakdown, so you can tell which versions are large and whether your retention policy is keeping more than you expected.
 
 This is the place to look before a disk fills. If a job is using more than you want, tighten its retention policy, and the next run prunes down to the new limit.
+
+### Removed items
+
+A plain-files copy keeps what was deleted from its library in a Removed items folder beside it, and Storage shows that folder as a row of its own, "*library* · Removed items", with its size. Nothing else ever deletes those items. Its Delete… menu removes the ones deleted from the library more than 30 days ago, more than 90 days ago, more than a year ago, or all of them, after you confirm. This can't be undone.
+
+<!-- SHOT: storage-removed-items.png — Storage with a plain-files job expanded: the copy's row and the "· Removed items" row with its Delete… menu open -->
 
 ![Storage: a job's total, its versions on one drive, and the trend of its last runs](../screenshots/storage.png)
 

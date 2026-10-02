@@ -4,7 +4,7 @@
 
 Restoring reads a library back out of an archive. There are two doors, depending on what happened.
 
-**Restore** (⌘R, or the Restore button) is for getting one library back: copy it out beside your live one, replace the live one in place, find which version holds a file, or pull a few files out of a version. **Recover to this Mac** (⇧⌘R) is for a new or wiped Mac, where you want everything back at once. It is covered at the end of this page.
+**Restore** (⌘R, or the Restore button) is for getting one library back: copy it out beside your live one, replace the live one in place, find which version holds a file, pull a few files out of a version, or export its photos and videos into month folders. **Recover to this Mac** (⇧⌘R) is for a new or wiped Mac, where you want everything back at once. It is covered at the end of this page.
 
 If you don't have Cryoframe at hand, every destination has a note at its top, "READ ME - How to restore without Cryoframe.txt", that explains how to open each backup with tools built into macOS.
 
@@ -13,6 +13,8 @@ Everything here verifies an archive's checksums before writing anything, checks 
 ## Find the archives
 
 Point Restore at the folder that holds your archives, or use a Quick pick for a destination you back up to. Cryoframe lists the libraries it finds down the left side, each with how many versions it has and when the newest one was made. A lock marks an encrypted library; enter its passphrase once and it applies to every version.
+
+Messages attachments kept as dated versions can also have removed-items archives, which hold files deleted in Messages before the Keep rule deleted the last version holding them. Restore lists them as "Messages attachments, removed items". You can restore one beside your library or browse it, but not restore it in place. Recover to this Mac leaves them out. See [Messages attachments](formats-and-destinations.md#messages-attachments).
 
 ## The timeline
 
@@ -25,7 +27,7 @@ Some versions carry a badge:
 - **No badge** means nothing has checked that version yet. It is not a sign of trouble; it just means Cryoframe will not claim more than it knows. See [Health and verification](health-and-verification.md) to check them.
 - **Kept** means the version is from before its job changed how it keeps backups. Nothing deletes it; see [Versions, retention, and storage](versions-retention-storage.md#kept-versions).
 
-A live mirror has no timeline. It keeps one copy, updated in place, so there is a single state to restore: the current one. Cryoframe says so rather than showing a history that does not exist. If you want a history for that library, keep dated versions with a Keep rule; see [Versions, retention, and storage](versions-retention-storage.md).
+A live mirror or a plain-files copy has no timeline. It keeps one copy, brought up to date by each run, so there is a single state to restore: the current one. Cryoframe says so rather than showing a history that does not exist. If you want a history for that library, keep dated versions with a Keep rule; see [Versions, retention, and storage](versions-retention-storage.md).
 
 Select a version and the bar at the bottom names exactly what will happen when you restore it.
 
@@ -38,6 +40,12 @@ If an archive is encrypted, enter its passphrase. If the passphrase is still in 
 Pick what to restore and a destination folder, then click Restore. Cryoframe verifies the checksums, mounts or extracts the archive, joins any split parts, and copies the library out with its original folder name.
 
 The copy lands next to anything already in the destination. It never writes over your live library. If something there already has the library's name, the restore stops and says so, and Restore Alongside keeps what's there and brings the library back beside it under a new name, such as "Photos Library (2)". When it is done, move the restored library into place yourself, or double-click it to open in its app. This is the option to use when you are not certain, because it changes nothing you did not ask it to.
+
+## Plain-files copies
+
+A plain-files copy is already ordinary files, so for a folder, Show in Finder takes you straight to it and you can copy what you need yourself. Restore still works for it the same way as for any other backup.
+
+Restore adds a note when a plain copy needs one. It names what the drive didn't keep, such as permissions or creation dates on an exFAT drive. It warns when the copy's last update was stopped before it finished, so some files may be from the update before. For an app library kept as a package, such as Photos, it has no Show in Finder: restore the library and open the restored copy, because the app would change the backup if you opened it where it sits.
 
 ## Restore in place
 
@@ -53,6 +61,24 @@ Sometimes you do not want the whole library back, just a handful of files from i
 
 A library package, like a `.photoslibrary`, shows as a single item you extract whole rather than a folder you walk into, because the package is meant to be handled as a unit.
 
+## Export media
+
+Export Media…, on the restore bar, copies the photos, videos, or other files in a version out as ordinary files, sorted into a folder for each month. It's a one-time copy: nothing keeps the exported folder up to date.
+
+<!-- SHOT: export-media.png — The Export Media sheet for a Messages attachments version: Photos and Videos chosen, the month filter, the folder to copy into, and the warning that exported files aren't encrypted -->
+
+Choose what to copy: Photos (each Live Photo's video goes with its photo), Videos, and Other files. Turn on "Only files from some months" to pick a range. Then choose a folder and click Export.
+
+- Each file goes into a folder named for the month it was last changed, such as `2024-05`. The month comes from the modification date because every drive keeps that one; exFAT and FAT32 lose creation dates.
+- Exporting again copies only what isn't there yet. A file whose name is already taken is compared with what's there: the same file is skipped, and a different one is saved as "IMG_0001 (2).HEIC". The same file gets the same name every time, so you can stop an export and run it again.
+- A file that can't be read from the backup is skipped, and the summary names it; the rest still go out. Another version may still have it. A file that can't be saved in the folder ends the export, and exporting again skips what was already copied.
+- Cryoframe checks for room before it copies anything. On a FAT32 drive, a file of 4 GB or more is skipped and named.
+- Hidden files, settings files, and the link previews Messages keeps aren't exported.
+
+The exported files aren't encrypted. When the version is encrypted, or holds Messages photos and files, the sheet says so before you export, unless the folder is on an encrypted drive. For Messages that includes files deleted in Messages since the backup was made. Delete the exported files in Finder when you're done with them.
+
+Export Media is offered for folders, Messages, and Messages attachments. It isn't offered for app libraries such as Photos, Apple Music, iMovie, GarageBand, Mail, Microsoft Outlook, or a Final Cut Pro library: their files are the app's own, and Photos, for one, keeps thumbnails and edits beside each original. To get files out of those, restore the library and export from its app.
+
 ## Find a File
 
 When you know the file you want but not which night still had it, click Find a File… at the top of the Restore window. Type a name, such as "Taxes 2024.pdf", or part of a path, such as "Documents/Taxes". You can also paste a whole path: one copied from Finder, dragged into Terminal, or in quotes. Upper and lower case don't matter, and an accented name matches however it was written.
@@ -64,6 +90,7 @@ Cryoframe searches the list of files saved with each version, newest first, and 
 Not every version can answer:
 
 - A version made before 1.6 has no file list, and neither does a live mirror. The search says so and offers Look inside…, which opens the version so you can browse it yourself.
+- A plain-files copy has a list, and the search looks through its Removed items as well. A match there reads "Removed from the library on" and the day it went.
 - A list that's missing, damaged, or locked with a passphrase that doesn't open it is treated the same way: no list, rather than "not found".
 - A list that was cut short (a very large library, or one read while it was changing) shows what it has, but never says a file isn't there.
 

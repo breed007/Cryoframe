@@ -6,7 +6,7 @@ The format decides what a backup looks like on disk. The destination decides whe
 
 ## Formats
 
-In the job editor, "Each backup keeps" offers two choices: one up-to-date copy, or dated versions. Dated versions come as disk images or zip files.
+In the job editor, "Each backup keeps" offers two choices: one up-to-date copy, or dated versions. One up-to-date copy comes as a disk image (a live mirror) or as plain files. Dated versions come as disk images or zip files.
 
 ### One up-to-date copy (live mirror)
 
@@ -20,6 +20,8 @@ Each run updates a copy of the mirror and swaps it in only when the copy is comp
 
 A mirror can be paused mid-run. Named pipes, sockets, and device files in a library are left out of the mirror, because they only mean something while a program is running.
 
+The copy isn't the end of a run. After it, the mirror finishes the copy's dates and attributes, writes it out to the drive, reads back everything the run wrote, and removes the previous copy. Each of these steps shows on the job row with its own progress, such as "Reading the copy back: 4.1 GB of 13.7 GB", and Stop works in every one of them. On a first run the read-back reads the whole library back off the drive, so on an SD card or another slow drive it can take many minutes. In 1.6.0 none of these steps showed any progress, and a long read-back looked like a run stuck at "archiving 99%".
+
 ### Dated versions (sealed DMG and sealed zip)
 
 A sealed archive is one immutable file written once and never changed: a read-only `.dmg` or a `.zip`. Each run produces a new dated version, so a sealed job builds a history you can restore from. When the destination caps file size, a sealed archive splits into numbered volumes so it still fits. Each version made by 1.6 or later also carries a list of its files, which is what lets [Find a File](restoring.md#find-a-file) search it.
@@ -30,11 +32,81 @@ A sealed DMG cannot be paused while it is being built. A sealed zip can.
 
 Some folders can't go straight into a sealed archive. A folder holding named pipes or sockets is first copied without them, then sealed from the copy. For a disk image, the same applies to append-only items and, on macOS 15, to locked files. The copy needs room in the scratch location (see below) on top of the archive itself, and an encrypted job's copy is always made on the startup disk, so an unencrypted copy of an encrypted job never lands on another drive. Before building a DMG, Cryoframe names anything in the library that would stop the image from being built.
 
+### One up-to-date copy as plain files
+
+Plain files keep one copy of each library as ordinary files and folders, which any computer can open: a Windows PC, a TV, a camera, or a Mac without Cryoframe. In the job editor, under Keep, choose One up-to-date copy, then Plain files.
+
+<!-- SHOT: editor-plain-files.png — The job editor's Keep section with One up-to-date copy and Plain files chosen, showing the note that plain files aren't encrypted and where deleted items go -->
+
+Plain files are chosen when a job is made, and the job keeps them for good. For a disk image or dated versions, make a new job. Plain files can't be encrypted, and unless every destination is on an encrypted drive the editor says so: anyone with the drive can open them.
+
+A file that changes in the library replaces the one in the copy, so there is no history to go back to. A file you delete from the library isn't deleted from the backup; it moves to Removed items (below).
+
+How a copy is brought up to date depends on the drive. On an APFS drive connected to this Mac, each run updates a clone of the copy, reads it back, and swaps it in whole, the way a live mirror does, so the copy is complete at every moment. Everywhere else the copy is updated where it is. While that happens, Cryoframe marks the copy as changing, so a run that is stopped or cut off leaves a copy that Restore and the health check describe as possibly part old and part new. The next backup finishes it.
+
+#### What each drive keeps
+
+| Drive | What a plain copy keeps |
+|---|---|
+| APFS | Everything: permissions, extended attributes and Finder tags, hidden and locked flags, creation dates, and hard links |
+| Mac OS Extended | The same as APFS, with the date limits below |
+| exFAT and FAT32 | Names, contents, modification dates, folders, and symbolic links. Permissions, extended attributes and Finder tags, hidden and locked flags, creation dates, and hard links are lost. |
+| A network share (SMB) | Treated like exFAT: Cryoframe doesn't count on it keeping anything beyond names, contents, and modification dates |
+
+Restore names what a drive didn't keep when you pick a plain copy on it.
+
+#### App libraries
+
+An app's library (Photos, Apple Music, iMovie, Messages, Mail, Microsoft Outlook, a Final Cut Pro library, a Lightroom Classic or Capture One catalog) can be kept as plain files only on an APFS drive connected to this Mac. The editor won't save such a job for any other destination, and says why:
+
+- exFAT and FAT32 drives can't hold what the app needs to open its library again.
+- On a network drive, a copy updated over the network and stopped part way would leave a library the app can't open.
+- On a Mac OS Extended drive, the copy is updated where it is, with the same risk.
+- A cloud folder uploads the library while it is being updated, and the app can't open a library caught part way.
+
+Use a disk image on those drives. GarageBand, Logic Pro projects, Messages attachments, and folders you add yourself can be kept as plain files anywhere.
+
+Don't open an app library where it sits in a plain copy: its app would change the backup. Restore it first, and open the restored copy.
+
+#### Removed items
+
+What you delete from a library is moved into a folder named Removed items, beside the copy, once the run has read the copy back. Each day gets a folder of its own, such as `Removed items/2026-10-02`, and items keep their path inside it. A name deleted twice on the same day gets "(2)" on the second.
+
+Nothing deletes Removed items on its own. To free the room, open Storage, find the row "*library* · Removed items", and use its Delete… menu: older than 30 days, older than 90 days, older than a year, or all of them. When a run finds too little room on the drive, its message says how much Removed items take. [Find a File](restoring.md#find-a-file) searches Removed items too.
+
+#### Limits of exFAT, FAT32, and network drives
+
+When an item can't be kept on the drive, the run copies everything else, names what it left out, and says why.
+
+- FAT32 can't hold a file of 4 GB or more. Such a file isn't copied. An exFAT or Mac drive can take it.
+- A FAT32 folder holds at most 65,536 entries, and a long name uses several of them, so a folder with tens of thousands of files can run out. What doesn't fit isn't copied.
+- exFAT and FAT32, and network drives that ignore case, treat names that differ only in capitals or accents as one name. When two library items have such names, only one is copied, always the same one, and the run names the other. Rename one of them to copy both. An item renamed only in its capitals or accents is renamed in the copy, not copied again.
+- A network drive may refuse some characters in a name. Each such name is tried on the drive first; one it refuses isn't copied.
+- exFAT and FAT32 keep modification dates from 1980 through 2099, and FAT32 keeps them to the nearest two seconds. Mac OS Extended keeps dates from 1904 through 2039. A file dated outside that range is copied with the nearest date the drive keeps, and the run names it.
+
+#### The `._` files on exFAT and FAT32
+
+On exFAT and FAT32, macOS can write a hidden file beside each file, named `._` and then the file's name, to hold details the drive itself can't. A Mac hides these files; Windows, TVs, and cameras show them. Each takes at least one allocation unit on the drive, which is 128 KB on many large SD cards, so a library of many small files can need far more room than its size suggests. Cryoframe checks whether the drive gets these files and counts them when it checks for room.
+
+For the same reason, a library file whose own name starts with `._`, sitting beside a file of the matching name, can't be kept on these drives: macOS would overwrite it. It isn't copied, and the run names it.
+
 ### Choosing between them
 
-Use one up-to-date copy when you want fast repeat runs of something that changes often. Use dated versions when you want a fixed, verifiable file or a history. A job keeps backups one way, but you can make two jobs for the same library if you want both.
+Use a disk image (a live mirror) when you want fast repeat runs of something that changes often. Use plain files when the copy has to open on any computer, or without Cryoframe. Use dated versions when you want a fixed, verifiable file or a history. A job keeps backups one way, but you can make two jobs for the same library if you want both.
 
 Changing an existing job from one to the other doesn't throw away what it made. Versions already in its folder are shown as "Kept" and nothing deletes them; a mirror left behind by a job that now keeps dated versions is kept the same way.
+
+## Messages attachments
+
+Messages attachments is a library of its own in the job editor: the photos, videos, and files sent and received in Messages (`~/Library/Messages/Attachments`), without the conversations. Messages can stay open while it backs up. It works in every format. A job that backs up Messages already includes its attachments, so the dashboard never names attachments as a gap of their own.
+
+What you delete in Messages stays in the backup:
+
+- A disk image (live mirror) keeps it in a Removed items folder at the top of the image. Restore copies back the attachments alone, and Browse shows Removed items as well. There is no way yet to empty Removed items inside a disk image.
+- Plain files keep it in Removed items beside the copy, which you empty in Storage (see [Removed items](#removed-items)).
+- Dated versions each hold what the folder held that day, so a deleted file is still in the versions made before you deleted it. Before the Keep rule deletes the last version holding such a file, Cryoframe saves it in a removed-items archive, in the same format and with the same passphrase as the versions. Restore lists these as "Messages attachments, removed items". The Keep rule never deletes them; to remove one, quit Cryoframe and delete its folder inside Removed items in Finder. If the archive can't be built, or you press Stop, the old versions are kept and the run says so.
+
+Messages also keeps link previews (files ending in `.pluginPayloadAttachment`) and settings files in this folder. Dated versions keep them. A disk image copy and plain files leave them out: they're not anything someone sent you, and a mirror or plain copy can skip them cheaply. A disk image or zip file of dated versions can't skip anything, so leaving them out there would mean copying the whole folder first on every run.
 
 ## Destinations
 
