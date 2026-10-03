@@ -93,7 +93,14 @@ private func verdict(_ jobs: [BackupJob], runs: [RunRecord] = [], health: [Healt
     let v = verdict([a, b], runs: [run(a, .verified)])
     #expect(v.level == .protected && v.title == "You're protected" && v.glyph == "checkmark.shield.fill")
     #expect(v.subtitle.hasPrefix("1 job healthy · "))
-    #expect(v.subtitle.hasSuffix(" · nothing needs your attention. 1 haven't run yet."))
+    #expect(v.subtitle.hasSuffix(" · nothing needs your attention. 1 job hasn't run yet."))
+    let c = job("c")
+    #expect(verdict([a, b, c], runs: [run(a, .verified)]).subtitle.hasSuffix(" 2 jobs haven't run yet."))
+}
+
+@Test func aLoneJobIsCountedInTheSingular() {
+    let a = job("a")
+    #expect(verdict([a], runs: [run(a, .failed)]).subtitle.hasSuffix(" 0 of 1 job is healthy."))
 }
 
 // Pinned in 1.6's first milestone as it was: a stopped or deferred run counted as

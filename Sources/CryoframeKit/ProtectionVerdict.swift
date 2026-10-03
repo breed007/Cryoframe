@@ -66,14 +66,14 @@ public struct ProtectionVerdict: Sendable, Equatable {
         if let f = failed.first {
             return .init(level: .critical,
                          title: failed.count == 1 ? "1 backup failed" : "\(failed.count) backups failed",
-                         subtitle: "\(f.job.name) didn't finish — open it to see why. \(healthy) of \(jobs.count) jobs are healthy.",
+                         subtitle: "\(f.job.name) didn't finish — open it to see why. \(Self.healthyOf(healthy, jobs.count)).",
                          glyph: "xmark.octagon.fill")
         }
         let critical = standings.filter { $0.standing.level == .critical }
         if let c = critical.first {
             return .init(level: .critical,
                          title: critical.count == 1 ? "1 backup is overdue" : "\(critical.count) backups are overdue",
-                         subtitle: "\(c.job.name) \(c.standing.reason(now: now)) — open it to see why. \(healthy) of \(jobs.count) jobs are healthy.",
+                         subtitle: "\(c.job.name) \(c.standing.reason(now: now)) — open it to see why. \(Self.healthyOf(healthy, jobs.count)).",
                          glyph: "clock.badge.exclamationmark")
         }
         // Nothing runs on its own with the agent switched off, however recent the
@@ -90,7 +90,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
         if let b = attention.min(by: { $0.standing.rank < $1.standing.rank }) {
             return .init(level: .attention,
                          title: attention.count == 1 ? "1 job needs attention" : "\(attention.count) jobs need attention",
-                         subtitle: "\(b.job.name) \(b.standing.reason(now: now)) — open it to fix. \(healthy) of \(jobs.count) jobs are fully healthy.",
+                         subtitle: "\(b.job.name) \(b.standing.reason(now: now)) — open it to fix. \(Self.healthyOf(healthy, jobs.count, fully: true)).",
                          glyph: "exclamationmark.triangle.fill")
         }
         if !neverRan.isEmpty && healthy == 0 {
@@ -99,10 +99,17 @@ public struct ProtectionVerdict: Sendable, Equatable {
                                                        : "\(neverRan.count) jobs haven't run yet.",
                          glyph: "clock.badge.checkmark")
         }
-        let extra = neverRan.isEmpty ? "" : " \(neverRan.count) haven't run yet."
+        let extra = neverRan.isEmpty ? "" : neverRan.count == 1 ? " 1 job hasn't run yet." : " \(neverRan.count) jobs haven't run yet."
         return .init(level: .protected, title: "You're protected",
                      subtitle: "\(healthy) \(healthy == 1 ? "job" : "jobs") healthy · \(lastBackupText(jobs: jobs, lastRecords: lastRecords).lowercased()) · nothing needs your attention.\(extra)",
                      glyph: "checkmark.shield.fill")
+    }
+
+    /// "1 of 3 jobs are healthy", and "0 of 1 job is healthy" for a lone job
+    static func healthyOf(_ healthy: Int, _ total: Int, fully: Bool = false) -> String {
+        let jobs = total == 1 ? "job is" : "jobs are"
+        let how = fully ? "fully healthy" : "healthy"
+        return "\(healthy) of \(total) \(jobs) \(how)"
     }
 
     // MARK: - one job
