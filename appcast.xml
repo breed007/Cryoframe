@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.7.0</title>
+      <description><![CDATA[Plain-files backups, Messages attachments, Export Media, and a fix for live mirrors that sat at 99%.]]></description>
+      <pubDate>Sat, 03 Oct 2026 10:36:31 +0000</pubDate>
+      <sparkle:version>20261003.0635</sparkle:version>
+      <sparkle:shortVersionString>1.7.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.7.0/Cryoframe-1.7.0.dmg" type="application/octet-stream" sparkle:edSignature="PE0/x8wHbg5iYpWVeuS6XMZ71pRHo7qBzA/MF0ueD8ZJdxPZMF7mO0K3EqKygmGbnkyad1/Z3/dZFxtverfUAg==" length="8427284" />
+    </item>
+    <item>
       <title>1.6.0</title>
       <description><![CDATA[One editor for jobs, drives that take turns, Find a File, a printable recovery kit, and data-safety fixes for 1.5.x.]]></description>
       <pubDate>Fri, 02 Oct 2026 03:03:00 +0000</pubDate>
