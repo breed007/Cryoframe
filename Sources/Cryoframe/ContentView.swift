@@ -120,6 +120,17 @@ struct ContentView: View {
         } message: {
             Text("Backups and their versions aren't affected.")
         }
+        // a restore a quit or crash cut off, dealt with at launch (see recoverCutOffRestores)
+        .alert(model.restoreLeftovers.allSatisfy { $0.what == .finished } ? "A restore was finished" : "A restore was cut off",
+               isPresented: Binding(get: { !model.restoreLeftovers.isEmpty }, set: { if !$0 { model.restoreLeftovers = [] } })) {
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting(model.restoreLeftovers.map(\.copy))
+                model.restoreLeftovers = []
+            }
+            Button("OK", role: .cancel) { model.restoreLeftovers = [] }
+        } message: {
+            Text(model.restoreLeftovers.map(AppModel.leftoverText).joined(separator: "\n\n"))
+        }
         .sheet(isPresented: $model.showReportProblem) { ReportProblemView(model: model, isPresented: $model.showReportProblem) }
         .sheet(isPresented: $model.showHistory) { HistoryView(model: model, isPresented: $model.showHistory) }
         // The restore sheets cover the whole window. At their own height they ended

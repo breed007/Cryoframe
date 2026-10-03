@@ -68,6 +68,9 @@ final class AppModel: ObservableObject {
     @Published var showHistory = false
     @Published var showReportProblem = false
     @Published var protectedBytes: UInt64?              // total on-disk footprint across all destinations (dashboard)
+    /// what restores cut off before they finished left, dealt with at launch and
+    /// said once (see recoverCutOffRestores)
+    @Published var restoreLeftovers: [RestoreStaging.Leftover] = []
 
     /// the model of this launch, for the app delegate (see QuitGuard)
     static weak var current: AppModel?
@@ -133,6 +136,7 @@ final class AppModel: ObservableObject {
             MainActor.assumeIsolated { AppModel.current?.powerOffAnnouncedAt = Date() }
         }
         resumeTransfers()
+        recoverCutOffRestores()
         armWake()                               // align the optional pmset wake with the schedule
         refreshProtectedSize()                  // dashboard "backed up" total
     }
@@ -842,6 +846,43 @@ final class AppModel: ObservableObject {
             reloadHistory()                         // the agent recorded the result as it finished
             refreshProtectedSize(force: true)
             armWake()                               // lastRun moved
+        }
+    }
+
+    /// A restore in place cut off by a quit, a crash or a logout between moving the
+    /// library to the Trash and moving the restored copy in leaves the library's place
+    /// empty and the copy in a hidden folder beside it. Each place a library Cryoframe
+    /// restores in place can be is looked at: a verified copy goes into its empty
+    /// place, anything else is put beside the library where it shows, and the person
+    /// is told where everything is. Nothing is deleted (see RestoreStaging.recover).
+    private func recoverCutOffRestores() {
+        let types = ContentTypeRegistry.withOverrides(LibraryOverrides.load()).types
+        Task {
+            let found = await Task.detached { () -> [RestoreStaging.Leftover] in
+                let home = NSHomeDirectory()
+                return RestoreStaging.recover(lives: types.flatMap { $0.paths.map { $0.liveURL(home: home) } })
+            }.value
+            guard !found.isEmpty else { return }
+            for l in found {
+                log(l.what == .finished ? "↺ finished restoring “\(l.live.lastPathComponent)”, which was cut off"
+                                        : "⚠︎ a restore of “\(l.live.lastPathComponent)” was cut off; its copy is at \(l.copy.path)")
+            }
+            restoreLeftovers = found
+        }
+    }
+
+    /// what the person is told of one leftover (see recoverCutOffRestores)
+    static func leftoverText(_ l: RestoreStaging.Leftover) -> String {
+        let name = l.live.lastPathComponent
+        let previous = l.trashed.map { "The library it replaced is in the Trash, at \($0.path)." }
+            ?? "If the library you had before isn't at \(l.live.path), look for it in the Trash."
+        switch l.what {
+        case .finished:
+            return "Restoring “\(name)” in place was cut off after the library it replaced went to the Trash, and before the restored copy was moved in. Cryoframe has now moved it in: it is at \(l.live.path). \(previous)"
+        case .verifiedBeside:
+            return "Restoring “\(name)” in place was cut off before it finished, and something else is in the library's place now. That was left as it is. The restored copy, checked and complete, is at \(l.copy.path). \(previous)"
+        case .unverifiedBeside:
+            return "A restore of “\(name)” by an earlier version of Cryoframe was cut off and left a copy that may not be complete. It is now at \(l.copy.path); check it before you use it. If the library you had before isn't at \(l.live.path), look for it in the Trash."
         }
     }
 

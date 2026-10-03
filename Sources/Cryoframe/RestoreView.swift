@@ -82,34 +82,20 @@ final class RestoreModel: ObservableObject {
 
     private nonisolated static func inPlace(_ a: RestorableArchive, liveURL: URL, passphrase: String?) async -> Outcome {
         await Task.detached {
-            let fm = FileManager.default
-            let parent = liveURL.deletingLastPathComponent()
-            let staging = parent.appendingPathComponent(".cryoframe-restore-\(UUID().uuidString)", isDirectory: true)
-            defer { try? fm.removeItem(at: staging) }
             do {
-                // 1. restore + verify into a staging copy FIRST — the live library is
-                //    never touched until we have a good copy in hand.
-                let restored = try RestoreEngine().restore(a, to: staging, verify: true, passphrase: passphrase, inPlace: true)
-                // 2. move the current library to the Trash (reversible).
-                if fm.fileExists(atPath: liveURL.path) { try fm.trashItem(at: liveURL, resultingItemURL: nil) }
-                // 3. swap the verified copy into the exact original location (also
-                //    fixes any archived-vs-live name mismatch).
-                do {
-                    try fm.moveItem(at: restored, to: liveURL)
-                } catch {
-                    // move failed — rescue the verified copy OUT of staging first, or
-                    // the defer below deletes the very file this message points at.
-                    var rescued = parent.appendingPathComponent("\(liveURL.lastPathComponent) (recovered)")
-                    if fm.fileExists(atPath: rescued.path) {
-                        rescued = parent.appendingPathComponent("\(liveURL.lastPathComponent) (recovered \(UUID().uuidString.prefix(8)))")
-                    }
-                    let finalURL = (try? fm.moveItem(at: restored, to: rescued)) != nil ? rescued : restored
+                // restored and verified beside the library first; the library is never
+                // touched until a good copy is in hand, and a quit or crash between
+                // the Trash and the move is finished at the next launch (see
+                // RestoreInPlace, RestoreStaging.recover)
+                switch try RestoreInPlace.run(a, live: liveURL, passphrase: passphrase) {
+                case .replaced:
+                    return Outcome(name: a.bundleName, ok: true,
+                                   detail: "restored in place — the previous version is in the Trash", url: liveURL)
+                case .notMoved(let copy):
                     return Outcome(name: a.bundleName, ok: false,
-                                   detail: "restored and verified, but couldn't move it into place — the good copy is at \(finalURL.path)",
-                                   url: finalURL)
+                                   detail: "restored and verified, but couldn't move it into place — the good copy is at \(copy.path)",
+                                   url: copy)
                 }
-                return Outcome(name: a.bundleName, ok: true,
-                               detail: "restored in place — the previous version is in the Trash", url: liveURL)
             } catch {
                 return Outcome(name: a.bundleName, ok: false,
                                detail: "in-place restore failed — \(RestoreFailureText.restoreMessage(error, encrypted: a.encrypted)). Your live library was left untouched.",
