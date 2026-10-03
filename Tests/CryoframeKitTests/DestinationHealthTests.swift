@@ -122,6 +122,51 @@ private func run(_ i: Int, good: Bool = true, seconds: Double = 100) -> Destinat
 
     // A run into a cloud folder puts its new versions on the upload list; a run to
     // a drive doesn't.
+    // 1.6.0 doesn't know plain-files jobs (they are only in jobs-files.json), and its
+    // Storage window drops the rings of jobs it doesn't know from destination-health.json.
+    // A plain-files job's runs go in a file of their own, which 1.6.0 never reads, and
+    // a ring an earlier build kept in the first file moves over with the next run.
+    @Test func aPlainFilesJobsTrendOutlivesAnOlderStorageWindow() throws {
+        let dir = folder("plain"); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("destination-health.json")
+        let store = DestinationHealthStore(url: url)
+        #expect(store.plainFilesURL.lastPathComponent == "destination-health-files.json")
+        let sealed = DestinationKey(jobID: "sealed", targetID: "d"), plain = DestinationKey(jobID: "plain", targetID: "d")
+        store.append(run(1), for: sealed)
+        store.append(run(1), for: plain)                       // as a build before this one kept it
+        store.append(run(2), for: plain, plainFiles: true)
+        store.append(run(3), for: plain, plainFiles: true)
+        #expect(store.runs(for: plain).map(\.bytes) == [3, 2, 1])
+
+        // 1.6.0's Storage: every ring but the jobs it knows, dropped from the first file
+        struct Old: Codable { var rings: [String: [DestinationRun]] }
+        var old = try JSONDecoder().decode(Old.self, from: Data(contentsOf: url))
+        #expect(old.rings[plain.string] == nil, "the plain job's ring is still in the file 1.6.0 prunes")
+        old.rings = old.rings.filter { $0.key == sealed.string }
+        try JSONEncoder().encode(old).write(to: url)
+
+        #expect(store.runs(for: plain).map(\.bytes) == [3, 2, 1])
+        let loaded = store.load(keeping: [sealed, plain])
+        #expect(loaded[plain]?.count == 3 && loaded[sealed]?.count == 1)
+        // and this build's Storage still drops a gone job's ring from both
+        store.load(keeping: [sealed])
+        #expect(store.runs(for: plain).isEmpty)
+
+        // what a finished run adds goes to the file of the job's kind
+        let notes = ContentType.genericFolder(id: "n", displayName: "Notes", path: .absolute("/Users/someone/Notes"))
+        let dest = dir.appendingPathComponent("Card")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        let job = BackupJob(id: "pj", name: "Plain", libraries: [notes], target: .localVolume(id: "c", name: "Card", dir: dest),
+                            format: .plainFiles, frequency: .manual, createdAt: t0)
+        let record = RunRecord.make(job: job, outcome: .finished(results: [
+            .completed(library: "Notes", destination: "Card", parts: 1, bytes: 7, verified: nil)], warning: nil),
+            startedAt: t0, finishedAt: t0, trigger: "scheduled")
+        RunFollowUp.record(record, job: job, health: store, uploads: nil, lastCheck: nil, volumes: FixedVolumeTable([]))
+        let key = DestinationKey(jobID: "pj", targetID: "c")
+        #expect(store.runs(for: key).map(\.bytes) == [7])
+        #expect((try? JSONDecoder().decode(Old.self, from: Data(contentsOf: url)))?.rings[key.string] == nil)
+    }
+
     @Test func aCloudRunRecordsItsVersionForTheUploadCheck() throws {
         let dir = folder("cloudrun"); defer { try? FileManager.default.removeItem(at: dir) }
         let dest = dir.appendingPathComponent("Dropbox")

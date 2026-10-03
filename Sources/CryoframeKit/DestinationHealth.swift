@@ -14,7 +14,8 @@
 //  destination-health.json holds a ring of the last 100 runs for each (job,
 //  destination). The app and the agent both add to it (see SharedJSONFile), and the
 //  rings of jobs or destinations that are gone are dropped when it is read for the
-//  window, so the file can't grow with every job ever made.
+//  window, so the file can't grow with every job ever made. Plain-files jobs' rings
+//  are kept in destination-health-files.json beside it, which 1.6.0 never reads.
 //
 
 import Foundation
@@ -90,13 +91,22 @@ public final class DestinationHealthStore: @unchecked Sendable {
     }
 
     private let file: SharedJSONFile<File>
+    /// Plain-files jobs' rings, in a file of their own beside the first. Those jobs are
+    /// kept only in jobs-files.json (see JobStore), so 1.6.0 doesn't know them, and its
+    /// Storage window drops every ring of a job it doesn't know from the first file.
+    private let plainFile: SharedJSONFile<File>
     private let cap: Int
     public var fileURL: URL { file.url }
+    public var plainFilesURL: URL { plainFile.url }
 
     public static let defaultCap = 100
 
     public init(url: URL, cap: Int = DestinationHealthStore.defaultCap) {
         file = SharedJSONFile(url: url, lockName: "destination-health.lock", empty: { File() })
+        let ext = url.pathExtension
+        let plainName = url.deletingPathExtension().lastPathComponent + "-files" + (ext.isEmpty ? "" : "." + ext)
+        plainFile = SharedJSONFile(url: url.deletingLastPathComponent().appendingPathComponent(plainName),
+                                   lockName: "destination-health-files.lock", empty: { File() })
         self.cap = cap
     }
 
@@ -106,33 +116,55 @@ public final class DestinationHealthStore: @unchecked Sendable {
         return DestinationHealthStore(url: base.appendingPathComponent("destination-health.json"))
     }
 
-    public func append(_ run: DestinationRun, for key: DestinationKey) {
-        file.update { f in
+    /// `plainFiles`: a plain-files job's run, kept in the file of their own. A ring an
+    /// earlier build kept in the first file comes along.
+    public func append(_ run: DestinationRun, for key: DestinationKey, plainFiles: Bool = false) {
+        let carried = plainFiles ? file.read().rings[key.string] ?? [] : []
+        let cap = self.cap
+        (plainFiles ? plainFile : file).update { f in
             var ring = f.rings[key.string] ?? []
+            if !carried.isEmpty { ring = (carried + ring).sorted { $0.at < $1.at } }
             ring.append(run)
             if ring.count > cap { ring.removeFirst(ring.count - cap) }
             f.rings[key.string] = ring
             return (true, ())
         }
+        if !carried.isEmpty {
+            file.update { f in
+                f.rings[key.string] = nil
+                return (true, ())
+            }
+        }
     }
 
     /// the destination's runs, newest first
     public func runs(for key: DestinationKey) -> [DestinationRun] {
-        (file.read().rings[key.string] ?? []).reversed()
+        Self.merged(file.read().rings[key.string], plainFile.read().rings[key.string]).reversed()
     }
 
     /// Every ring the jobs still have, newest first, with the rings of jobs and
-    /// destinations that are gone dropped from the file.
+    /// destinations that are gone dropped from both files.
     @discardableResult
     public func load(keeping keys: Set<DestinationKey>) -> [DestinationKey: [DestinationRun]] {
         let wanted = Dictionary(uniqueKeysWithValues: keys.map { ($0.string, $0) })
-        return file.update { f in
+        func prune(_ f: inout File) -> (changed: Bool, result: [String: [DestinationRun]]) {
             let before = f.rings.count
             f.rings = f.rings.filter { wanted[$0.key] != nil }
-            var out: [DestinationKey: [DestinationRun]] = [:]
-            for (k, ring) in f.rings { if let key = wanted[k] { out[key] = ring.reversed() } }
-            return (f.rings.count != before, out)
+            return (f.rings.count != before, f.rings)
         }
+        let main = file.update(prune), plain = plainFile.update(prune)
+        var out: [DestinationKey: [DestinationRun]] = [:]
+        for k in Set(main.keys).union(plain.keys) {
+            if let key = wanted[k] { out[key] = Self.merged(main[k], plain[k]).reversed() }
+        }
+        return out
+    }
+
+    /// one ring, oldest first, from what the two files hold of it
+    static func merged(_ a: [DestinationRun]?, _ b: [DestinationRun]?) -> [DestinationRun] {
+        guard let b, !b.isEmpty else { return a ?? [] }
+        guard let a, !a.isEmpty else { return b }
+        return (a + b).sorted { $0.at < $1.at }
     }
 }
 
@@ -159,7 +191,7 @@ public enum RunFollowUp {
             let run = DestinationRun(at: record.finishedAt, good: good, bytes: outcomes.reduce(0) { $0 + $1.bytes },
                                      seconds: record.duration, freeAfter: here ? freeSpace(t.destinationDir) : nil,
                                      checkPassed: lastCheck?.passed)
-            health.append(run, for: DestinationKey(jobID: job.id, targetID: t.id))
+            health.append(run, for: DestinationKey(jobID: job.id, targetID: t.id), plainFiles: job.format.isPlainFiles)
 
             if let uploads, t.kind == .cloudSync, here, outcomes.contains(where: { $0.parts > 0 }) {
                 let versions = job.libraries.compactMap { lib in
