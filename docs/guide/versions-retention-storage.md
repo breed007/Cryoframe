@@ -46,7 +46,7 @@ The measure is whether there's room for another run of that job, compared agains
 
 ## Storage
 
-The Storage button at the top of the window shows, for each job, how much space its archives use and how full the destination volume is. Expand a job to see the per-version breakdown, so you can tell which versions are large and whether your retention policy is keeping more than you expected.
+The Storage button at the top of the window shows, for each job, how much space its archives use and how full the destination volume is. Expand a job to see the per-version breakdown, so you can tell which versions are large and whether your retention policy is keeping more than you expected. Only dated versions count as archives there; a plain-files job reads "a current copy and Removed items".
 
 This is the place to look before a disk fills. If a job is using more than you want, tighten its retention policy, and the next run prunes down to the new limit.
 

@@ -106,9 +106,9 @@ struct StorageView: View {
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             if s.archives.isEmpty {
-                Text("\(s.targetName) · no archives yet").font(.caption).foregroundStyle(.secondary)
+                Text("\(s.targetName) · \(s.contentsSummary)").font(.caption).foregroundStyle(.secondary)
             } else {
-                DisclosureGroup("\(s.targetName) · \(s.versionCount) archive\(s.versionCount == 1 ? "" : "s")") {
+                DisclosureGroup("\(s.targetName) · \(s.contentsSummary)") {
                     ForEach(s.archives) { a in
                         HStack {
                             Text(a.version.map { "\(a.library) · \($0.formatted(date: .abbreviated, time: .shortened))" } ?? a.library)
@@ -136,7 +136,7 @@ struct StorageView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .cryoCard(padding: 13)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(s.jobName), \(size(s.archiveBytes)) of archives on \(s.targetName)")
+        .accessibilityLabel("\(s.jobName), \(size(s.archiveBytes)) backed up on \(s.targetName)")
     }
 
     /// Delete what a plain-files copy kept of what was deleted from its library, from

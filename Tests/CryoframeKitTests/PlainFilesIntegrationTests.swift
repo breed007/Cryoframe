@@ -140,6 +140,9 @@ private func runOnce(_ job: BackupJob, _ lib: ContentType, _ dest: URL, source: 
         let rows = StorageReporter.report([job])
         #expect(rows.count == 1)
         #expect(rows[0].archives.map(\.library) == ["Notes", "Notes · Removed items"])
+        // a copy and what was deleted from it, never "2 archives"
+        #expect(rows[0].contentsSummary == "a current copy and Removed items")
+        #expect(rows[0].versionCount == 0)
         #expect(rows[0].archives[1].removedItems?.resolvingSymlinksInPath().path == removed.resolvingSymlinksInPath().path)
 
         #expect(RemovedItems.days(in: removed).count == 2)

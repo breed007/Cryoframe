@@ -102,5 +102,6 @@ extension KeptCopyTests {
         #expect(archives.count == 2)
         #expect(archives.filter(\.kept).count == 1 && archives.first(where: \.kept)?.version == nil)
         #expect(archives.first(where: \.kept)!.bytes > 0)
+        #expect(rows.first?.contentsSummary == "1 archive and a kept copy")
     }
 }

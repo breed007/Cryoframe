@@ -29,6 +29,7 @@ public struct JobStorage: Sendable, Identifiable {
     public var targetName: String
     public var targetPath: String
     public var archiveBytes: UInt64     // total on-disk size of this job's archives (all libraries + versions)
+    /// dated versions only: not an up-to-date copy, nor a plain-files copy's Removed items
     public var versionCount: Int
     public var archives: [ArchiveSize]  // per-version breakdown, newest first
     public var volumeFree: UInt64?
@@ -41,6 +42,22 @@ public struct JobStorage: Sendable, Identifiable {
         self.jobID = jobID; self.jobName = jobName; self.targetName = targetName; self.targetPath = targetPath
         self.archiveBytes = archiveBytes; self.versionCount = versionCount; self.archives = archives
         self.volumeFree = volumeFree; self.volumeTotal = volumeTotal
+    }
+
+    /// What the destination holds, in words that fit each kind: "3 archives", "a
+    /// current copy and Removed items". Only dated versions are archives; an up-to-date
+    /// copy is one copy, and Removed items are what was deleted from it.
+    public var contentsSummary: String {
+        let versions = archives.filter { $0.version != nil && $0.removedItems == nil }.count
+        let current = archives.filter { $0.version == nil && $0.removedItems == nil && !$0.kept }.count
+        let kept = archives.filter { $0.version == nil && $0.removedItems == nil && $0.kept }.count
+        var parts: [String] = []
+        if versions > 0 { parts.append("\(versions) archive\(versions == 1 ? "" : "s")") }
+        if current > 0 { parts.append(current == 1 ? "a current copy" : "\(current) current copies") }
+        if kept > 0 { parts.append(kept == 1 ? "a kept copy" : "\(kept) kept copies") }
+        if archives.contains(where: { $0.removedItems != nil }) { parts.append("Removed items") }
+        guard let last = parts.last else { return "nothing backed up yet" }
+        return parts.count > 1 ? parts.dropLast().joined(separator: ", ") + " and " + last : last
     }
 }
 
@@ -81,7 +98,8 @@ public enum StorageReporter {
                 let name = job.targets.count > 1 ? "\(job.name) → \(t.displayName)" : job.name
                 var row = JobStorage(jobID: job.id, jobName: name, targetName: t.displayName,
                                      targetPath: t.destinationDir.path,
-                                     archiveBytes: archives.reduce(0) { $0 + $1.bytes }, versionCount: archives.count,
+                                     archiveBytes: archives.reduce(0) { $0 + $1.bytes },
+                                     versionCount: archives.filter { $0.version != nil && $0.removedItems == nil }.count,
                                      archives: archives, volumeFree: v.free, volumeTotal: v.total)
                 row.targetID = t.id
                 return row
