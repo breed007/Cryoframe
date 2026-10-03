@@ -338,12 +338,43 @@ public struct RestoreEngine: Sendable {
     /// the restored library URL. Never overwrites an existing item there: with
     /// `onClash: .refuse` it stops, with `.alongside` it restores beside it under a
     /// new name. Refuses a drive without room for it (see RestoreRoom); `inPlace` only
-    /// changes how that is worded.
+    /// changes how that is worded. The copy is made under a hidden name and takes its
+    /// own only once it is whole (see RestoreStaging).
     @discardableResult
     public func restore(_ archive: RestorableArchive, to destinationDir: URL, verify: Bool = true,
                         passphrase: String? = nil, onClash: RestoreClash = .refuse, inPlace: Bool = false,
                         onStage: @escaping @Sendable (RestoreStage) -> Void = { _ in }) throws -> URL {
-        let fm = FileManager.default
+        let (staging, staged) = try stage(archive, in: destinationDir, verify: verify, passphrase: passphrase, clash: onClash,
+                                          inPlace: inPlace, onStage: onStage)
+        defer { staging.end() }
+        let target = try Self.place(staged, named: archive.bundleName, in: destinationDir, onClash: onClash)
+        onStage(.completed)
+        return target
+    }
+
+    /// `staged` given its name in `dir`: its own, or with `.alongside` the first free
+    /// "Name (2)" when that is taken, even if it was taken only a moment ago
+    static func place(_ staged: URL, named name: String, in dir: URL, onClash: RestoreClash) throws -> URL {
+        var lastTried = dir.appendingPathComponent(name)
+        for _ in 0..<8 {
+            lastTried = try target(name, in: dir, onClash: onClash)
+            do {
+                try RestoreStaging.moveIn(staged, to: lastTried)
+                return lastTried
+            } catch RestoreError.destinationExists where onClash == .alongside {
+                continue
+            }
+        }
+        throw RestoreError.destinationExists(lastTried.path)
+    }
+
+    /// verify → open → copy the library into a new staging folder in `destinationDir`
+    /// (see RestoreStaging): the folder, held, and the copy in it. `clash`: what a
+    /// clash with the library's name in `destinationDir` does, said before anything is
+    /// read; nil for a restore in place, which replaces what has the name.
+    func stage(_ archive: RestorableArchive, in destinationDir: URL, verify: Bool, passphrase: String?,
+               clash: RestoreClash?, inPlace: Bool,
+               onStage: @escaping @Sendable (RestoreStage) -> Void) throws -> (RestoreStaging, URL) {
         func checkRoom(_ bytes: UInt64) throws {
             if let refusal = RestoreRoom.refusal(bytes: bytes, free: freeSpace(destinationDir),
                                                  volume: RestoreRoom.volumeName(for: destinationDir), inPlace: inPlace) {
@@ -353,7 +384,7 @@ public struct RestoreEngine: Sendable {
         // before reading anything: a sealed archive's library is at least as big as it
         if let floor = RestoreRoom.floor(for: archive) { try checkRoom(floor) }
         // and a clash is said before the archive is verified, not after
-        _ = try Self.target(archive.bundleName, in: destinationDir, onClash: onClash)
+        if let clash { _ = try Self.target(archive.bundleName, in: destinationDir, onClash: clash) }
 
         if archive.format == .plainFiles {
             // Plain files have no checksums: they were read back when they were copied.
@@ -377,8 +408,23 @@ public struct RestoreEngine: Sendable {
 
         onStage(.copying)
         let bundleName = archive.bundleName
-        let target = try Self.target(bundleName, in: destinationDir, onClash: onClash)   // taken meanwhile?
-        try fm.createDirectory(at: destinationDir, withIntermediateDirectories: true)
+        if let clash { _ = try Self.target(bundleName, in: destinationDir, onClash: clash) }   // taken meanwhile?
+        let staging = try RestoreStaging.begin(in: destinationDir)
+        do {
+            let target = staging.dir.appendingPathComponent(bundleName)
+            try copy(archive, from: opened, to: target, checkRoom: checkRoom)
+            return (staging, target)
+        } catch {
+            staging.end()
+            throw error
+        }
+    }
+
+    /// the library in the opened archive, copied to `target`
+    private func copy(_ archive: RestorableArchive, from opened: OpenedArchive, to target: URL,
+                      checkRoom: (UInt64) throws -> Void) throws {
+        let fm = FileManager.default
+        let bundleName = archive.bundleName
 
         // zip / live mirror keep the bundle intact one level down. A sealed DMG does
         // one of two things, measured: `hdiutil create -srcfolder` puts a PACKAGE
@@ -417,9 +463,6 @@ public struct RestoreEngine: Sendable {
             try fm.copyItem(at: bundle, to: target)
             Self.keepQuarantine(from: bundle, to: target)
         }
-
-        onStage(.completed)
-        return target
     }
 
     /// where the library goes: its own name, or with `.alongside` the first free
