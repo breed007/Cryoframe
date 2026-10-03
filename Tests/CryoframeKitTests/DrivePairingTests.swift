@@ -73,6 +73,49 @@ private func mirrorTop(in dir: URL) throws {
         #expect(lib.effects.last?.contains("stay as they are") == true)
     }
 
+    // A plain-files job is told what its next backup copies there and what it moves
+    // into Removed items, counted as the run counts them, and the run then does that.
+    @Test func aPlainFilesJobIsToldWhatItsNextBackupCopiesAndSetsAside() throws {
+        let t7 = scratch("plain"), dest = t7.appendingPathComponent("Backups")
+        let src = scratch("plainsrc").appendingPathComponent("Papers")
+        for (rel, text) in [("a.txt", "a"), ("b.txt", "b"), ("sub/c.txt", "c")] {
+            let url = src.appendingPathComponent(rel)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        let lib = ContentType.genericFolder(id: "papers", displayName: "Papers", path: .absolute(src.path))
+        let t = target(dest)
+        let j = BackupJob(id: "job-1", name: "Papers", libraries: [lib], target: t, format: .plainFiles, frequency: .manual, createdAt: start)
+        let volumes = FixedVolumeTable([drive(t7, uuid: "DRIVE-B")])
+
+        let first = try #require(DrivePairing.look(t, job: j, jobs: [j], volumes: volumes)?.libraries.first)
+        #expect(first.copy == nil && first.versions.isEmpty && first.deletes == 0)
+        #expect(first.plainFiles == .init(files: 3, bytes: 3, setAside: 0))
+        #expect(first.effects.first?.hasPrefix("The next backup makes a plain copy there: 3 files") == true, "\(first.effects)")
+
+        let folder = try LibraryFolders.prepare(job: j, library: lib, in: dest, jobs: [j]).folder
+        let profile = FileSystemProfile.of(folder)
+        _ = try JobExecutor.plainFiles(job: j, library: lib, source: ArchiveSource(name: "Papers", root: src), folder: folder,
+                                       target: t, profile: profile, bytes: 3, partial: false, now: start, runner: ProcessCommandRunner())
+        let current = try #require(DrivePairing.look(t, job: j, jobs: [j], volumes: volumes)?.libraries.first)
+        #expect(current.copy?.date == start)
+        #expect(current.plainFiles == .init(files: 0, bytes: 0, setAside: 0) && !current.replacesCopy)
+        #expect(current.effects == ["Its plain copy there is up to date; the next backup copies nothing."])
+
+        try Data("a, changed".utf8).write(to: src.appendingPathComponent("a.txt"))
+        try Data("d".utf8).write(to: src.appendingPathComponent("d.txt"))
+        try FileManager.default.removeItem(at: src.appendingPathComponent("b.txt"))
+        let look = try #require(DrivePairing.look(t, job: j, jobs: [j], volumes: volumes))
+        let changed = try #require(look.libraries.first)
+        #expect(changed.plainFiles == .init(files: 2, bytes: 11, setAside: 1))
+        #expect(changed.replacesCopy && look.changesBackups)
+        #expect(changed.effects.first?.contains("2 new or changed files") == true, "\(changed.effects)")
+        #expect(changed.effects.first?.contains("1 item the library no longer holds moved to Removed items there") == true)
+
+        let ran = try PlainCopy(profile: profile, runner: ProcessCommandRunner()).run(src, in: folder)
+        #expect(ran.written == 2 && ran.writtenBytes == 11 && ran.removed == 1)
+    }
+
     @Test func aSealedJobIsToldHowManyVersionsItsKeepRuleDeletesAndThatIsWhatGoes() throws {
         let t7 = scratch("sealed"), dest = t7.appendingPathComponent("Backups")
         let legacy = dest.appendingPathComponent("Papers")

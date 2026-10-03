@@ -52,10 +52,21 @@ public struct DrivePairing: Sendable, Equatable {
         /// of those, how many are kept as the last known to restore (see
         /// AdoptionQuestion.keptKnownGood)
         public var keptKnownGood: Int = 0
+        /// a plain-files job's: what its next backup copies there and sets aside, as
+        /// the run counts it; nil when the library couldn't be read to count it
+        public var plainFiles: PlainCount? = nil
 
         public struct Copy: Sendable, Equatable {
             public var date: Date?
             public var bytes: UInt64
+        }
+
+        public struct PlainCount: Sendable, Equatable {
+            /// new or changed files the next backup copies there, and their bytes
+            public var files: Int
+            public var bytes: UInt64
+            /// items there the library no longer holds, moved into Removed items
+            public var setAside: Int
         }
     }
 
@@ -159,6 +170,7 @@ public struct DrivePairing: Sendable, Equatable {
             // follows (see LibraryFolders.next): its own folder, a 1.5 folder it takes
             // over, and versions it moves in from another folder of its name
             let (shelf, next) = JobExecutor.nextShelf(job: job, library: lib, in: dir, jobs: others)
+            if job.format.isPlainFiles { return plainFiles(lib, folder: next.folder, in: dir, target: target) }
             let legacy = entries.first { $0.identity == nil && lib.answers(to: $0.url.lastPathComponent) }
             guard let folder = next.folder ?? legacy?.url ?? (next.movesIn.isEmpty ? nil : shelf.folder) else {
                 return Library(name: lib.displayName, copy: nil, versions: [], versionBytes: 0, deletes: 0,
@@ -240,6 +252,52 @@ public struct DrivePairing: Sendable, Equatable {
                            keptKnownGood: keptKnownGood)
         }
         return DrivePairing(drive: drive, libraries: libraries, refusal: nil, rule: job.retention)
+    }
+
+    /// What the next backup of a plain-files job does with `lib`'s folder there
+    /// (`folder`, nil when it has none yet), counted as the run counts it (see
+    /// PlainCopyPlanner) against the library as it is now: the new and changed files
+    /// it copies, and what the copy holds that the library doesn't, which it moves
+    /// into Removed items. A plain-files copy has no dated versions to delete.
+    static func plainFiles(_ lib: ContentType, folder: URL?, in dir: URL, target: Target) -> Library {
+        let fm = FileManager.default
+        let found = folder.flatMap { RestoreDiscovery.plainFiles(at: $0) }
+        let copy = found.map { Library.Copy(date: LibraryIdentity.read(in: $0.dir)?.files?.updated, bytes: $0.bytes) }
+        var out = Library(name: lib.displayName, copy: copy, versions: [], versionBytes: 0, deletes: 0, effects: [], libraryID: lib.id)
+        var isDir: ObjCBool = false
+        guard let root = ContentLocator().liveRoots(of: lib).first,
+              fm.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
+            out.effects = [copy == nil ? "The next backup makes a plain copy there." : "The next backup brings its plain copy there up to date."]
+            return out
+        }
+        // what the run leaves out, and the copy it plans against, as the run finds them
+        let excluded = JobExecutor.directoryStats(root, forMirror: true, leavesOut: lib.leavesOut).excluded
+        let there = folder.map { PlainCopyLayout.copy(named: root.lastPathComponent, in: $0) }
+        let existing = there.flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
+        let profile = FileSystemProfile.of(folder ?? dir, target: target)
+        guard let plan = try? PlainCopyPlanner(profile: profile, excluded: excluded).plan(source: root, copy: existing) else {
+            out.effects = [copy == nil ? "The next backup makes a plain copy there." : "The next backup brings its plain copy there up to date."]
+            return out
+        }
+        let n = plan.written.count, aside = plan.removed.count + plan.replaced.count
+        out.plainFiles = Library.PlainCount(files: n, bytes: plan.writtenBytes, setAside: aside)
+        let files = n == 1 ? "1 file" : "\(n) files"
+        if existing == nil {
+            out.effects = ["The next backup makes a plain copy there: \(files), \(size(plan.writtenBytes))."]
+        } else if n == 0 && aside == 0 {
+            out.effects = ["Its plain copy there is up to date; the next backup copies nothing."]
+        } else {
+            out.replacesCopy = true
+            var line = "The next backup brings its plain copy there up to date"
+            if n > 0 { line += ": \(n == 1 ? "1 new or changed file" : "\(n) new or changed files") (\(size(plan.writtenBytes))) copied" }
+            if aside > 0 {
+                let items = aside == 1 ? "1 item" : "\(aside) items"
+                line += n > 0 ? ", and \(items) the library no longer holds moved to Removed items there"
+                              : ": \(items) the library no longer holds moved to Removed items there"
+            }
+            out.effects = [line + "."]
+        }
+        return out
     }
 
     static func modified(_ url: URL) -> Date? {
