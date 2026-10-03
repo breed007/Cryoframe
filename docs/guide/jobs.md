@@ -41,7 +41,7 @@ Run now starts a job immediately, whether or not it has a schedule. While it run
 
 A live mirror has more to do after the copy, and the row names each step as it goes, with a count of items or bytes: Finishing the copy, Writing the copy to the drive, Reading the copy back, Checking attributes, Removing the previous copy. A plain-files copy shows its steps the same way. Copying what changed shows how long it has been going but no count, because the copy tool can't report one while it compares the library with the copy. On a first run, reading the copy back means reading the whole library back off the drive, which can take many minutes on a slow drive or SD card.
 
-<!-- SHOT: mirror-reading-back.png — A live-mirror job row in the main window during "Reading the copy back", with its byte count and progress bar -->
+![A job row during a backup, reading its copy back: a progress bar and the bytes read so far](../screenshots/reading-back.png)
 
 You can run several jobs at once. The limit is in Settings ▸ General and defaults to 2. Snapshot creation is serialized inside the helper, so even with jobs running in parallel each one captures a clean point-in-time set. A job never runs twice at once, whether the run was started from the window or by the schedule, and the window shows and can stop a run the schedule started.
 
@@ -57,7 +57,7 @@ A tool that makes no progress for 15 minutes is stopped, and the run says so.
 
 If you quit Cryoframe while it is backing up, checking backups, exporting, or restoring, it asks first, for example "A backup is under way. Stop and quit?" Stop and Quit stops everything the way Stop does, then quits once it has all ended; backups it already made stay as they were. A restore can't be stopped part way, so Cryoframe waits for it to finish; when a restore is all that's running, the choice is Quit When Done.
 
-<!-- SHOT: quit-while-running.png — The alert shown when quitting during a backup: "A backup is under way. Stop and quit?" with Stop and Quit and Cancel -->
+![The alert when quitting during a backup: "A backup is under way. Stop and quit?" with Stop and Quit and Cancel](../screenshots/quit-while-running.png)
 
 If you quit again while things are stopping, Cryoframe offers Keep Waiting or Quit Now. Quit Now can leave a mirror's disk image attached until that job's next backup. If something still hasn't stopped after a minute, Cryoframe quits anyway and notes it in the activity log; a restore is always waited for.
 

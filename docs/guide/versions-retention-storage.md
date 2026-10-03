@@ -54,7 +54,7 @@ This is the place to look before a disk fills. If a job is using more than you w
 
 A plain-files copy keeps what was deleted from its library in a Removed items folder beside it, and Storage shows that folder as a row of its own, "*library* · Removed items", with its size. Nothing else ever deletes those items. Its Delete… menu removes the ones deleted from the library more than 30 days ago, more than 90 days ago, more than a year ago, or all of them, after you confirm. This can't be undone.
 
-<!-- SHOT: storage-removed-items.png — Storage with a plain-files job expanded: the copy's row and the "· Removed items" row with its Delete… menu open -->
+![Storage with a plain-files job expanded: its current copy, its Removed items with a Delete menu, and the trend of its last runs](../screenshots/storage-removed-items.png)
 
 ![Storage: a job's total, its versions on one drive, and the trend of its last runs](../screenshots/storage.png)
 

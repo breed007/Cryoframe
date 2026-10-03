@@ -36,7 +36,7 @@ Some folders can't go straight into a sealed archive. A folder holding named pip
 
 Plain files keep one copy of each library as ordinary files and folders, which open anywhere: on a Windows PC, a TV, a camera, or a Mac without Cryoframe. In the job editor, under Keep, choose One up-to-date copy, then Plain files.
 
-<!-- SHOT: editor-plain-files.png — The job editor's Keep section with One up-to-date copy and Plain files chosen, showing the note that plain files aren't encrypted and where deleted items go -->
+![The job editor's Keep section with Plain files chosen, and the warning that plain files aren't encrypted and deleted items are kept in Removed items](../screenshots/editor-plain-files.png)
 
 Plain files are chosen when a job is made, and the job keeps them for good. For a disk image or dated versions, make a new job. Plain files can't be encrypted, and unless every destination is on an encrypted drive the editor says so: anyone with the drive can open them.
 

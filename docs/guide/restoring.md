@@ -75,7 +75,7 @@ A library package, like a `.photoslibrary`, shows as a single item you extract w
 
 Export Media…, on the restore bar, copies the photos, videos, or other files in a version out as ordinary files, sorted into a folder for each month. It's a one-time copy: nothing keeps the exported folder up to date.
 
-<!-- SHOT: export-media.png — The Export Media sheet for a Messages attachments version: Photos and Videos chosen, the month filter, the folder to copy into, and the warning that exported files aren't encrypted -->
+![The Export Media sheet: photos and videos chosen, an optional month filter, the folder to copy into, and month folders](../screenshots/export-media.png)
 
 Choose what to copy: Photos (each Live Photo's video goes with its photo), Videos, and Other files. Turn on "Only files from some months" to pick a range. Then choose a folder and click Export.
 
