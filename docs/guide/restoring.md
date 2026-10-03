@@ -53,6 +53,14 @@ Switch the restore bar from Beside to In place, and the version you picked goes 
 
 It is built to be safe. Cryoframe restores and verifies the archive into a staging copy first, and only once that copy is good does it move your current library to the Trash and swap the restored copy into place. If anything goes wrong before the swap, your live library is untouched. After the swap, the previous library is in the Trash, so the change is reversible.
 
+If a restore is cut off part way, by a crash, Force Quit, a logout or a restart, Cryoframe deals with it the next time it opens and shows an alert saying what it did and where everything is. It never deletes a verified copy or your library:
+
+- If your library had already gone to the Trash, the verified copy is moved into its place.
+- If something is in the library's place, whether your own library because the restore stopped before the Trash or a new library made since, it is left as it is. The verified copy is put beside it under a name that shows, such as "Photos Library (2)". Show in Finder in the alert takes you to it.
+- A copy left by a restore in Cryoframe 1.6 is put beside the library the same way. 1.6 didn't record whether its copy was complete, so check it before you use it.
+
+A restore that is cut off before its copy is complete, in place or beside, leaves only a hidden folder, never half a library under the library's own name. The next restore into that folder removes it.
+
 Quit the app that owns the library first. Cryoframe checks for this and tells you if, for example, Photos is still running.
 
 ## Browse and extract a few files

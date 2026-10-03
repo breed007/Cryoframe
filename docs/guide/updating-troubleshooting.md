@@ -69,7 +69,6 @@ Versions before 1.6 deleted any `<folder>/build/<item>` inside the scratch locat
 1.6.0 still runs your other jobs and reads your backups, with these exceptions:
 
 - Plain-files jobs are kept in a file of their own, `jobs-files.json`, which 1.6.0 doesn't read and leaves alone. They don't appear or run in 1.6.0, and they're back when you return to 1.7. Their copies stay on the drives as ordinary files.
-- Opening Storage in 1.6.0 erases the run trend of plain-files jobs, so their bars start again.
 - 1.6.0 backs up Messages attachments as an ordinary folder. It copies link previews, and it keeps nothing you delete in Messages: a live mirror drops those files, and pruning deletes old versions without saving them first. Removed items and removed-items archives made by 1.7 are left as they are.
 
 ### Reporting a problem

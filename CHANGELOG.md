@@ -12,6 +12,8 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 - **Quitting during a backup left a live mirror's disk image attached,** and its drive couldn't be ejected until the job's next run cleaned up. Cryoframe now asks before it quits and stops the run the way Stop does.
 - A live mirror's job row read "Live mirror · 500 GB". The 500 GB was a placeholder that 1.6 saves for older versions of Cryoframe, not the mirror's size. The row now reads "Live mirror".
 - Closing Find a File while it was opening a version could leave that version's disk image attached until Cryoframe next launched.
+- **A restore cut off part way left half a library under its real name,** where it looked whole. A quit, crash, logout or restart during a restore now leaves only a hidden copy, which the next restore into that folder removes. The library takes its name only once the copy is complete.
+- **A restore in place cut off after your library went to the Trash left its place empty.** Cryoframe now records the restored copy once it's verified, and when it next opens, it moves that copy into the empty place, or puts it beside whatever is there now as "Photos Library (2)", and says where everything is.
 
 ### Added
 - **Plain files.** One up-to-date copy can now be kept as ordinary files and folders instead of a disk image: in the job editor, choose One up-to-date copy, then Plain files. The copy opens on any computer, with no Cryoframe needed.
@@ -23,6 +25,7 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
   - exFAT and FAT32 keep dates from 1980 through 2099, and Mac OS Extended from 1904 through 2039. A file dated outside that range is copied with the nearest date the drive keeps, and the run says so.
   - On exFAT and FAT32, macOS can add a hidden `._` file beside each file, which takes a whole allocation unit (128 KB on many large SD cards). Cryoframe checks whether the drive gets them and counts them when it checks for room.
   - Plain files can't be encrypted. Unless every destination is an encrypted drive, the editor says so.
+  - For drives that take turns, the job editor's preview of what the next backup does on the other drive covers plain files: how many files it copies and how much, and how many items it moves to Removed items there. An app library that drive can't take shows as refused, with the reason the run gives.
 - **Messages attachments,** a library of its own: the photos, videos and files sent and received in Messages, without the conversations, in every format. Messages can stay open while it backs up.
   - What you delete in Messages stays in the backup. A live mirror keeps it in Removed items inside its disk image, and plain files keep it in Removed items beside the copy. For dated versions, before the Keep rule deletes the last version holding a deleted file, Cryoframe saves the file in a removed-items archive with the same format and passphrase. Restore lists those as "Messages attachments, removed items", and the Keep rule never deletes them.
   - Link previews and Messages' settings files are kept in dated versions and left out of live mirrors and plain files. Leaving them out of a disk image or zip file would mean copying the whole folder first on every run.
@@ -34,8 +37,11 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 - A logout, restart or shutdown doesn't ask. Cryoframe stops everything, waits up to 15 seconds for it to stop, and lets the logout go ahead.
 - A mirror stopped while it was reading its copy back leaves the unchecked copy for the next run to remove, so Stop takes effect at once. Removing it then took as long as the library has items (33 seconds for 120,000 in testing, longer on a slow card).
 
+### Known limits
+- Before the Keep rule deletes a dated zip version of Messages attachments that holds files deleted since, Cryoframe unzips the whole version to save those files in a removed-items archive. That takes as long, and needs as much room, as unzipping it for a restore.
+
 ### Going back to 1.6.0
-If you go back to 1.6.0, your other jobs and backups still work. Plain-files jobs are kept in a file of their own, `jobs-files.json`, which 1.6.0 doesn't read and leaves alone: those jobs don't appear or run in 1.6.0, and they're back when you return to 1.7. Opening Storage in 1.6.0 erases the run trend of plain-files jobs. 1.6.0 also backs up Messages attachments as an ordinary folder, so it keeps nothing you delete in Messages while you use it.
+If you go back to 1.6.0, your other jobs and backups still work. Plain-files jobs are kept in a file of their own, `jobs-files.json`, which 1.6.0 doesn't read and leaves alone: those jobs don't appear or run in 1.6.0, and they're back when you return to 1.7. 1.6.0 also backs up Messages attachments as an ordinary folder, so it keeps nothing you delete in Messages while you use it.
 
 ## [1.6.0] — 2026-10-01
 
