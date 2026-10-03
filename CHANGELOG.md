@@ -2,7 +2,7 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
-## [1.7.0] — Unreleased
+## [1.7.0] — 2026-10-03
 
 1.7 adds a way to keep a backup as ordinary files that any computer can open, and makes a live mirror say what it is doing after its copy. That second part started with the first real use of 1.6.0: a mirror to an SD card that sat at "99%" for up to an hour. The run was working the whole time; it just showed nothing. Testing for this release also found a way a 1.6.0 mirror could fail every run. Problems in 1.6.0 are listed first.
 
