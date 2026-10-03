@@ -879,8 +879,12 @@ final class AppModel: ObservableObject {
         switch l.what {
         case .finished:
             return "Restoring “\(name)” in place was cut off after the library it replaced went to the Trash, and before the restored copy was moved in. Cryoframe has now moved it in: it is at \(l.live.path). \(previous)"
+        case .verifiedBeside where l.libraryStayed:
+            return "Restoring “\(name)” in place was cut off before your “\(name)” went to the Trash, so your library was left as it is, at \(l.live.path). The restored copy, checked and complete, is beside it at \(l.copy.path). If your library isn't there, look for it in the Trash."
         case .verifiedBeside:
-            return "Restoring “\(name)” in place was cut off before it finished, and something else is in the library's place now. That was left as it is. The restored copy, checked and complete, is at \(l.copy.path). \(previous)"
+            return "Restoring “\(name)” in place was cut off before it finished, and a new “\(name)” has been made in the library's place since. That was left as it is. The restored copy, checked and complete, is at \(l.copy.path). \(previous)"
+        case .unrecordedBeside:
+            return "Restoring “\(name)” in place was cut off, and its record can't be read, so Cryoframe can't tell whether your library went to the Trash. The restored copy was checked and is at \(l.copy.path). If the library you had before isn't at \(l.live.path), look for it in the Trash."
         case .unverifiedBeside:
             return "A restore of “\(name)” by an earlier version of Cryoframe was cut off and left a copy that may not be complete. It is now at \(l.copy.path); check it before you use it. If the library you had before isn't at \(l.live.path), look for it in the Trash."
         }

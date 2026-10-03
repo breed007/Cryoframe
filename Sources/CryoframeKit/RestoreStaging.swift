@@ -39,6 +39,8 @@ public final class RestoreStaging {
         var item: String
         /// where the live library went in the Trash, once it has
         var trashed: String?
+        /// the live library has gone to the Trash (the Trash may not say where)
+        var inTrash: Bool?
     }
 
     public let dir: URL
@@ -73,7 +75,11 @@ public final class RestoreStaging {
     /// for `recover`.
     public func end() {
         defer { release() }
-        if let ready = Self.ready(in: dir), FileManager.default.fileExists(atPath: dir.appendingPathComponent(ready.item).path) { return }
+        if let ready = Self.ready(in: dir) {
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent(ready.item).path) { return }
+        } else if Self.isRecorded(dir) {
+            return
+        }
         Self.remove(dir)
     }
 
@@ -84,8 +90,8 @@ public final class RestoreStaging {
 
     /// The copy at `item`, verified, is to replace the library at `live`. Written to
     /// the drive before the library is touched.
-    func markReady(item: URL, live: URL, trashed: URL? = nil) throws {
-        let ready = Ready(live: live.path, item: item.lastPathComponent, trashed: trashed?.path)
+    func markReady(item: URL, live: URL, trashed: URL? = nil, inTrash: Bool = false) throws {
+        let ready = Ready(live: live.path, item: item.lastPathComponent, trashed: trashed?.path, inTrash: inTrash ? true : nil)
         let url = dir.appendingPathComponent(Self.readyName)
         try JSONEncoder().encode(ready).write(to: url, options: .atomic)
         let fd = open(url.path, O_RDONLY)
@@ -95,6 +101,12 @@ public final class RestoreStaging {
     /// not ready after all: the library was never touched
     func unmarkReady() {
         unlink(dir.appendingPathComponent(Self.readyName).path)
+    }
+
+    /// whether `dir` has a record at all, read or not: a verified copy is in it
+    static func isRecorded(_ dir: URL) -> Bool {
+        var st = stat()
+        return lstat(dir.appendingPathComponent(readyName).path, &st) == 0
     }
 
     static func ready(in dir: URL) -> Ready? {
@@ -119,12 +131,13 @@ public final class RestoreStaging {
     }
 
     /// remove the staging folders in `parent` restores cut off left unfinished: this
-    /// Cryoframe's (they have a lock), not held, and not ready. 1.6 made staging
-    /// folders of its own without a lock; those are left for `recover`.
+    /// Cryoframe's (they have a lock), not held, and with no record (one that can't be
+    /// read still says the copy was verified). 1.6 made staging folders of its own
+    /// without a lock; those are left for `recover`.
     static func sweep(_ parent: URL) {
         for dir in folders(in: parent) {
             var st = stat()
-            guard lstat(dir.appendingPathComponent(lockName).path, &st) == 0, !isHeld(dir), ready(in: dir) == nil else { continue }
+            guard lstat(dir.appendingPathComponent(lockName).path, &st) == 0, !isHeld(dir), !isRecorded(dir) else { continue }
             remove(dir)
         }
     }
@@ -160,6 +173,10 @@ public final class RestoreStaging {
             /// a copy made by an earlier Cryoframe, which didn't record whether it was
             /// whole: put beside the library under a name that shows, to be checked
             case unverifiedBeside
+            /// a verified copy whose record can't be read (damaged, or written by a
+            /// later Cryoframe), so where it goes and whether the library went to the
+            /// Trash are unknown: put beside under a name that shows
+            case unrecordedBeside
         }
         public var what: What
         /// the library's place
@@ -168,6 +185,9 @@ public final class RestoreStaging {
         public var copy: URL
         /// where the library it replaced went in the Trash, when that is known
         public var trashed: URL?
+        /// the restore was cut off before the library went to the Trash: the library
+        /// at `live` is the person's own, as it was (.verifiedBeside)
+        public var libraryStayed = false
     }
 
     /// Deal with what restores cut off left beside the libraries at `lives` (the
@@ -194,19 +214,23 @@ public final class RestoreStaging {
                         out.append(Leftover(what: .finished, live: live, copy: live, trashed: trashed))
                         remove(dir)
                     } else if let beside = putBeside(item, live: live) {
-                        out.append(Leftover(what: .verifiedBeside, live: live, copy: beside, trashed: trashed))
+                        out.append(Leftover(what: .verifiedBeside, live: live, copy: beside, trashed: trashed,
+                                            libraryStayed: trashed == nil && ready.inTrash != true))
                         remove(dir)
                     }
                     continue
                 }
+                let recorded = isRecorded(dir)
                 var st = stat()
-                if lstat(dir.appendingPathComponent(lockName).path, &st) == 0 { remove(dir); continue }   // unfinished
-                // 1.6's: the copy, under the name of the library it was restored from
+                if !recorded, lstat(dir.appendingPathComponent(lockName).path, &st) == 0 { remove(dir); continue }   // unfinished
+                // a verified copy whose record can't be read, or 1.6's (no lock, no
+                // record): the copy, under the name of the library it was restored
+                // from, which names it beside too when no library here has that name
                 let items = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).filter { !$0.hasPrefix(".") }
                 for name in items {
-                    let live = livesHere.first { $0.lastPathComponent == name } ?? livesHere[0]
+                    let live = livesHere.first { $0.lastPathComponent == name } ?? parent.appendingPathComponent(name)
                     if let beside = putBeside(dir.appendingPathComponent(name), live: live) {
-                        out.append(Leftover(what: .unverifiedBeside, live: live, copy: beside, trashed: nil))
+                        out.append(Leftover(what: recorded ? .unrecordedBeside : .unverifiedBeside, live: live, copy: beside, trashed: nil))
                     }
                 }
                 if ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).allSatisfy({ $0.hasPrefix(".") }) { remove(dir) }
@@ -272,7 +296,7 @@ public enum RestoreInPlace {
                 staging.unmarkReady()
                 throw error
             }
-            if trashed != nil { try? staging.markReady(item: restored, live: live, trashed: trashed) }
+            try? staging.markReady(item: restored, live: live, trashed: trashed, inTrash: true)
         }
         try afterTrash?()
         // 3. the verified copy into the library's own place (which also puts right a
