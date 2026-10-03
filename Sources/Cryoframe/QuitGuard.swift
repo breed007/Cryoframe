@@ -14,7 +14,10 @@
 //  main queue isn't served (measured on macOS 27: neither a main-actor task nor a
 //  main-queue timer ran in 10 s), so a run could never report that it had stopped.
 //  A quit the person asks for is canceled instead and asked for again when the runs
-//  end.
+//  end. The decision is QuitPlan's (in the Kit): the answer is judged by what runs
+//  when it is given, since the work can end while the question is up; the app looks
+//  every second as well as when work ends; and a stop that hasn't finished after
+//  QuitPlan.stopLimit is given up on. A restore is waited for.
 //
 //  A logout, restart or shutdown never waits on a question: nobody may be there to
 //  answer, and canceling it would leave the Mac running. Everything is stopped, and
@@ -25,6 +28,7 @@
 //
 
 import AppKit
+import CryoframeKit
 
 final class CryoframeAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -72,65 +76,90 @@ extension AppModel {
     /// how long a logout or restart waits for the runs to stop before going ahead
     static let systemQuitWait: TimeInterval = 15
 
-    /// something that should end before the app does
-    var busyForQuit: Bool {
-        !runningJobIDs.isEmpty || !verifyingJobIDs.isEmpty || !QuitWatch.shared.isEmpty
+    /// what should end before the app does (see QuitPlan)
+    var quitWork: QuitWork {
+        QuitWork(backups: runningJobIDs.count, checks: verifyingJobIDs.count,
+                 exports: QuitWatch.shared.count(.export), restores: QuitWatch.shared.count(.restore))
     }
+
+    /// something that should end before the app does
+    var busyForQuit: Bool { !quitWork.isEmpty }
+
+    /// the person chose to stop and quit: nothing new starts
+    var quittingAfterStop: Bool { quitPlan.isStopping }
 
     /// Whether the app may quit now. With something running, asks; on yes, stops it
     /// all and quits once it has ended (see quitIfIdle). A logout or restart doesn't ask.
     func shouldQuit() -> NSApplication.TerminateReply {
-        guard busyForQuit else { return .terminateNow }
-        if Self.isSystemQuit() { return stopForSystemQuit() }
-        NSApp.activate(ignoringOtherApps: true)
-        let restores = QuitWatch.shared.count(.restore)
-        if quittingAfterStop {
+        switch quitPlan.request(quitWork, system: Self.isSystemQuit()) {
+        case .quitNow:        return .terminateNow
+        case .stopForSystem:  return stopForSystemQuit()
+        case .ask:            return askToStop()
+        case .askWhileStopping:
             // asked again while things are stopping
+            let restores = quitWork.restores
             let alert = NSAlert()
             alert.messageText = "Cryoframe is still stopping."
             alert.informativeText = "It quits as soon as everything has stopped."
                 + (restores > 0 ? " Quitting now leaves a restore half done." : " Quitting now can leave a backup's disk image attached until its next backup.")
             alert.addButton(withTitle: "Keep Waiting")
             alert.addButton(withTitle: "Quit Now")
-            return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+            NSApp.activate(ignoringOtherApps: true)
+            let quitNow = answering { alert.runModal() == .alertSecondButtonReturn }
+            // what was waited for may have ended while the question was up
+            return quitNow || quitPlan.check(quitWork, now: Date()) != .wait ? .terminateNow : .terminateCancel
         }
+    }
+
+    private func askToStop() -> NSApplication.TerminateReply {
+        NSApp.activate(ignoringOtherApps: true)
+        let work = quitWork
+        let (what, plural) = work.described
         let alert = NSAlert()
-        let (what, plural) = busyDescription()
-        let onlyRestores = restores > 0 && runningJobIDs.isEmpty && verifyingJobIDs.isEmpty && QuitWatch.shared.count(.export) == 0
-        if onlyRestores {
+        if work.onlyRestores {
             alert.messageText = "\(what) \(plural ? "are" : "is") under way. Quit when \(plural ? "they're" : "it's") done?"
             alert.informativeText = "A restore can't be stopped part way. Cryoframe quits as soon as it has finished."
             alert.addButton(withTitle: "Quit When Done")
         } else {
             alert.messageText = "\(what) \(plural ? "are" : "is") under way. Stop and quit?"
             alert.informativeText = "Cryoframe stops first, the same way Stop does, and then quits. Backups it already made are kept as they were."
-                + (restores > 0 ? " A restore can't be stopped part way, so Cryoframe waits for it to finish." : "")
+                + (work.restores > 0 ? " A restore can't be stopped part way, so Cryoframe waits for it to finish." : "")
             alert.addButton(withTitle: "Stop and Quit")
         }
         alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
-        quittingAfterStop = true
+        guard answering({ alert.runModal() == .alertFirstButtonReturn }) else { return .terminateCancel }
+        // Judged by what runs now: the question can stay up while the work ends on its
+        // own, and then there is nothing left to stop and nothing would ask again.
+        if quitPlan.stop(quitWork, now: Date()) { return .terminateNow }
         stopAllForQuit()
+        watchForQuit()
         return .terminateCancel
     }
 
-    /// "A backup and an export", for the question, and whether it's more than one
-    private func busyDescription() -> (String, Bool) {
-        var parts: [String] = []
-        if runningJobIDs.count == 1 { parts.append("a backup") } else if runningJobIDs.count > 1 { parts.append("backups") }
-        if verifyingJobIDs.count == 1 { parts.append("a check of your backups") } else if verifyingJobIDs.count > 1 { parts.append("checks of your backups") }
-        let exports = QuitWatch.shared.count(.export), restores = QuitWatch.shared.count(.restore)
-        if exports == 1 { parts.append("an export") } else if exports > 1 { parts.append("exports") }
-        if restores == 1 { parts.append("a restore") } else if restores > 1 { parts.append("restores") }
-        let text = parts.count > 1 ? parts.dropLast().joined(separator: ", ") + " and " + parts.last! : parts.first ?? "something"
-        let plural = parts.count > 1 || !(parts.first ?? "a").hasPrefix("a")
-        return (text.prefix(1).uppercased() + text.dropFirst(), plural)
+    /// run a question; while it is up, nothing ends the quit under it (see quitIfIdle)
+    private func answering<T>(_ ask: () -> T) -> T {
+        askingToQuit = true
+        defer { askingToQuit = false }
+        return ask()
+    }
+
+    /// Look every second as well as when something ends, so a quit never waits on a
+    /// path that forgot to say so, and a stop that never ends is given up on.
+    private func watchForQuit() {
+        quitWatchTask?.cancel()
+        quitWatchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                self.quitIfIdle()
+            }
+        }
     }
 
     /// A logout, restart or shutdown asked for the quit: nobody may be there to
     /// answer. Stop everything, wait for it while the run loop turns, and go ahead.
     private func stopForSystemQuit() -> NSApplication.TerminateReply {
-        quittingAfterStop = true
+        _ = quitPlan.stop(quitWork, now: Date())
         waitingForSystemQuit = true
         stopAllForQuit()
         let deadline = Date().addingTimeInterval(Self.systemQuitWait)
@@ -149,9 +178,20 @@ extension AppModel {
         return Date().timeIntervalSince(at) < 60
     }
 
-    /// Quit now if the person asked to quit and everything has ended.
+    /// Quit now if the person asked to quit and everything has ended, or a stop has
+    /// gone on past QuitPlan.stopLimit. Called when work ends and every second.
     func quitIfIdle() {
-        guard quittingAfterStop, !waitingForSystemQuit, !busyForQuit else { return }
+        guard !waitingForSystemQuit, !askingToQuit else { return }
+        switch quitPlan.check(quitWork, now: Date()) {
+        case .wait:
+            return
+        case .quit:
+            break
+        case .quitAfterLimit:
+            let (what, _) = quitWork.described
+            log("⚠︎ \(what) hadn't stopped after \(Int(QuitPlan.stopLimit)) seconds; quitting anyway")
+        }
+        quitWatchTask?.cancel()
         NSApp.terminate(nil)
     }
 }

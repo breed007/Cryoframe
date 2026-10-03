@@ -835,6 +835,7 @@ responding
 rest
 restore
 restored
+restores
 result
 resuming
 retention

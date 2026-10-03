@@ -33,7 +33,7 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 - **Clear** for the Activity list on the main window. It only hides the entries: History keeps every run, and the dashboard and alerts still use them.
 
 ### Changed
-- Quitting while a backup, a check of your backups, an export or a restore is running asks first. Stop and Quit stops everything the way Stop does, then quits once it has all ended. A restore can't be stopped part way, so Cryoframe waits for it.
+- Quitting while a backup, a check of your backups, an export or a restore is running asks first. Stop and Quit stops everything the way Stop does, then quits once it has all ended, or after a minute if something won't stop. A restore can't be stopped part way, so Cryoframe waits for it.
 - A logout, restart or shutdown doesn't ask. Cryoframe stops everything, waits up to 15 seconds for it to stop, and lets the logout go ahead.
 - A mirror stopped while it was reading its copy back leaves the unchecked copy for the next run to remove, so Stop takes effect at once. Removing it then took as long as the library has items (33 seconds for 120,000 in testing, longer on a slow card).
 

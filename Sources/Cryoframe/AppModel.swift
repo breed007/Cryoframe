@@ -74,8 +74,12 @@ final class AppModel: ObservableObject {
 
     /// the model of this launch, for the app delegate (see QuitGuard)
     static weak var current: AppModel?
-    /// the user chose to stop the running backups and quit (see QuitGuard)
-    var quittingAfterStop = false
+    /// the quit the user asked for, while things stop (see QuitGuard)
+    var quitPlan = QuitPlan()
+    /// a quit question is up: nothing quits under it (see QuitGuard)
+    var askingToQuit = false
+    /// looks every second whether the app may quit (see QuitGuard)
+    var quitWatchTask: Task<Void, Never>?
     /// a logout or restart is waiting for the runs to stop (see QuitGuard)
     var waitingForSystemQuit = false
     /// when the workspace last said the Mac is logging out, restarting or shutting down
@@ -1054,7 +1058,7 @@ final class AppModel: ObservableObject {
         activity = activity.filter { running.contains($0) }
     }
 
-    private func log(_ line: String) {
+    func log(_ line: String) {
         activity.insert(line, at: 0)
         if activity.count > 60 { activity.removeLast() }
     }

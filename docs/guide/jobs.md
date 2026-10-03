@@ -59,7 +59,7 @@ If you quit Cryoframe while it is backing up, checking backups, exporting, or re
 
 <!-- SHOT: quit-while-running.png — The alert shown when quitting during a backup: "A backup is under way. Stop and quit?" with Stop and Quit and Cancel -->
 
-If you quit again while things are stopping, Cryoframe offers Keep Waiting or Quit Now. Quit Now can leave a mirror's disk image attached until that job's next backup.
+If you quit again while things are stopping, Cryoframe offers Keep Waiting or Quit Now. Quit Now can leave a mirror's disk image attached until that job's next backup. If something still hasn't stopped after a minute, Cryoframe quits anyway and notes it in the activity log; a restore is always waited for.
 
 A logout, restart, or shutdown doesn't wait on a question, since nobody may be there to answer it. Cryoframe stops everything, waits up to 15 seconds for it to stop, and then lets the logout go ahead. A restore can't be stopped, so one still running then is cut off; let a restore finish before you log out.
 
