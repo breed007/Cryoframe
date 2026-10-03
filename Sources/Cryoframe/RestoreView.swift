@@ -359,6 +359,8 @@ struct RestoreView: View {
     private func libraryRow(_ lib: String) -> some View {
         let vers = r.versions(of: lib)
         let mirror = r.isSingleCurrent(lib)
+        // a plain-files copy is one current copy too, but not a mirror (see mirrorPane)
+        let plain = mirror && vers.first?.format == .plainFiles
         let isActive = lib == activeLibrary
         return Button {
             selectedLibrary = lib
@@ -371,9 +373,9 @@ struct RestoreView: View {
                     .foregroundStyle(.cryoAccent)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(lib).font(.callout.weight(.semibold)).lineLimit(1)
-                    Text(mirror ? "Live mirror" : "\(vers.count) version\(vers.count == 1 ? "" : "s")")
+                    Text(plain ? "Plain files" : mirror ? "Live mirror" : "\(vers.count) version\(vers.count == 1 ? "" : "s")")
                         .font(.caption2).foregroundStyle(.secondary)
-                    Text(mirror ? "current · no history" : (vers.first?.version).map { "newest " + relative($0) } ?? "")
+                    Text(plain ? "current copy" : mirror ? "current · no history" : (vers.first?.version).map { "newest " + relative($0) } ?? "")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(mirror ? Color.secondary.opacity(0.7) : Color.cryoAccent)
                         .lineLimit(1)
@@ -387,7 +389,7 @@ struct RestoreView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isActive ? [.isSelected] : [])
-        .accessibilityLabel("\(lib), \(mirror ? "live mirror" : "\(vers.count) versions")")
+        .accessibilityLabel("\(lib), \(plain ? "plain files, current copy" : mirror ? "live mirror" : "\(vers.count) versions")")
     }
 
     // MARK: - timeline
@@ -533,15 +535,21 @@ struct RestoreView: View {
     }
 
     private func mirrorPane(_ lib: String) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let v = r.versions(of: lib).first
+        let plain = v?.format == .plainFiles
+        return VStack(alignment: .leading, spacing: 14) {
             Text(lib).font(.system(size: 16, weight: .bold))
             HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "arrow.triangle.2.circlepath")
+                Image(systemName: plain ? "folder" : "arrow.triangle.2.circlepath")
                     .font(.system(size: 22)).foregroundStyle(.cryoAccent).frame(width: 40)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Current mirror — no version history").font(.callout.weight(.semibold))
-                    Text("A live mirror is one copy kept up to date in place, so there's a single state to restore: right now. Point-in-time versions are only kept for sealed archives (DMG or zip).")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if let v, plain {
+                        plainFilesSummary(v)
+                    } else {
+                        Text("Current mirror — no version history").font(.callout.weight(.semibold))
+                        Text("A live mirror is one copy kept up to date in place, so there's a single state to restore: right now. Point-in-time versions are only kept for sealed archives (DMG or zip).")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .padding(18)
@@ -554,13 +562,44 @@ struct RestoreView: View {
         .padding(16)
     }
 
+    /// A plain-files copy: ordinary files and folders, brought up to date by each run,
+    /// with what was deleted from the library in Removed items beside it. Removed items
+    /// aren't a version to restore: they are plain folders, by the day each item went,
+    /// which Find a File searches and Finder opens.
+    @ViewBuilder private func plainFilesSummary(_ v: RestorableArchive) -> some View {
+        let copy = v.dir.appendingPathComponent(v.bundleName)
+        let removed = v.dir.appendingPathComponent(PlainCopyLayout.removedFolder, isDirectory: true)
+        let hasRemoved = FileManager.default.fileExists(atPath: removed.path)
+        Text("Current copy, as plain files").font(.callout.weight(.semibold))
+        Text("One copy of the library kept up to date as ordinary files and folders, so there's a single state to restore: its last update. "
+             + (isPackage(copy) ? "Browse it here, or restore it to open it. " : "Browse it here or open it in Finder, or restore it beside your library. ")
+             + "A file changed in the library replaced its old copy. Files deleted from it are kept in Removed items, beside the copy, by the day they went; Find a File searches them too.")
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        if hasRemoved {
+            Button("Show Removed Items in Finder") { NSWorkspace.shared.activateFileViewerSelecting([removed]) }
+                .buttonStyle(.link).font(.caption)
+        }
+    }
+
     // MARK: - restore bar
 
+    /// The summary and the buttons on one row when they fit unwrapped; otherwise the
+    /// summary gets the full width and the buttons a row of their own beneath it. Four
+    /// buttons beside it squeezed the summary into a column a word or two wide.
     private var restoreBar: some View {
-        HStack(spacing: 14) {
-            restoreLead
-            Spacer(minLength: 12)
-            restoreActions
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) {
+                restoreLead
+                Spacer(minLength: 12)
+                restoreActions
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                restoreLead.frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 10) {
+                    Spacer(minLength: 0)
+                    restoreActions
+                }
+            }
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .frame(minHeight: 58)

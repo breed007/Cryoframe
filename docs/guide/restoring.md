@@ -43,7 +43,9 @@ The copy lands next to anything already in the destination. It never writes over
 
 ## Plain-files copies
 
-A plain-files copy is already ordinary files, so for a folder, Show in Finder takes you straight to it and you can copy what you need yourself. Restore still works for it the same way as for any other backup.
+A plain-files copy is already ordinary files, so for a folder, Show in Finder takes you straight to it and you can copy what you need yourself. Restore still works for it the same way as for any other backup. In the list of libraries it reads "Plain files" and "current copy".
+
+Its Removed items aren't a version you restore. They are ordinary folders beside the copy, one for each day, so Restore doesn't list them: Show Removed Items in Finder opens them, and [Find a File](#find-a-file) searches them.
 
 Restore adds a note when a plain copy needs one. It names what the drive didn't keep, such as permissions or creation dates on an exFAT drive. It warns when the copy's last update was stopped before it finished, so some files may be from the update before. For an app library kept as a package, such as Photos, it has no Show in Finder: restore the library and open the restored copy, because the app would change the backup if you opened it where it sits.
 
