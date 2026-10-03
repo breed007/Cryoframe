@@ -241,8 +241,7 @@ public struct ContentsSearch: Sendable {
         case .unavailable(let why): return VersionSearchResult(archive: archive, answer: .noList(why))
         case .read(_, let partial):
             if archive.format == .plainFiles {
-                let finished = Self.searchRemoved(in: archive.dir, control: control) { entry in
-                    guard query.matches(entry) else { return }
+                let finished = Self.searchRemoved(in: archive.dir, control: control, matching: query.matches) { entry in
                     if hits.count < limit { hits.append(entry) } else { more = true }
                 }
                 guard finished else { return nil }
@@ -257,8 +256,12 @@ public struct ContentsSearch: Sendable {
     /// that said otherwise would send someone to a file they have. The list holds the
     /// copy only; what the runs moved into Removed items is read from its index (see
     /// RemovedItemsIndex), and a day the index doesn't hold is read from the drive as
-    /// it is. Only days still on the drive count. false when stopped part way.
-    static func searchRemoved(in folder: URL, control: RunControl?, visit: (ContentsEntry) -> Void) -> Bool {
+    /// it is. Only days still on the drive count, and only items still there: Removed
+    /// items is the person's to tidy in Finder, so each item the index holds that
+    /// `matching` takes is looked for (one stat per match, not per item). Only what
+    /// `matching` takes is handed to `visit`. false when stopped part way.
+    static func searchRemoved(in folder: URL, control: RunControl?, matching: (ContentsEntry) -> Bool = { _ in true },
+                              visit: (ContentsEntry) -> Void) -> Bool {
         let removed = folder.appendingPathComponent(PlainCopyLayout.removedFolder, isDirectory: true)
         let index = RemovedItemsIndex.read(removed)
         var seen = 0
@@ -267,7 +270,10 @@ public struct ContentsSearch: Sendable {
                 for item in items {
                     seen += 1
                     if seen % 4096 == 0, control?.isCancelled == true { return false }
-                    if let entry = index.entry(item, day: day, dayName: dayFolder.lastPathComponent) { visit(entry) }
+                    guard let entry = index.entry(item, day: day, dayName: dayFolder.lastPathComponent), matching(entry) else { continue }
+                    var st = stat()
+                    guard lstat(dayFolder.appendingPathComponent(item.kept).path, &st) == 0 else { continue }      // deleted by hand
+                    visit(entry)
                 }
                 continue
             }
@@ -284,9 +290,10 @@ public struct ContentsSearch: Sendable {
                 case S_IFREG: kind = .file
                 default: continue
                 }
-                visit(ContentsEntry(path: rel, size: kind == .file ? UInt64(max(st.st_size, 0)) : 0, modified: Int64(st.st_mtimespec.tv_sec),
-                                    kind: kind, removedOn: day,
-                                    keptAt: PlainCopyLayout.removedFolder + "/" + dayFolder.lastPathComponent + "/" + rel))
+                let entry = ContentsEntry(path: rel, size: kind == .file ? UInt64(max(st.st_size, 0)) : 0, modified: Int64(st.st_mtimespec.tv_sec),
+                                          kind: kind, removedOn: day,
+                                          keptAt: PlainCopyLayout.removedFolder + "/" + dayFolder.lastPathComponent + "/" + rel)
+                if matching(entry) { visit(entry) }
             }
         }
         return control?.isCancelled != true
