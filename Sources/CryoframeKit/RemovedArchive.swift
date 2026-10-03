@@ -82,6 +82,25 @@ struct RemovedArchive {
             .compactMap { RestoreDiscovery.archive(at: removed.appendingPathComponent($0, isDirectory: true)) }
     }
 
+    /// What a run cut off while copying a removed-items archive to the drive (a crash,
+    /// Force Quit, a restart) left in `folder`'s Removed items: a folder named for a
+    /// version, with no manifest (written last, so a whole copy always has one), named
+    /// and last changed before `started`, the start of the run that removes them, so
+    /// never the archive a run is copying now. Restore doesn't show these, and nothing
+    /// else would ever remove them.
+    static func husks(in folder: URL, before started: Date) -> [URL] {
+        let removed = folder.appendingPathComponent(PlainCopyLayout.removedFolder, isDirectory: true)
+        return PlainCopy.list(removed.path).sorted().compactMap { name -> URL? in
+            guard let date = VersionStamp.date(name), date < started else { return nil }
+            let dir = removed.appendingPathComponent(name, isDirectory: true)
+            var st = stat()
+            guard lstat(dir.path, &st) == 0, st.st_mode & S_IFMT == S_IFDIR,
+                  Double(st.st_mtimespec.tv_sec) < started.timeIntervalSince1970,
+                  lstat(dir.appendingPathComponent(ArchiveManifest.sidecarName).path, &st) != 0 else { return nil }
+            return dir
+        }
+    }
+
     /// `folder`'s complete versions (those with a manifest)
     static func versions(in folder: URL) -> [RestorableArchive] {
         PlainCopy.list(folder.path).filter { VersionStamp.date($0) != nil }.sorted()

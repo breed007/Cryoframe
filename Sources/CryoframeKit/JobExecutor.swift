@@ -580,7 +580,7 @@ public struct JobExecutor: Sendable {
                 let keeping = keepingNow()
                 Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: keeping.retention, checks: healthRecords(),
                                    transferring: stillTransferring, confirmed: adoptionConfirmed(keeping), shown: adoptionShown(keeping),
-                                   proceed: stillKeeping(keeping), keepRemoved: keepRemoved)
+                                   proceed: stillKeeping(keeping), started: now, keepRemoved: keepRemoved)
             }
             return .cancelled
         }
@@ -675,7 +675,7 @@ public struct JobExecutor: Sendable {
         if sealed != nil {      // prune old sealed versions per the retention policy, per destination
             pruneFailures = Self.pruneVersions(folders: Self.prunable(job, folderOf), policy: keeping.retention, checks: healthRecords(),
                                                transferring: stillTransferring, confirmed: adoptionConfirmed(keeping),
-                                               shown: adoptionShown(keeping), proceed: stillKeeping(keeping), keepRemoved: keepRemoved)
+                                               shown: adoptionShown(keeping), proceed: stillKeeping(keeping), started: now, keepRemoved: keepRemoved)
         }
         // what was left alone for the person to say yes to, said in the run's warning
         // and kept for the dashboard: counted with the go-aheads as saved now, and not
@@ -738,6 +738,8 @@ public struct JobExecutor: Sendable {
     /// `confirmed`, `shown`: see prunePlan. `confirmed` has no default: nothing
     /// deletes an adopted version unless its caller says which it may. `proceed`:
     /// asked before each deletion; once it says no, nothing more is deleted.
+    /// `started`: when the run began; a removed-items archive a run cut off while
+    /// copying it left from before then is removed (see RemovedArchive.husks).
     /// `keepRemoved`: for a library that keeps what is deleted from it (see
     /// ContentType.keepsRemoved), saves what only its going versions hold first (the
     /// library, its folder, the version folders going; see RemovedArchive); a version
@@ -746,11 +748,12 @@ public struct JobExecutor: Sendable {
     static func pruneVersions(folders: [(library: ContentType, folder: URL)], policy: RetentionPolicy,
                               checks: [HealthRecord] = [], transferring: (URL) -> Bool = { _ in false },
                               confirmed: @escaping (URL, String) -> Bool, shown: ((URL, String) -> Bool)? = nil,
-                              proceed: () -> Bool = { true },
+                              proceed: () -> Bool = { true }, started: Date = Date(),
                               keepRemoved: ((ContentType, URL, [URL]) -> RemovedArchive.Outcome)? = nil) -> [String] {
         var plan = prunePlan(folders: folders, policy: policy, checks: checks, transferring: transferring, confirmed: confirmed, shown: shown)
         let fm = FileManager.default
-        for husk in plan.husks {        // junk from a failed/canceled run
+        let removedHusks = folders.filter { $0.library.keepsRemoved }.flatMap { RemovedArchive.husks(in: $0.folder, before: started) }
+        for husk in plan.husks + removedHusks {        // junk from a failed/canceled run
             guard proceed() else { return [] }
             try? fm.removeItem(at: husk)
         }
