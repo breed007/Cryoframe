@@ -258,12 +258,19 @@ public struct DrivePairing: Sendable, Equatable {
     /// (`folder`, nil when it has none yet), counted as the run counts it (see
     /// PlainCopyPlanner) against the library as it is now: the new and changed files
     /// it copies, and what the copy holds that the library doesn't, which it moves
-    /// into Removed items. A plain-files copy has no dated versions to delete.
+    /// into Removed items. A plain-files copy has no dated versions to delete. An app
+    /// library this drive can't take is refused here as the run refuses it.
     static func plainFiles(_ lib: ContentType, folder: URL?, in dir: URL, target: Target) -> Library {
         let fm = FileManager.default
         let found = folder.flatMap { RestoreDiscovery.plainFiles(at: $0) }
         let copy = found.map { Library.Copy(date: LibraryIdentity.read(in: $0.dir)?.files?.updated, bytes: $0.bytes) }
         var out = Library(name: lib.displayName, copy: copy, versions: [], versionBytes: 0, deletes: 0, effects: [], libraryID: lib.id)
+        let profile = FileSystemProfile.of(folder ?? dir, target: target)
+        if lib.kind == .liveDB, let why = profile.refusal(appLibrary: lib.owningProcess?.displayName ?? lib.displayName) {
+            out.effects = [copy == nil ? "The next backup can't make a plain copy there. \(why)"
+                                       : "The next backup can't update its plain copy there, which stays as it is. \(why)"]
+            return out
+        }
         var isDir: ObjCBool = false
         guard let root = ContentLocator().liveRoots(of: lib).first,
               fm.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
@@ -274,7 +281,6 @@ public struct DrivePairing: Sendable, Equatable {
         let excluded = JobExecutor.directoryStats(root, forMirror: true, leavesOut: lib.leavesOut).excluded
         let there = folder.map { PlainCopyLayout.copy(named: root.lastPathComponent, in: $0) }
         let existing = there.flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
-        let profile = FileSystemProfile.of(folder ?? dir, target: target)
         guard let plan = try? PlainCopyPlanner(profile: profile, excluded: excluded).plan(source: root, copy: existing) else {
             out.effects = [copy == nil ? "The next backup makes a plain copy there." : "The next backup brings its plain copy there up to date."]
             return out
