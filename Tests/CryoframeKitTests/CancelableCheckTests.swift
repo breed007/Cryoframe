@@ -117,18 +117,43 @@ private func isUnpack(_ tool: String, _ args: [String]) -> Bool { tool.hasSuffix
         // nothing of the drill's is left attached or on disk. Only the image the drill
         // opened (Alpha's) is looked for: macOS attaches each fresh image by itself to
         // scan it, and under load its attach of the others can outlast the test (seen:
-        // Bravo's, never opened by the drill, held by a "system-image" attach). Its scan
-        // of Alpha's goes; a leftover of the drill's doesn't.
+        // Bravo's, never opened by the drill, held by a "system-image" attach). On macOS
+        // 15 under load its scan of Alpha's itself outlasted 46 seconds (CI, 3c59211):
+        // one attach of Alpha's, "system-image: TRUE" and mounted nowhere. The drill's
+        // attach mounts the image in its work folder and isn't a system image, so only
+        // an attach like that is the drill's leftover.
         let opened = base.appendingPathComponent("dest/Alpha/Alpha.dmg").path
         let until = Date().addingTimeInterval(30)
-        var info = ""
+        var left: [String] = []
         repeat {
-            info = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["info"]).stdout
-            if !info.contains(opened) { break }
+            left = try Self.drillAttaches(of: opened)
+            if left.isEmpty { break }
             Thread.sleep(forTimeInterval: 1)
         } while Date() < until
-        #expect(!info.contains(opened), "the drill's image was left attached:\n\(info)")
+        #expect(left.isEmpty, "the drill's image was left attached: \(left)")
         #expect(Set(Self.openWorkDirs()).subtracting(before).isEmpty, "a work folder was left")
+    }
+
+    /// the attaches of the image at `path` that aren't macOS's own scan of it: one that
+    /// isn't a system image, or is mounted somewhere. Read from the text form: macOS 27's
+    /// `-plist` form has no system-image key (measured), and its text form does.
+    static func drillAttaches(of path: String) throws -> [String] {
+        let out = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["info"]).stdout
+        return out.components(separatedBy: "================================================").compactMap { block in
+            let lines = block.split(separator: "\n").map(String.init)
+            func value(_ key: String) -> String? {
+                lines.first { $0.hasPrefix(key) && $0.contains(":") }
+                    .map { String($0[$0.index(after: $0.firstIndex(of: ":")!)...]).trimmingCharacters(in: .whitespaces) }
+            }
+            guard value("image-path") == path else { return nil }
+            let mounts = lines.filter { $0.hasPrefix("/dev/") }.compactMap { line -> String? in
+                let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+                let mount = fields.count > 2 ? fields[2].trimmingCharacters(in: .whitespaces) : ""
+                return mount.isEmpty ? nil : mount
+            }
+            let system = value("system-image") == "TRUE"
+            return system && mounts.isEmpty ? nil : block
+        }
     }
 
     /// this process's open-archive work folders (another process's tests share the folder)
