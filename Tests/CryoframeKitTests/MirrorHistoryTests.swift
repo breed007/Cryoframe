@@ -173,6 +173,25 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
         #expect(full.entries.allSatisfy { MirrorHistory.restoreWarning(entry: $0.dir, mirror: full.dir) == nil })
     }
 
+    // The first entry after a start over counts its run's whole copy as growth, not as
+    // files written over: the entries before it are clones of the old image. Counted
+    // as written over, the next night's estimate was the whole library, and the run
+    // removed all the history from before the start over for room it didn't need.
+    @Test func theFirstEntryAfterAStartOverIsAllGrowth() throws {
+        let dir = tempDir("first-after")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundle = dir.appendingPathComponent("Lib.sparsebundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle.appendingPathComponent("bands"), withIntermediateDirectories: true)
+        _ = try ArchiveManifest.write(try ArchiveManifest.build(for: ArchiveResult(artifacts: [bundle], format: .liveMirror)), toDir: dir)
+        let old = try fakeEntry(dir, start, written: 900)
+        try MirrorHistory.record(written: 900, rewrote: 0, library: 1_000, in: old.dir)
+        try MirrorHistory.markStartedOver(in: dir, decay: nil)
+        let first = try #require(try MirrorHistory.save(bundle: bundle, in: dir, written: 1_000, library: 1_000,
+                                                        at: start.addingTimeInterval(day)))
+        #expect(first.rewrote == 0, "the new image's first copy is all growth")
+        #expect(MirrorHistory.writeEstimate(MirrorHistory.entries(in: dir), library: 1_010) == 10)
+    }
+
     // What history takes is about what the runs after its oldest entry wrote; an entry
     // removed hands what its run wrote to the next newer one.
     @Test func aboutSizesFollowWhatRunsWroteAndSurviveARemoval() throws {

@@ -198,9 +198,10 @@ public enum MirrorHistory {
     }
 
     /// what of `written` wasn't the library growing from `before` to `library` bytes.
-    /// With no entry before it to say (the first, or the first since history was off),
-    /// it is all taken as growth: counting a first run's whole copy as written over
-    /// would have the next run remove all the history it has for room it doesn't need.
+    /// With no entry before it to say (the first, the first since history was off, or
+    /// the first since a start over), it is all taken as growth: counting a first
+    /// run's whole copy as written over would have the next run remove all the history
+    /// it has for room it doesn't need.
     static func rewrote(written: UInt64, library: UInt64, before: UInt64?) -> UInt64 {
         let base = before ?? 0
         let grown = library > base ? library - base : 0
@@ -282,8 +283,9 @@ public enum MirrorHistory {
         let entry = history.appendingPathComponent(stamp, isDirectory: true)
         guard !fm.fileExists(atPath: entry.path) else { return nil }
         let partial = history.appendingPathComponent(stamp + partialSuffix, isDirectory: true)
-        // what of this run's write wasn't the library growing since the newest entry
-        let rewrote = library.map { rewrote(written: written, library: $0, before: entries(in: dir).first?.library) }
+        // what of this run's write wasn't the library growing since the newest entry of
+        // this image: after a start over the first one's whole copy is growth
+        let rewrote = library.map { rewrote(written: written, library: $0, before: sharing(entries(in: dir)).first?.library) }
         try? fm.removeItem(at: partial)
         try fm.createDirectory(at: partial, withIntermediateDirectories: false)
         do {
