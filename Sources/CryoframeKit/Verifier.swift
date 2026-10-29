@@ -208,6 +208,8 @@ public struct StrongVerifier: Sendable {
     /// what a restore copies, and may also hold a copy being updated (MirrorCopy); the
     /// check looks at exactly what a restore would copy.
     static func searchRoot(_ root: URL, _ result: ArchiveResult, fm: FileManager) -> URL {
+        // a plain-files copy is its own folder, beside the library folder's Removed items
+        if result.format == .plainFiles, let copy = result.artifacts.first { return copy }
         guard result.format == .liveMirror, let bundle = result.artifacts.first else { return root }
         let library = root.appendingPathComponent(bundle.deletingPathExtension().lastPathComponent, isDirectory: true)
         var isDir: ObjCBool = false

@@ -77,11 +77,21 @@ public struct RestoreDriller: Sendable {
 
     /// passed, what to say, and whether it was skipped rather than checked
     func drillOne(_ archive: RestorableArchive, type: ContentType, passphrase: String?) -> (Bool, String, Bool) {
-        // 1. the bytes still match the manifest
-        guard let checksum = try? ChecksumVerifier(control: runner.control).reverify(archiveDir: archive.dir) else {
-            return (false, "couldn't read the checksum manifest", false)
+        if archive.format == .plainFiles {
+            // Plain files have no checksum manifest: they were read back against the
+            // library when they were copied. What a restore needs is that every file of
+            // the copy opens, which step 2 checks. A copy whose last update was stopped
+            // part way is finished by the next backup, and isn't counted either way.
+            if PlainCopyLayout.isOpen(archive.dir) {
+                return (true, "the last update was stopped before it finished; the next backup finishes it", true)
+            }
+        } else {
+            // 1. the bytes still match the manifest
+            guard let checksum = try? ChecksumVerifier(control: runner.control).reverify(archiveDir: archive.dir) else {
+                return (false, "couldn't read the checksum manifest", false)
+            }
+            guard checksum.passed else { return (false, "checksum — \(checksum.details)", false) }
         }
-        guard checksum.passed else { return (false, "checksum — \(checksum.details)", false) }
 
         // 2. it reassembles, opens, and the library reopens clean
         do {
