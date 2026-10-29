@@ -24,6 +24,17 @@ enum AgentMain {
         // finish interrupted transfers first
         let resumes = TransferResumer.resume(store: PendingTransferStore.standard(), locks: locks)
 
+        // Woken for a scheduled backup, this pass starts a couple of minutes before the
+        // job's time (see WakeScheduler), and the Mac may be asleep again by the next
+        // one: wait for it, awake.
+        if UserDefaults.standard.bool(forKey: Prefs.wakeForSchedule),
+           let wait = Scheduler().waitForNextDue(store.load(), now: Date(), within: WakeScheduler.leadSeconds + 60) {
+            let waiting = SleepGuard()
+            waiting.begin()
+            Thread.sleep(forTimeInterval: wait + 1)
+            waiting.end()
+        }
+
         // a due job the app is running right now is the app's run: it records the
         // result and moves the schedule on. Not due here, and not a deferral either.
         // A chore holding the lock (a tidy, a transfer finishing) isn't a run; the

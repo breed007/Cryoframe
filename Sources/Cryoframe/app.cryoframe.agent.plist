@@ -12,9 +12,16 @@
         <key>CRYOFRAME_AGENT</key>
         <string>1</string>
     </dict>
-    <!-- wake hourly to run due jobs; the Scheduler decides what actually fires -->
-    <key>StartInterval</key>
-    <integer>3600</integer>
+    <!-- start hourly, on the hour, to run due jobs; the Scheduler decides what
+         actually fires. A calendar interval, not StartInterval: launchd.plist(5)
+         says a StartInterval firing that falls while the Mac is asleep is missed,
+         while calendar intervals missed in sleep are run, once, when it wakes. So
+         the wake set for a scheduled backup (WakeScheduler) starts the agent. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
     <!-- Standard, stated so it is never changed to Background: launchd runs a
          Background agent at priority 4, and a backup tool starved of CPU looks
          stalled to the watchdog. Standard is the same as leaving it unset (measured:

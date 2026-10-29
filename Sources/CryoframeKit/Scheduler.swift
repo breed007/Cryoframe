@@ -120,6 +120,21 @@ public struct Scheduler: Sendable {
         return state.jobs.filter { $0.enabled && isDue($0, lastRun: state.lastRun[$0.id], now: now, calendar: calendar) }
     }
 
+    /// How long until the soonest enabled job that isn't due yet comes due, when that
+    /// is no more than `window` away; nil otherwise. A wake set for a scheduled run
+    /// starts the agent a couple of minutes before the job's time, and the Mac may be
+    /// asleep again by the next pass, so that pass waits for it.
+    public func waitForNextDue(_ state: ScheduleState, now: Date, within window: TimeInterval,
+                               calendar: Calendar = .current) -> TimeInterval? {
+        guard state.unreadableFiles.isEmpty else { return nil }
+        let soonest = state.jobs.filter(\.enabled)
+            .compactMap { $0.frequency.nextFireDate(after: state.lastRun[$0.id] ?? $0.createdAt, calendar: calendar) }
+            .filter { $0 > now }
+            .min()
+        guard let soonest, soonest.timeIntervalSince(now) <= window else { return nil }
+        return soonest.timeIntervalSince(now)
+    }
+
     /// the jobs a scheduled pass starts: due, and not already running here or in the
     /// app (that run records the result and moves the schedule on). Nor a job whose
     /// interrupted transfer the user stopped earlier in this pass: the new run would
