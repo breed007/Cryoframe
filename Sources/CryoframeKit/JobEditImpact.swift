@@ -239,10 +239,16 @@ public struct JobFootprint: Sendable, Equatable {
                 for f in LibraryFolders.folders(job: job, library: lib, in: dir) where !folders.contains(where: { $0.url == f }) {
                     folders.append(Folder(url: f, library: lib.displayName, versions: LibraryFolders.versionNames(in: f).count,
                                           hasCopy: LibraryFolders.holdsMirror(f), kept: LibraryFolders.kept(in: f),
-                                          bytes: JobExecutor.directorySize(f)))
+                                          bytes: Self.bytes(of: f)))
                 }
             }
             return Place(name: labels[t.id] ?? t.displayName, dir: dir, folders: folders)
         })
+    }
+
+    /// what a library folder takes on its drive: a mirror's history by what its runs
+    /// wrote, since its clones read as full copies (see MirrorHistory.aboutBytes)
+    static func bytes(of folder: URL) -> UInt64 {
+        JobExecutor.directorySize(folder, skipping: MirrorHistory.folderName) + MirrorHistory.aboutBytes(MirrorHistory.entries(in: folder))
     }
 }

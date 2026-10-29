@@ -29,6 +29,18 @@
 
 import Foundation
 
+public enum MirrorHistoryError: Error, Equatable, LocalizedError {
+    /// the entry's image is attached on this Mac, or whether it is couldn't be told
+    case inUse(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .inUse(let image):
+            return "the earlier copy (\(image)) is open on this Mac, or that couldn't be told, so it was left in place; close what has it open and try again"
+        }
+    }
+}
+
 public enum MirrorHistory {
     /// the folder beside a mirror's disk image that holds its history
     public static let folderName = "Mirror history"
@@ -309,12 +321,29 @@ public enum MirrorHistory {
 
     /// Remove `entry`. What its run wrote is then held by the next newer entry, which
     /// takes it into its own record, so the sizes shown stay about right.
-    public static func remove(_ entry: Entry, in dir: URL) throws {
+    ///
+    /// Refused while its image is attached (a restore of it, say), or when that can't
+    /// be told: removing the bands under an open restore failed it part way. It is
+    /// renamed to a part-made entry first, so a removal cut short leaves what the next
+    /// run sweeps (see sweepPartials), never an entry without its manifest that nothing
+    /// lists or one half gone that won't restore.
+    public static func remove(_ entry: Entry, in dir: URL, runner: CommandRunner = ProcessCommandRunner()) throws {
+        let fm = FileManager.default
+        if let image = image(in: entry.dir) {
+            let target = image.resolvingSymlinksInPath().path
+            guard let attached = MirrorMounts.attachedImagesIfKnown(runner: runner),
+                  !attached.contains(where: { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == target }) else {
+                throw MirrorHistoryError.inUse(image.path)
+            }
+        }
         let all = entries(in: dir)
-        try FileManager.default.removeItem(at: entry.dir)
+        let going = folder(in: dir).appendingPathComponent(entry.dir.lastPathComponent + partialSuffix, isDirectory: true)
+        try? fm.removeItem(at: going)
+        try fm.moveItem(at: entry.dir, to: going)
         if let newer = all.filter({ $0.date > entry.date }).min(by: { $0.date < $1.date }) {
             try? record(written: (newer.written ?? 0) + (entry.written ?? 0), rewrote: newer.rewrote, library: newer.library, in: newer.dir)
         }
+        try fm.removeItem(at: going)
         rmdir(folder(in: dir).path)         // only once nothing is left in it
     }
 

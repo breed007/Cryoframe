@@ -351,6 +351,14 @@ private struct NoResize: CommandRunner {
         #expect(row.archives.first { $0.history == nil }?.bytes == alone)
         #expect(row.archives.first { $0.history != nil }?.history?.count == 2)
         #expect(row.versionCount == 0)
+        // and the Delete Job sheet measures it the same way
+        let footprint = JobFootprint.measure(job, volumes: FixedVolumeTable([]))
+        #expect(footprint.places.first?.folders.first?.bytes == alone + MirrorHistory.aboutBytes(MirrorHistory.entries(in: folder)))
+        // a start over's old image, hidden beside the mirror, isn't the mirror's image
+        let aside = MirrorSeal.replaced(bundle)
+        try FileManager.default.createDirectory(at: aside, withIntermediateDirectories: true)
+        #expect(LibraryFolders.mirrorImage(in: folder) == "Papers.sparsebundle")
+        try FileManager.default.removeItem(at: aside)
         #expect(row.contentsSummary == "a current copy and 2 earlier copies")
         // and Restore, asked for it, lists the history after the mirror
         let restorable = RestoreDiscovery.scan(dest, history: true)

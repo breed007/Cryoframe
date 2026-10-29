@@ -144,11 +144,13 @@ public enum LibraryFolders {
     /// whether a folder holds a mirror at its top
     static func holdsMirror(_ folder: URL) -> Bool { RestoreDiscovery.archive(at: folder)?.format == .liveMirror }
 
-    /// the file name of the disk image of the mirror at a folder's top, if it holds one
+    /// the file name of the disk image of the mirror at a folder's top, if it holds one.
+    /// Not a hidden one: the old image a start over keeps aside sorts first, and was
+    /// sized in its place (see MirrorSeal.replaced).
     static func mirrorImage(in folder: URL) -> String? {
         guard holdsMirror(folder) else { return nil }
         return ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
-            .sorted().first { ["sparsebundle", "dmg"].contains(($0 as NSString).pathExtension.lowercased()) }
+            .sorted().first { !$0.hasPrefix(".") && ["sparsebundle", "dmg"].contains(($0 as NSString).pathExtension.lowercased()) }
     }
 
     /// What a library folder keeps that its job no longer writes or prunes: versions
