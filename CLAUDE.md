@@ -64,7 +64,12 @@ and `diskutil image` doesn't cover every verb, so each verb uses the tool measur
 to work for it:
 
 - `diskutil image` on macOS 27 (probed once per process), hdiutil elsewhere:
-  resize, the size limits, and the encryption check.
+  the size limits (`image resize --plist` with no size) and the encryption check
+  (`image info`). Nothing else.
+- hdiutil on every macOS: resize, growing and shrinking. On macOS 27.0.1
+  `diskutil image resize` shrinks an image whose sector count isn't a multiple of 8,
+  then exits 1 with "Invalid argument"; hdiutil exits 0 on the same image. A
+  mirror's image is made at whatever size its drive allows, so its count is arbitrary.
 - hdiutil, behind `DiskImageTool.attachesWithDiskutil` (off): attach and detach.
   A `diskutil image` attach is served by diskimagesiod, not diskimages-helper, and
   attach records, the tool watchdog, Pause and the attach gate were measured against

@@ -26,8 +26,8 @@ import Foundation
     @Test func sizingCommands() {
         #expect(DiskImageTool.resizeLimits(image: image, tool: .hdiutil).args == ["resize", "-limits", image.path])
         #expect(DiskImageTool.resizeLimits(image: image, encrypted: true, tool: .hdiutil).args == ["resize", "-limits", "-stdinpass", image.path])
-        #expect(DiskImageTool.resize(image: image, sectors: 409_600, tool: .hdiutil).args == ["resize", "-sectors", "409600", image.path])
-        #expect(DiskImageTool.resize(image: image, sectors: 8, encrypted: true, tool: .hdiutil).args == ["resize", "-sectors", "8", "-stdinpass", image.path])
+        #expect(DiskImageTool.resize(image: image, sectors: 409_600).args == ["resize", "-sectors", "409600", image.path])
+        #expect(DiskImageTool.resize(image: image, sectors: 8, encrypted: true).args == ["resize", "-sectors", "8", "-stdinpass", image.path])
     }
 
     @Test func attachingAndDetaching() {
@@ -52,15 +52,11 @@ import Foundation
         #expect(DiskImageTool.resizeLimits(image: image, tool: .diskutil).args == ["image", "resize", "--plist", image.path])
         #expect(DiskImageTool.resizeLimits(image: image, encrypted: true, tool: .diskutil).args
                 == ["image", "resize", "--plist", "--stdinpassphrase", image.path])
-        // bytes, not sectors: diskutil's default unit
-        #expect(DiskImageTool.resize(image: image, sectors: 409_600, tool: .diskutil).args
-                == ["image", "resize", "--size", "209715200", image.path])
-        #expect(DiskImageTool.resize(image: image, sectors: 8, encrypted: true, tool: .diskutil).args
-                == ["image", "resize", "--size", "4096", "--stdinpassphrase", image.path])
         // always with a passphrase on stdin: without one it waits for someone to type it
         #expect(DiskImageTool.encryptionCheck(image: image, tool: .diskutil).args
                 == ["image", "info", "--plist", "--stdinpassphrase", image.path])
-        #expect(DiskImageTool.resize(image: image, sectors: 8, tool: .hdiutil).tool == "/usr/bin/hdiutil")
+        // resizing is hdiutil's on every macOS (see anImageMadeAtAnOddSizeShrinksAndGrows)
+        #expect(DiskImageTool.resize(image: image, sectors: 8).tool == "/usr/bin/hdiutil")
     }
 
     /// `diskutil image` is used only where it has what is asked of it
@@ -185,8 +181,8 @@ import Foundation
                                           tool: .diskutil) == nil)
     }
 
-    /// On a Mac where `diskutil image` is used, the real tools: what one resizes, the
-    /// other reads at the new size, and both read an image's encryption the same way.
+    /// On a Mac where `diskutil image` is used, the real tools: diskutil reads an image
+    /// hdiutil resized at its new size, and both read an image's encryption the same way.
     @Test(.enabled(if: DiskImageTool.diskutilImageMeasured)) func diskutilAndHdiutilAgree() throws {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("cf-dit-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -202,16 +198,41 @@ import Foundation
             let before = try #require(DiskImageTool.limits(of: bundle, encrypted: encrypted, stdin: stdin, runner: ProcessCommandRunner(), tool: .diskutil))
             let old = try #require(DiskImageTool.limits(of: bundle, encrypted: encrypted, stdin: stdin, runner: ProcessCommandRunner(), tool: .hdiutil))
             #expect(before.current >= old.current && before.current - old.current <= 1 << 20, "\(before) \(old)")
-            let grown = try ProcessCommandRunner().run(DiskImageTool.resize(image: bundle, sectors: 409_600, encrypted: encrypted, tool: .diskutil), stdin: stdin)
+            let grown = try ProcessCommandRunner().run(DiskImageTool.resize(image: bundle, sectors: 409_600, encrypted: encrypted), stdin: stdin)
             try #require(grown.ok, "\(grown.stderr)")
-            let after = try #require(DiskImageTool.limits(of: bundle, encrypted: encrypted, stdin: stdin, runner: ProcessCommandRunner(), tool: .hdiutil))
-            #expect(after.current >= 409_600 * 512 * 99 / 100 && after.current <= 409_600 * 512, "\(after)")
+            let after = try #require(DiskImageTool.limits(of: bundle, encrypted: encrypted, stdin: stdin, runner: ProcessCommandRunner(), tool: .diskutil))
+            let bytes: UInt64 = 409_600 * 512
+            #expect(after.current + bytes / 100 >= bytes && after.current <= bytes + bytes / 100, "\(after)")
             for tool in [DiskImageTool.Tool.hdiutil, .diskutil] {
                 #expect(DiskImageTool.isEncrypted(bundle, passphrase: pass, runner: ProcessCommandRunner(), tool: tool) == encrypted, "\(tool)")
             }
         }
         // the wrong passphrase says nothing either way, and isn't taken for "not encrypted"
         #expect(DiskImageTool.isEncrypted(sealed, passphrase: "wrong", runner: ProcessCommandRunner(), tool: .diskutil) == nil)
+    }
+
+    /// On every macOS, an image made at an arbitrary sector count, as a mirror's is,
+    /// shrinks and grows through the tools DiskImageTool picks. `diskutil image
+    /// resize` shrank one whose count isn't a multiple of 8 (4 KB) and then failed
+    /// with "Invalid argument" (measured on macOS 27.0.1: 199,963 sectors failed and
+    /// 199,960 didn't), which failed the run; a stub that skipped resizing hid it.
+    @Test func anImageMadeAtAnOddSizeShrinksAndGrows() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("cf-dit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let bundle = base.appendingPathComponent("odd.sparsebundle")
+        let made = try TestDiskImages.run(DiskImageTool.sparseBundle(output: bundle, name: "DIT", sizeGB: 0, bandSectors: 16384,
+                                                                     sectors: 199_963).args)
+        try #require(made.ok, "\(made.stderr)")
+        for target: UInt64 in [101_112, 150_000] {
+            let resized = try DiskImageGate.serialized {
+                try ProcessCommandRunner().runRetryingBusy(DiskImageTool.resize(image: bundle, sectors: target))
+            }
+            #expect(resized.ok, "\(target): \(resized.stderr)")
+            let after = try #require(DiskImageTool.limits(of: bundle, encrypted: false, stdin: nil, runner: ProcessCommandRunner()))
+            let bytes = target * 512
+            #expect(after.current + bytes / 100 >= bytes && after.current <= bytes + bytes / 100, "\(target): \(after)")
+        }
     }
 
     /// On a Mac where `diskutil image` is used: an encrypted image whose header is

@@ -58,20 +58,6 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
     try Data(repeating: byte, count: mb << 20).write(to: url)
 }
 
-/// The run's own runner, but an image is never resized. Shrinking a mirror's image on
-/// the nearly full drive these tests make fails at its last step ("Invalid argument",
-/// macOS 27.0.1), with history or without; the room check before it is what they test.
-private struct NoResize: CommandRunner {
-    let inner: ProcessCommandRunner
-    var control: RunControl? { inner.control }
-    var forTeardown: CommandRunner { inner.forTeardown }
-    func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
-        let resize = args.first == "resize" || args.starts(with: ["image", "resize"])
-        if resize, args.contains("-sectors") || args.contains("--size") { return CommandResult(status: 0, stdout: "", stderr: "") }
-        return try inner.run(launchPath, args, stdin: stdin)
-    }
-}
-
 @Suite(.serialized) struct MirrorHistoryTests {
 
     // MARK: what goes
@@ -481,7 +467,7 @@ private struct NoResize: CommandRunner {
         let dir = drive.appendingPathComponent("Lib")
         let bundle = dir.appendingPathComponent("Lib.sparsebundle")
         func run(sizeHint: UInt64? = nil, excluded: [String] = [], control: RunControl? = nil) throws -> ArchiveResult {
-            try SparseBundleMirrorEngine(runner: NoResize(inner: ProcessCommandRunner(control: control)), mountBase: base, history: 7)
+            try SparseBundleMirrorEngine(runner: ProcessCommandRunner(control: control), mountBase: base, history: 7)
                 .archive(ArchiveSource(name: "Lib", root: src, sizeHint: sizeHint ?? JobExecutor.directorySize(src), excluded: excluded), to: dir)
         }
         _ = try run()

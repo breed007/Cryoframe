@@ -26,12 +26,12 @@ public enum DiskImageTool {
     /// The tool a command runs.
     public enum Tool: Sendable, Equatable { case hdiutil, diskutil }
 
-    /// The tool that resizes an image, reads its size limits, and says whether it is
-    /// encrypted: `diskutil image` where it was measured to do the same as hdiutil,
-    /// otherwise hdiutil. Measured on macOS 27.0.1: the same limits within 80 sectors
-    /// (hdiutil's "current" leaves out the partition map), resizes of plain and
-    /// encrypted APFS sparse bundles that hdiutil then reads at the new size, and the
-    /// same refusal of a wrong passphrase. Decided once per process.
+    /// The tool that reads an image's size limits and says whether it is encrypted:
+    /// `diskutil image` where it was measured to do the same as hdiutil, otherwise
+    /// hdiutil. Measured on macOS 27.0.1: the same limits within 80 sectors (hdiutil's
+    /// "current" leaves out the partition map), and the same refusal of a wrong
+    /// passphrase. Decided once per process. Resizing is hdiutil's everywhere (see
+    /// `resize`).
     public static var sizing: Tool { diskutilImageMeasured ? .diskutil : .hdiutil }
 
     /// Attach and detach through `diskutil image`: off in 1.8. Its attach is served by
@@ -144,17 +144,13 @@ public enum DiskImageTool {
     }
 
     /// Grow or shrink an image, and the APFS volume inside it, to `sectors` 512-byte
-    /// sectors. Measured on APFS sparse bundles, plain and encrypted, with both tools:
-    /// the mounted volume reports the new size. diskutil takes bytes, and rounds them
-    /// to a multiple of 4 KB.
-    public static func resize(image: URL, sectors: UInt64, encrypted: Bool = false, tool: Tool = sizing) -> Command {
-        switch tool {
-        case .hdiutil:
-            return Command(hdiutil, ["resize", "-sectors", "\(sectors)"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
-        case .diskutil:
-            return Command(diskutil, ["image", "resize", "--size", "\(sectors * 512)"]
-                           + (encrypted ? ["--stdinpassphrase"] : []) + [image.path])
-        }
+    /// sectors, with hdiutil on every macOS. Measured on APFS sparse bundles, plain and
+    /// encrypted: the mounted volume reports the new size. `diskutil image resize`
+    /// isn't used: on macOS 27.0.1 it shrinks an image whose sector count isn't a
+    /// multiple of 8, as a mirror's made at whatever size its drive allows can be, and
+    /// then exits 1 with "Invalid argument". hdiutil exits 0 on the same image.
+    public static func resize(image: URL, sectors: UInt64, encrypted: Bool = false) -> Command {
+        Command(hdiutil, ["resize", "-sectors", "\(sectors)"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
     }
 
     // MARK: - Encryption
