@@ -36,6 +36,9 @@ public enum MirrorHistory {
     static let partialSuffix = ".partial"
     /// what an entry records of the run that made it
     static let infoName = "cryoframe-history.v1"
+    /// in an entry made before its mirror was started over: why the old image was
+    /// found decayed then, or nothing when it wasn't (see markStartedOver)
+    static let startedOverName = ".cryoframe-history-started-over"
 
     public static let defaultNights = 7
     /// what the job editor offers: off, or the nights to keep
@@ -55,8 +58,17 @@ public enum MirrorHistory {
         /// the library's size when its run copied it; nil when not recorded
         public let library: UInt64?
 
-        public init(dir: URL, date: Date, written: UInt64?, rewrote: UInt64? = nil, library: UInt64? = nil) {
+        /// made before the mirror was started over: why its image was decayed then, or
+        /// "" when it wasn't; nil when it was made of the image the mirror has now
+        public let startedOver: String?
+
+        /// a clone of the image a start over replaced, not of the one the mirror has now
+        public var madeBeforeStartOver: Bool { startedOver != nil }
+
+        public init(dir: URL, date: Date, written: UInt64?, rewrote: UInt64? = nil, library: UInt64? = nil,
+                    startedOver: String? = nil) {
             self.dir = dir; self.date = date; self.written = written; self.rewrote = rewrote; self.library = library
+            self.startedOver = startedOver
         }
     }
 
@@ -73,7 +85,7 @@ public enum MirrorHistory {
             let entry = folder(in: dir).appendingPathComponent(name, isDirectory: true)
             guard FileManager.default.fileExists(atPath: entry.appendingPathComponent(ArchiveManifest.sidecarName).path) else { return nil }
             return Entry(dir: entry, date: date, written: recorded(writtenKey, in: entry), rewrote: recorded(rewroteKey, in: entry),
-                         library: recorded(libraryKey, in: entry))
+                         library: recorded(libraryKey, in: entry), startedOver: startedOver(entry))
         }.sorted { $0.date > $1.date }
     }
 
@@ -81,9 +93,10 @@ public enum MirrorHistory {
 
     /// About what `entry` alone holds on the drive: what the runs after it wrote, up to
     /// the next entry (whose record carries them). The newest shares everything with
-    /// the mirror, so it holds about nothing until the next run.
+    /// the mirror, so it holds about nothing until the next run. Entries made before a
+    /// start over are clones of the old image, so they are counted among themselves.
     public static func aboutBytes(of entry: Entry, among entries: [Entry]) -> UInt64 {
-        let newestFirst = entries.sorted { $0.date > $1.date }
+        let newestFirst = entries.filter { $0.madeBeforeStartOver == entry.madeBeforeStartOver }.sorted { $0.date > $1.date }
         guard let i = newestFirst.firstIndex(where: { $0.dir == entry.dir }), i > 0 else { return 0 }
         return newestFirst[i - 1].written ?? 0
     }
@@ -164,8 +177,10 @@ public enum MirrorHistory {
     /// for 32 MB written over), so the room check counts it all (see
     /// SparseBundleMirrorEngine.roomVerdict). Without history, files written over reuse
     /// the room the copies they replace gave back inside the image.
+    /// Entries made before a start over are clones of the old image, so they share
+    /// nothing with the new one and don't count.
     static func writeEstimate(_ entries: [Entry], library: UInt64) -> UInt64? {
-        guard let newest = entries.max(by: { $0.date < $1.date }) else { return nil }
+        guard let newest = sharing(entries).max(by: { $0.date < $1.date }) else { return nil }
         let grown = newest.library.map { library > $0 ? library - $0 : 0 } ?? 0
         return grown + (newest.rewrote ?? 0)
     }
@@ -180,8 +195,57 @@ public enum MirrorHistory {
         return written > grown ? written - grown : 0
     }
 
-    /// about what removing all of `entries` would give back to the drive
-    static func roomFreed(byRemoving entries: [Entry]) -> UInt64 { aboutBytes(entries) }
+    /// the entries that are clones of the image the mirror has now
+    static func sharing(_ entries: [Entry]) -> [Entry] { entries.filter { !$0.madeBeforeStartOver } }
+
+    /// About what removing all of `entries` would give back to the drive. Those made
+    /// before a start over share the old image's blocks while it is kept aside
+    /// (`oldImageKept`); once it is gone, the newest of them holds all of it.
+    static func roomFreed(byRemoving entries: [Entry], oldImageKept: Bool) -> UInt64 {
+        let old = entries.filter(\.madeBeforeStartOver)
+        let alone = oldImageKept ? 0 : old.max(by: { $0.date < $1.date }).flatMap { image(in: $0.dir) }.map(Checksum.byteSize) ?? 0
+        return aboutBytes(entries) + alone
+    }
+
+    /// the disk image in the entry `dir`
+    static func image(in dir: URL) -> URL? {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.sorted().first { !$0.hasPrefix(".") && $0.hasSuffix(".sparsebundle") }
+            .map { dir.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    // MARK: a mirror started over
+
+    /// Mark the entries in `dir` as made before its mirror was started over: they are
+    /// clones of the old image, not of the new one. `decay`: why the old image was
+    /// found decayed, if it was. Decay is in the drive's blocks, which the entries
+    /// share, so it stays said of them after the mirror's own marks are cleared (see
+    /// restoreWarning); a mirror started over after its drive filled is damaged in
+    /// writes the entries never shared. Throws when one can't be marked, so the start
+    /// over doesn't go ahead with entries that would restore without a word.
+    static func markStartedOver(in dir: URL, decay: String?) throws {
+        for e in entries(in: dir) where !e.madeBeforeStartOver {
+            try Data((decay ?? "").utf8).write(to: e.dir.appendingPathComponent(startedOverName), options: .atomic)
+        }
+    }
+
+    /// what the start-over mark in the entry `dir` says; nil when it has none
+    static func startedOver(_ dir: URL) -> String? {
+        (try? Data(contentsOf: dir.appendingPathComponent(startedOverName)))
+            .map { String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    /// What Restore says before it uses the entry at `entry` of the mirror in `mirror`,
+    /// when the entry may hold decay: it was made of an image found decayed and since
+    /// started over, or of the mirror's image, which is decayed now. nil otherwise.
+    public static func restoreWarning(entry: URL, mirror: URL) -> String? {
+        if let over = startedOver(entry) {
+            guard !over.isEmpty else { return nil }
+            return "This earlier copy was made before the mirror was started over, when the mirror was found decayed (\(over)). It shares the same parts of the drive, so it may hold the same damage."
+        }
+        guard MirrorSeal.isDecayed(mirror), let why = MirrorSeal.damage(in: mirror) else { return nil }
+        return "The current mirror was found decayed (\(why)). This earlier copy shares the same parts of the drive, so it may hold the same damage."
+    }
 
     /// what a run says of the entries it removed to make room
     static func roomNote(_ gone: [Entry]) -> String? {

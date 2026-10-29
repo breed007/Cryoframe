@@ -146,6 +146,47 @@ private struct NoResize: CommandRunner {
         #expect(MirrorHistory.rewrote(written: 900, library: 900, before: nil) == 900 - 900, "a first run adds it all")
     }
 
+    // Start Over keeps the history, but its entries are clones of the old image. When
+    // that had decayed they share its blocks on the drive, so Restore warns before using
+    // one, after the start over as before it; and the new image's runs don't count them
+    // as sharing its blocks. A mirror started over for a full drive shares no decay.
+    @Test func startingOverMarksTheHistoryOfADecayedImage() throws {
+        func mirror(_ tag: String) throws -> (dir: URL, bundle: URL, entries: [MirrorHistory.Entry]) {
+            let dir = tempDir(tag)
+            let bundle = dir.appendingPathComponent("Lib.sparsebundle", isDirectory: true)
+            try FileManager.default.createDirectory(at: bundle.appendingPathComponent("bands"), withIntermediateDirectories: true)
+            _ = try ArchiveManifest.write(try ArchiveManifest.build(for: ArchiveResult(artifacts: [bundle], format: .liveMirror)), toDir: dir)
+            let entries = [try fakeEntry(dir, start, written: 100), try fakeEntry(dir, start.addingTimeInterval(day), written: 10)]
+            return (dir, bundle, entries)
+        }
+        let decayed = try mirror("decayed")
+        defer { try? FileManager.default.removeItem(at: decayed.dir) }
+        MirrorSeal.markDamaged(decayed.dir, why: MirrorSeal.decayReason(["1a"]))
+        MirrorSeal.markDecayed(decayed.dir, bands: ["1a"])
+        #expect(MirrorHistory.restoreWarning(entry: decayed.entries[0].dir, mirror: decayed.dir)?.contains("data band 1a") == true)
+        try MirrorSeal.requestStartOver(decayed.dir)
+        try MirrorSeal.startOverIfAsked(decayed.bundle, in: decayed.dir, runner: ProcessCommandRunner())
+        #expect(MirrorSeal.damage(in: decayed.dir) == nil, "the mirror starts over clean")
+        let aside = MirrorSeal.replaced(decayed.bundle)
+        #expect(FileManager.default.fileExists(atPath: aside.path))
+        for e in decayed.entries {
+            let warning = MirrorHistory.restoreWarning(entry: e.dir, mirror: decayed.dir)
+            #expect(warning?.contains("data band 1a") == true && warning?.contains("started over") == true, "\(String(describing: warning))")
+        }
+        let after = MirrorHistory.entries(in: decayed.dir)
+        #expect(after.count == 2 && after.allSatisfy(\.madeBeforeStartOver))
+        #expect(MirrorHistory.writeEstimate(after, library: 1_000) == nil, "they don't share the new image's blocks")
+
+        let full = try mirror("full")
+        defer { try? FileManager.default.removeItem(at: full.dir) }
+        MirrorSeal.markDamaged(full.dir, why: "fsck found the catalog damaged")
+        try MirrorSeal.requestStartOver(full.dir, removingDamagedFirst: true)
+        try MirrorSeal.startOverIfAsked(full.bundle, in: full.dir, runner: ProcessCommandRunner())
+        let marked = MirrorHistory.entries(in: full.dir)
+        #expect(marked.count == 2 && marked.allSatisfy { $0.madeBeforeStartOver })
+        #expect(full.entries.allSatisfy { MirrorHistory.restoreWarning(entry: $0.dir, mirror: full.dir) == nil })
+    }
+
     // What history takes is about what the runs after its oldest entry wrote; an entry
     // removed hands what its run wrote to the next newer one.
     @Test func aboutSizesFollowWhatRunsWroteAndSurviveARemoval() throws {

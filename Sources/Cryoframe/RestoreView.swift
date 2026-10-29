@@ -800,13 +800,12 @@ struct RestoreView: View {
 
     /// Said before a restore uses a damaged mirror, or an earlier copy of one: its
     /// history shares the mirror's blocks on the drive, so decay found in the mirror
-    /// may be in its earlier copies too (see MirrorHistory).
+    /// may be in its earlier copies too, before and after it is started over (see
+    /// MirrorHistory.restoreWarning).
     static func mirrorWarning(_ v: RestorableArchive) -> String? {
-        guard v.format == .liveMirror, let why = MirrorSeal.damage(in: v.libraryFolder) else { return nil }
-        if v.mirrorHistory {
-            guard MirrorSeal.isDecayed(v.libraryFolder) else { return nil }
-            return "The current mirror was found decayed (\(why)). This earlier copy shares the same parts of the drive, so it may hold the same damage."
-        }
+        guard v.format == .liveMirror else { return nil }
+        if v.mirrorHistory { return MirrorHistory.restoreWarning(entry: v.dir, mirror: v.libraryFolder) }
+        guard let why = MirrorSeal.damage(in: v.libraryFolder) else { return nil }
         return "This mirror is damaged: \(MirrorSeal.damagedDetail(why, in: v.dir)) What a restore gets from it may be incomplete or corrupt."
     }
 

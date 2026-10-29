@@ -176,7 +176,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         watch.drive?.stop()
         // with history sharing the image's blocks, the run's own writes take room too:
         // another writer isn't the only way the drive fills, so the run doesn't say it is
-        let shared = fm.fileExists(atPath: bundle.path) && !MirrorHistory.entries(in: destinationDir).isEmpty
+        let shared = fm.fileExists(atPath: bundle.path) && !MirrorHistory.sharing(MirrorHistory.entries(in: destinationDir)).isEmpty
         func dipped(_ swapped: Bool) -> MirrorCopyError {
             shared ? .driveFilledBesideHistory(swapped: swapped) : .driveFilledByAnother(swapped: swapped)
         }
@@ -420,7 +420,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                                                    bandSectors: bandSectors, encrypted: encrypted,
                                                    sectors: max(imageBytes / 512, 1)), stdin: stdin)
         } else {
-            let shared = !MirrorHistory.entries(in: destinationDir).isEmpty
+            let shared = !MirrorHistory.sharing(MirrorHistory.entries(in: destinationDir)).isEmpty
             imageBytes = try fit(bundle, ceiling: ceiling, free: free, reserve: reserve, shared: shared, stdin: stdin,
                                  touched: &touched) ?? ceiling
         }
@@ -550,7 +550,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         }
         let entries = MirrorHistory.entries(in: dir)
         let gone = MirrorHistory.makeRoom(entries, fits: { fits(writes(), 0) },
-                                          fitsWithAllGone: { fits(nil, MirrorHistory.roomFreed(byRemoving: entries)) },
+                                          fitsWithAllGone: { fits(nil, MirrorHistory.roomFreed(
+                                              byRemoving: entries, oldImageKept: FileManager.default.fileExists(atPath: MirrorSeal.replaced(bundle).path))) },
                                           remove: { e in (try? MirrorHistory.remove(e, in: dir)) != nil })
         watch.historyRemoved += gone
         try check(writes(), 0)          // the verdict, after whatever went
@@ -967,6 +968,9 @@ public enum MirrorSeal {
         let replacing = fm.fileExists(atPath: bundle.path) && (damaged || !removeFirst)
         if replacing {
             try MirrorMounts.refuseIfOpen(bundle, runner: runner)
+            // its history was made of this image, and when it decayed shares the decay:
+            // Restore goes on saying so once the marks below are cleared
+            try MirrorHistory.markStartedOver(in: dir, decay: isDecayed(dir) ? damage(in: dir) : nil)
             // what was recorded of it first: a crash after this leaves the request and the
             // damage marked, and the next run starts over again
             try? fm.removeItem(at: manifest)
