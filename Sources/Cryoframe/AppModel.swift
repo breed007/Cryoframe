@@ -109,7 +109,10 @@ final class AppModel: ObservableObject {
         jobs = loaded.jobs
         reloadHistory()                         // last-run badges, persisted across launches
         if loaded.droppedJobs > 0 {             // a partial decode shouldn't be silent
-            log("⚠︎ \(loaded.droppedJobs) job\(loaded.droppedJobs == 1 ? "" : "s") couldn't be read and were skipped — they may have been written by a newer version.")
+            log("⚠︎ \(loaded.droppedJobs) job\(loaded.droppedJobs == 1 ? "" : "s") couldn't be read and \(loaded.droppedJobs == 1 ? "is" : "are") left as saved — they may have been written by a newer version.")
+        }
+        if !loaded.unreadableFiles.isEmpty {     // nothing is written to it, and nothing runs on schedule
+            log(Self.unreadableLine(loaded.unreadableFiles))
         }
         let clearedAt = UserDefaults.standard.object(forKey: Prefs.activityClearedAt) as? Double
         for r in ActivityList.seed(history.all(), clearedAt: clearedAt.map(Date.init(timeIntervalSince1970:)), limit: 8).reversed() {
@@ -542,6 +545,9 @@ final class AppModel: ObservableObject {
         case .deleted:
             log("⚠︎ \(draft.name.isEmpty ? "This job" : draft.name) was deleted while it was being edited, so the changes weren't saved")
             return true
+        case .unreadable:
+            log(Self.unreadableLine(store.load().unreadableFiles))
+            return false
         }
     }
     /// Let the Keep rule apply to the earlier backups `review` names, from the job's
@@ -1056,6 +1062,12 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Prefs.activityClearedAt)
         let running = Set(jobs.filter { runningJobIDs.contains($0.id) }.map { Self.startedLine($0.name) })
         activity = activity.filter { running.contains($0) }
+    }
+
+    /// what to say while a job file can't be read (see JobStore)
+    static func unreadableLine(_ files: [String]) -> String {
+        "⚠︎ \(files.joined(separator: " and ")) couldn't be read, so no job is saved or run on schedule until it can be. "
+            + "It's left as it is, with a copy beside it in ~/Library/Application Support/app.cryoframe; it may have been written by a newer version."
     }
 
     func log(_ line: String) {

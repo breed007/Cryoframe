@@ -461,6 +461,8 @@ public struct JobDraftState: Sendable, Equatable {
         case invalid
         /// the job was deleted while it was being edited: nothing was saved
         case deleted
+        /// a job file can't be read, so nothing can be saved into it (see JobStore)
+        case unreadable
     }
 
     /// Save the draft into `store`, merged with the job as it is on disk now (see
@@ -472,10 +474,13 @@ public struct JobDraftState: Sendable, Equatable {
     public func commit(to store: JobStore, now: Date = Date(), calendar: Calendar = .current,
                        home: String = NSHomeDirectory(), consents: [AdoptionConsent] = [],
                        savePassphrase: (String, String) -> Void) -> CommitResult {
-        guard isValid(existing: store.load().jobs, home: home) else { return .invalid }
+        let current = store.load()
+        guard current.unreadableFiles.isEmpty else { return .unreadable }
+        guard isValid(existing: current.jobs, home: home) else { return .invalid }
         if storesNewPassphrase { savePassphrase(passphrase, jobID) }
         let draft = makeJob(now: now, calendar: calendar)
         return store.update { s -> CommitResult in
+            guard s.unreadableFiles.isEmpty else { return .unreadable }
             guard isValid(existing: s.jobs, home: home) else { return .invalid }
             let stored = s.jobs.first { $0.id == jobID }
             guard let job = JobEdit.merge(draft: draft, base: base, stored: stored)?.adding(consents) else { return .deleted }

@@ -24,6 +24,13 @@
 //  beside jobs.json (flock(2), so it holds across processes) from the load to the
 //  save. Readers don't take it: each file is replaced whole, all at once.
 //
+//  A job this version can't decode is kept as it was found and written back with
+//  the rest (see ScheduleState.undecodedJobs). A job file that is there but can't be
+//  read at all is never written over: a copy of it is kept beside it, the state says
+//  which file it is (`unreadableFiles`), and no write is made to either file until it
+//  can be read. Writing the jobs that could be read would replace it with a partial
+//  list, or an empty one.
+//
 
 import Foundation
 
@@ -74,7 +81,8 @@ public final class JobStore: @unchecked Sendable {
 
     /// Load, change and save, with no other write in between, in this process or the
     /// other one (see the top). `body` must not call the store: the lock isn't
-    /// reentrant. Nothing is written when `body` changes nothing.
+    /// reentrant. Nothing is written when `body` changes nothing, or while a job file
+    /// can't be read (see the top).
     @discardableResult
     public func update<T>(_ body: (inout ScheduleState) throws -> T) rethrows -> T {
         lock.lock(); defer { lock.unlock() }
@@ -83,7 +91,7 @@ public final class JobStore: @unchecked Sendable {
         var state = read()
         let before = state
         let result = try body(&state)
-        if state != before { write(state) }
+        if state != before, state.unreadableFiles.isEmpty { write(state) }
         return result
     }
 
@@ -124,16 +132,48 @@ public final class JobStore: @unchecked Sendable {
 
     private func read() -> ScheduleState {
         var state = ScheduleState()
-        if let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder().decode(ScheduleState.self, from: data) {
+        var unreadable: [String] = []
+        switch Self.decode(url) {
+        case .missing: break
+        case .unreadable: unreadable.append(url.lastPathComponent)
+        case .read(let decoded):
             state = decoded
             if let d = try? Data(contentsOf: drivesURL), let drives = try? JSONDecoder().decode(DriveRecords.self, from: d) {
                 drives.fill(&state)
             }
         }
-        if let data = try? Data(contentsOf: filesURL), let files = try? JSONDecoder().decode(ScheduleState.self, from: data) {
-            state.merge(plainFiles: files)
+        switch Self.decode(filesURL) {
+        case .missing: break
+        case .unreadable: unreadable.append(filesURL.lastPathComponent)
+        case .read(let files): state.merge(plainFiles: files)
         }
+        state.unreadableFiles = unreadable
         return state
+    }
+
+    private enum FileRead { case missing, unreadable, read(ScheduleState) }
+
+    /// the job file at `url`; one that is there but can't be read is copied beside
+    /// itself first (see the top)
+    private static func decode(_ url: URL) -> FileRead {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+        guard let data = try? Data(contentsOf: url) else { return .unreadable }
+        guard let state = try? JSONDecoder().decode(ScheduleState.self, from: data) else {
+            keepCopy(of: data, from: url)
+            return .unreadable
+        }
+        return .read(state)
+    }
+
+    /// `data`, the contents of `url`, copied to `<name>.unreadable-<time, in UTC>` beside
+    /// it, unless a copy of these same contents is there already
+    private static func keepCopy(of data: Data, from url: URL) {
+        let dir = url.deletingLastPathComponent(), prefix = url.lastPathComponent + ".unreadable-"
+        let copies = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasPrefix(prefix) }
+        guard !copies.contains(where: { (try? Data(contentsOf: dir.appendingPathComponent($0))) == data }) else { return }
+        let f = ISO8601DateFormatter()                          // 2026-10-29T155833Z
+        f.formatOptions = [.withFullDate, .withTime, .withTimeZone]
+        try? data.write(to: dir.appendingPathComponent(prefix + f.string(from: Date())), options: .withoutOverwriting)
     }
 
     private func write(_ state: ScheduleState) {
@@ -177,7 +217,8 @@ extension ScheduleState {
         files.lastCopy = lastCopy.filter { plain.contains($0.key) }
         main.adoptionReviews = adoptionReviews.filter { !plain.contains($0.key) }
         files.adoptionReviews = adoptionReviews.filter { plain.contains($0.key) }
-        main.droppedJobs = 0; files.droppedJobs = 0
+        files.undecodedJobs = undecodedPlainFilesJobs
+        main.undecodedPlainFilesJobs = []
         return (main, files)
     }
 
@@ -192,7 +233,7 @@ extension ScheduleState {
             lastCopy[id] = files.lastCopy[id]
             adoptionReviews[id] = files.adoptionReviews[id]
         }
-        droppedJobs += files.droppedJobs
+        undecodedPlainFilesJobs = files.undecodedJobs
     }
 }
 

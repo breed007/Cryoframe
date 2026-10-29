@@ -18,9 +18,18 @@ public struct ScheduleState: Codable, Sendable, Equatable {
     /// job id → adopted versions its runs left alone until the person says yes (see
     /// AdoptionReview)
     public var adoptionReviews: [String: [AdoptionReview]] = [:]
+    /// the jobs that failed to decode (most likely written by a newer version), as they
+    /// were on disk. They are written back unchanged: dropping them erased them at the
+    /// next write, which the agent makes within the hour of a return to this version.
+    var undecodedJobs: [JSONValue] = []
+    /// the same, from jobs-files.json, and written back there (see JobStore)
+    var undecodedPlainFilesJobs: [JSONValue] = []
     /// number of jobs that failed to decode and were skipped on the last load — so the
     /// UI can tell the user "3 jobs couldn't be read" instead of silently showing none.
-    public var droppedJobs: Int = 0
+    public var droppedJobs: Int { undecodedJobs.count + undecodedPlainFilesJobs.count }
+    /// the job files that are there but couldn't be read at all (see JobStore): nothing
+    /// is written to either file, and no job is due, until they can be. Never saved.
+    public var unreadableFiles: [String] = []
 
     public init(jobs: [BackupJob] = [], lastRun: [String: Date] = [:]) {
         self.jobs = jobs; self.lastRun = lastRun
@@ -30,12 +39,13 @@ public struct ScheduleState: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        // decode jobs through a non-throwing wrapper so ONE malformed or schema-
-        // incompatible job can't wipe the whole list (the old whole-array decode did
-        // exactly that). Bad elements decode to nil and are counted, not fatal.
-        let wrapped = (try? c.decode([Failable<BackupJob>].self, forKey: .jobs)) ?? []
+        // decode jobs through a wrapper so ONE malformed or schema-incompatible job
+        // can't wipe the whole list (the old whole-array decode did exactly that). A bad
+        // element is kept as it was, to be written back. A "jobs" that isn't a list is
+        // a file this version can't read, and throws.
+        let wrapped = try c.decodeIfPresent([Failable<BackupJob>].self, forKey: .jobs) ?? []
         self.jobs = wrapped.compactMap(\.value)
-        self.droppedJobs = wrapped.count - self.jobs.count
+        self.undecodedJobs = wrapped.compactMap(\.raw)
         self.lastRun = (try? c.decode([String: Date].self, forKey: .lastRun)) ?? [:]
         self.lastCopy = (try? c.decode([String: [String: Date]].self, forKey: .lastCopy)) ?? [:]   // before 1.6: none
         self.adoptionReviews = (try? c.decode([String: [AdoptionReview]].self, forKey: .adoptionReviews)) ?? [:]
@@ -43,18 +53,55 @@ public struct ScheduleState: Codable, Sendable, Equatable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(jobs, forKey: .jobs)
+        var list = c.nestedUnkeyedContainer(forKey: .jobs)
+        for job in jobs { try list.encode(job) }
+        for raw in undecodedJobs { try list.encode(raw) }
         try c.encode(lastRun, forKey: .lastRun)
         if !lastCopy.isEmpty { try c.encode(lastCopy, forKey: .lastCopy) }
         if !adoptionReviews.isEmpty { try c.encode(adoptionReviews, forKey: .adoptionReviews) }
     }
 }
 
-/// wraps a Decodable so a single bad element decodes to nil instead of throwing and
-/// taking the whole array down with it.
+/// wraps a Decodable so a single bad element decodes to nil, kept as the JSON it was,
+/// instead of throwing and taking the whole array down with it.
 private struct Failable<T: Decodable>: Decodable {
     let value: T?
-    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
+    let raw: JSONValue?
+    init(from decoder: Decoder) throws {
+        value = try? T(from: decoder)
+        raw = value == nil ? try JSONValue(from: decoder) : nil
+    }
+}
+
+/// Any JSON value, decoded and encoded back as it was (key order and number spelling
+/// aside), for what this version can't read but mustn't lose.
+enum JSONValue: Codable, Equatable, Sendable {
+    case null, bool(Bool), int(Int64), double(Double), string(String)
+    case array([JSONValue]), object([String: JSONValue])
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let i = try? c.decode(Int64.self) { self = .int(i) }
+        else if let d = try? c.decode(Double.self) { self = .double(d) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
+        else { self = .object(try c.decode([String: JSONValue].self)) }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .null: try c.encodeNil()
+        case .bool(let b): try c.encode(b)
+        case .int(let i): try c.encode(i)
+        case .double(let d): try c.encode(d)
+        case .string(let s): try c.encode(s)
+        case .array(let a): try c.encode(a)
+        case .object(let o): try c.encode(o)
+        }
+    }
 }
 
 public struct Scheduler: Sendable {
@@ -66,8 +113,11 @@ public struct Scheduler: Sendable {
         return next <= now
     }
 
+    /// none while a job file can't be read: no run could be recorded, so every pass
+    /// would start the same jobs again
     public func dueJobs(_ state: ScheduleState, now: Date, calendar: Calendar = .current) -> [BackupJob] {
-        state.jobs.filter { $0.enabled && isDue($0, lastRun: state.lastRun[$0.id], now: now, calendar: calendar) }
+        guard state.unreadableFiles.isEmpty else { return [] }
+        return state.jobs.filter { $0.enabled && isDue($0, lastRun: state.lastRun[$0.id], now: now, calendar: calendar) }
     }
 
     /// the jobs a scheduled pass starts: due, and not already running here or in the
