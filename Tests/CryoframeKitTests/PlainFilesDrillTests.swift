@@ -71,4 +71,34 @@ private let exfatLike = FileSystemProfile(kind: .exfat, fsType: "exfat", foldsCa
         report = RestoreDriller().drill(job: job)
         #expect(report.checks.first?.passed == false, "\(report.checks)")
     }
+
+    /// The drill's database check never writes into the copy it checks: no -shm beside
+    /// it, the -wal and the database untouched, and a missing database fails rather
+    /// than being made empty and passed.
+    @Test func theDatabaseCheckWritesNothingIntoTheCopy() throws {
+        let base = tempDir("drill-db")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let made = base.appendingPathComponent("made"), copy = base.appendingPathComponent("odd ?#% name")
+        for d in [made, copy] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        let setup = Process()
+        setup.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        setup.arguments = [made.appendingPathComponent("chat.db").path,
+                           "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE t(x); INSERT INTO t VALUES(1);"]
+        setup.standardOutput = FileHandle.nullDevice
+        try setup.run(); setup.waitUntilExit()
+        // a copy as a backup holds it: the database and its -wal, no -shm
+        for name in ["chat.db", "chat.db-wal"] {
+            try FileManager.default.copyItem(at: made.appendingPathComponent(name), to: copy.appendingPathComponent(name))
+        }
+        let before = try ["chat.db", "chat.db-wal"].map { try Data(contentsOf: copy.appendingPathComponent($0)) }
+
+        let r = try ProcessCommandRunner().run(StrongVerifier.quickCheck(copy.appendingPathComponent("chat.db")))
+        #expect(r.ok && r.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "ok", "\(r.stdout) \(r.stderr)")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: copy.path).sorted() == ["chat.db", "chat.db-wal"])
+        #expect(try ["chat.db", "chat.db-wal"].map { try Data(contentsOf: copy.appendingPathComponent($0)) } == before)
+
+        let missing = try ProcessCommandRunner().run(StrongVerifier.quickCheck(copy.appendingPathComponent("gone.db")))
+        #expect(!missing.ok)
+        #expect(!FileManager.default.fileExists(atPath: copy.appendingPathComponent("gone.db").path))
+    }
 }

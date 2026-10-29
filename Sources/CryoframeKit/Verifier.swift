@@ -104,7 +104,7 @@ public struct StrongVerifier: Sendable {
 
         if type.kind == .liveDB, let probe = type.integrityProbe {
             let db = libRoot.appendingPathComponent(probe)
-            let r = try runner.run("/usr/bin/sqlite3", [db.path, "PRAGMA quick_check;"])
+            let r = try runner.run(Self.quickCheck(db))
             let out = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             let ok = r.ok && out == "ok"
             return report(.mountAndOpen, ok,
@@ -119,6 +119,19 @@ public struct StrongVerifier: Sendable {
             return try staticReport(libRoot, fm: fm, probeReadability: result.format != .sealedZip,
                                     control: runner.control)
         }
+    }
+
+    /// The database's integrity check, opened read-only and immutable, so it never writes
+    /// into the backup. A plain-files copy is checked where it is, and sqlite3 opening it
+    /// read-write could fold a copied -wal into the copy, or leave a -shm beside it.
+    /// Immutable reads the main file alone, which holds a whole database at every
+    /// checkpoint; read-only makes a missing file fail rather than appear empty
+    /// (measured with immutable alone: an empty database was made, and passed).
+    static func quickCheck(_ db: URL) -> Command {
+        // a URI path: "%", "?" and "#" would otherwise end or change it
+        let path = db.path.replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: "?", with: "%3f").replacingOccurrences(of: "#", with: "%23")
+        return Command("/usr/bin/sqlite3", ["file:" + path + "?mode=ro&immutable=1", "PRAGMA quick_check;"])
     }
 
     /// A folder library has no database to reopen, so the drill used to count the

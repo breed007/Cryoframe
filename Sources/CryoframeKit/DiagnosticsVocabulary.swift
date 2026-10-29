@@ -476,6 +476,7 @@ ignore
 image
 imagekey
 images
+immutable
 imovie
 imovieapp
 imovielibrary
@@ -629,6 +630,7 @@ mm
 mnt
 mobile
 mobilesms
+mode
 modification
 modify
 month
@@ -848,6 +850,7 @@ review
 rewrites
 right
 rlptgo
+ro
 roles
 room
 root
