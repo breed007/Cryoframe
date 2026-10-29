@@ -18,7 +18,7 @@ Each copy is an APFS clone of the mirror's disk image, kept in a folder named "M
 
 History only protects against deletes and bad updates. The copies are on the same drive as the mirror and share its data, so they don't help if the drive fails, is lost, or decays. If decay is found in the mirror, Cryoframe says that its history may hold the same damage.
 
-When the drive runs short of room, the mirror comes first: the oldest copies are deleted until the run fits, and the run's history says what went. History is never deleted because a setting was lost, for instance after going back to an earlier version of Cryoframe; new copies just stop being made.
+When the drive runs short of room, the mirror comes first: the oldest copies are deleted until the run fits, and the run's history says what went. A run that finds decay in the mirror adds no copy. Going back to Cryoframe 1.7.0 deletes no history and makes no new copies, but 1.7.0 drops the Keep history setting, so check it when you return to 1.8; see [Going back to 1.7.0](updating-troubleshooting.md#going-back-to-170).
 
 History needs an APFS drive connected to this Mac whose volume can make clones. It isn't kept on exFAT, FAT32 or Mac OS Extended drives, on network drives, or in iCloud Drive, Dropbox and other cloud folders, which would upload a whole copy for every night. The job editor says which destinations can't keep it, and why. See [Formats and destinations](formats-and-destinations.md).
 
@@ -60,7 +60,9 @@ The measure is whether there's room for another run of that job, compared agains
 
 The Storage button at the top of the window shows, for each job, how much space its archives use and how full the destination volume is. Expand a job to see the per-version breakdown, so you can tell which versions are large and whether your retention policy is keeping more than you expected. Only dated versions count as archives there; a plain-files job reads "a current copy and Removed items".
 
-A live mirror with history has a row of its own, "*library* · Mirror history", with how many earlier copies it holds and about how much room they take. That size is an estimate, from what each run wrote: a clone shares its data, so what one holds alone can't be measured without deleting it. Its Delete… menu deletes one earlier copy, after you confirm. Cryoframe 1.7 doesn't know about history, so if you go back to it, its Storage window counts each copy at the mirror's full size.
+A live mirror with history has a row of its own, "*library* · Mirror history", with how many earlier copies it holds and about how much room they take. That size is an estimate, from what each run wrote: a clone shares its data, so what one holds alone can't be measured without deleting it. Its Delete… menu deletes one earlier copy, after you confirm. Cryoframe 1.7 doesn't know about history, so if you go back to it, its Storage window counts each copy at the mirror's full size. Below each drive's run trend, a line says how much of the mirror has been checked for decay lately; see [Health and verification](health-and-verification.md#live-mirrors-the-check-for-decay).
+
+<!-- SHOT: storage-mirror-history.png — Storage with a live-mirror job expanded: the mirror's row, the "· Mirror history" row with its count, about size and Delete… menu, and under the run trend the line "Whole mirror checked for decay within the last 29 days" -->
 
 This is the place to look before a disk fills. If a job is using more than you want, tighten its retention policy, and the next run prunes down to the new limit.
 

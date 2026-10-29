@@ -22,7 +22,7 @@ Without Full Disk Access, a job that targets a protected library fails with a re
 
 ## 3. Enable the schedule (optional)
 
-If you want jobs to run on their own, turn on the schedule. This installs a launchd agent that wakes about once an hour and runs any job that is due. Jobs only run while you are logged in.
+If you want jobs to run on their own, turn on the schedule. This installs a launchd agent that checks every hour and runs any job that is due. Jobs only run while you are logged in.
 
 You can skip this and run every job by hand with Run now. Scheduling is only needed for unattended backups.
 

@@ -21,7 +21,7 @@ Each library's menu has:
 
 **When** sets how often the job runs: every day, every few hours, once, or only when you say.
 
-**Keep** sets whether each backup keeps one up-to-date copy or dated versions. One up-to-date copy is kept as a disk image or as plain files; dated versions as disk images or zip files, with how many to keep. Plain files can only be chosen for a new job. See [Formats and destinations](formats-and-destinations.md).
+**Keep** sets whether each backup keeps one up-to-date copy or dated versions. One up-to-date copy is kept as a disk image or as plain files; dated versions as disk images or zip files, with how many to keep. A disk image copy also has Keep history: Off, or the copy from each of the last 7, 14 or 30 nights. Plain files can only be chosen for a new job. See [Formats and destinations](formats-and-destinations.md).
 
 **Details** holds encryption, how each backup is checked (a quick check, or a full check that opens it), and what to do if the library's app is open: back up anyway, back up and say so, or wait until it's closed.
 

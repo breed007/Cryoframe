@@ -6,7 +6,7 @@ This page covers running jobs unattended: how the schedule works, how Cryoframe 
 
 ## Scheduling
 
-Turn on the schedule from the top of the main window, or in Settings ▸ Schedule. It installs a launchd agent that wakes about once an hour and runs any job that is due.
+Turn on the schedule from the top of the main window, or in Settings ▸ Schedule. It installs a launchd agent that checks every hour, on the hour, and runs any job that is due.
 
 Each job sets its own frequency when you make or edit it. A job set to "Only when I say" has no schedule and only runs from Run now. Scheduled jobs run while you are logged in.
 
@@ -14,7 +14,7 @@ The "If the app is open" setting on a job decides what happens when the library'
 
 ### Missed runs
 
-A job whose time passed while the Mac was asleep or shut down is not skipped until the next cycle. Because the agent wakes about once an hour and asks whether each job's next run is now in the past, a backup missed at 2 AM runs shortly after you next wake the Mac. A long absence still owes one run, not one per night you were away.
+A job whose time passed while the Mac was asleep or shut down is not skipped until the next cycle. Because the agent checks every hour whether each job's next run is now in the past, and runs a check it missed while the Mac slept as soon as the Mac wakes, a backup missed at 2 AM runs shortly after you next wake the Mac. A long absence still owes one run, not one per night you were away.
 
 ### Low battery
 
@@ -34,7 +34,7 @@ It prevents idle sleep only. It never forces the display on, and it is released 
 
 ## Waking for a scheduled run
 
-"Wake the Mac for scheduled backups" is in Settings ▸ General and is off by default. When on, Cryoframe asks the helper to set a system wake a couple of minutes before the next due job, so an idle Mac wakes up and runs its nightly backup near the intended time.
+"Wake the Mac for scheduled backups" is in Settings ▸ General and is off by default. When on, Cryoframe asks the helper to set a system wake a couple of minutes before the next due job, so an idle Mac wakes up and runs its nightly backup near the intended time. An hourly check missed while the Mac slept runs when it wakes. A check that finds a job due in the next few minutes waits for it, keeping the Mac awake, and then runs it. Before 1.8 the Mac woke, but the backup could wait for the next hourly check, and the Mac could go back to sleep first.
 
 This changes the system power schedule, which is why it is off by default and asks the helper for permission. It only ever manages its own wake event. It cannot wake a Mac that is shut down, and it cannot beat a closed lid.
 

@@ -71,9 +71,23 @@ Versions before 1.6 deleted any `<folder>/build/<item>` inside the scratch locat
 - Plain-files jobs are kept in a file of their own, `jobs-files.json`, which 1.6.0 doesn't read and leaves alone. They don't appear or run in 1.6.0, and they're back when you return to 1.7. Their copies stay on the drives as ordinary files.
 - 1.6.0 backs up Messages attachments as an ordinary folder. It copies link previews, and it keeps nothing you delete in Messages: a live mirror drops those files, and pruning deletes old versions without saving them first. Removed items and removed-items archives made by 1.7 are left as they are.
 
-### Going back to 1.7.0: turn the schedule on again
+### Going back to 1.7.0
 
-1.8 registers the schedule with macOS under a name 1.7.0 doesn't know. After going back, 1.7.0 shows the schedule as off in Settings ▸ Schedule, and scheduled backups may not run. Turn the schedule on again there.
+1.7.0 still runs your jobs and reads your backups, with these exceptions:
+
+- 1.8 registers the schedule with macOS under a name 1.7.0 doesn't know. After going back, 1.7.0 shows the schedule as off in Settings ▸ Schedule, and scheduled backups may not run. Turn the schedule on again there. When you return to 1.8, it moves the schedule over again on its own.
+- 1.7.0 leaves each mirror's Mirror history folder as it is. It makes no new copies and deletes none, and its Restore window doesn't list them. Its Storage window counts each copy at the mirror's full size, so a job with history looks far larger than it is.
+- 1.7.0 drops a job's Keep history setting when it saves the job. Back on 1.8 the job keeps 7 nights again. If you had changed it, set it again in the job editor: until you do, a job set to 14 or 30 nights deletes the copies past the last 7 at its next run, and one set to Off starts keeping history again.
+- 1.7.0 doesn't check for decay. A mirror 1.8 found decayed is also marked damaged, which 1.7.0 reads, but 1.7.0 clears that mark once the file system inside the image checks out, as it usually does after decay, and goes on updating the mirror. Back on 1.8 the mirror is still marked decayed, and its runs are refused until you choose Start This Mirror Over in Storage. 1.8 takes a fresh record of the parts of a mirror that 1.7.0 rewrote, and doesn't count them as decay.
+- In 1.7.0, scheduled backups don't post notifications while the app is quit.
+
+### macOS says Cryoframe added a login item
+
+After the update to 1.8, the first time Cryoframe opens it moves the schedule to a new registration with macOS, so that waking the Mac for a scheduled backup runs the backup. macOS may report that as a new login item. It is Cryoframe's own schedule, and nothing needs doing.
+
+### Cryoframe says a job file couldn't be read
+
+When the file that holds your jobs can't be read, Cryoframe leaves it as it is and keeps a copy beside it in `~/Library/Application Support/app.cryoframe`. Until the file can be read, no job is saved and none runs on schedule. It may have been saved by a newer version of Cryoframe, so if you went back a version, update again. A single job written by a newer version is kept as it was and left out of the list until you update.
 
 ### Reporting a problem
 

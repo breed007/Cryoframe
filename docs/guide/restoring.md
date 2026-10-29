@@ -27,9 +27,11 @@ Some versions carry a badge:
 - **No badge** means nothing has checked that version yet. It is not a sign of trouble; it just means Cryoframe will not claim more than it knows. See [Health and verification](health-and-verification.md) to check them.
 - **Kept** means the version is from before its job changed how it keeps backups. Nothing deletes it; see [Versions, retention, and storage](versions-retention-storage.md#kept-versions).
 
-A plain-files copy, or a live mirror without history, has no timeline. It keeps one copy, brought up to date by each run, so there is a single state to restore: the current one. Cryoframe says so rather than showing a history that does not exist. If you want a history for that library, keep dated versions with a Keep rule; see [Versions, retention, and storage](versions-retention-storage.md).
+A plain-files copy, or a live mirror without history, has no timeline. It keeps one copy, brought up to date by each run, so there is a single state to restore: the current one. Cryoframe says so rather than showing a history that does not exist. For a live mirror on an APFS drive connected to this Mac, turn on Keep history in the job editor. For a longer history, or one on another drive, keep dated versions with a Keep rule; see [Versions, retention, and storage](versions-retention-storage.md).
 
 A live mirror with history shows a timeline: the current mirror first, then each earlier copy as "Mirror as of" the date and time it was made. Restore one the same way as any version. If decay was found in the mirror, Restore warns before using one of its earlier copies too, because they share the same data on the drive. See [Mirror history](versions-retention-storage.md#mirror-history).
+
+<!-- SHOT: restore-mirror-history.png — The Restore timeline for a live mirror with history: the current mirror first, then earlier copies named "Mirror as of" a date and time, each with the Mirror history label -->
 
 Select a version and the bar at the bottom names exactly what will happen when you restore it.
 
@@ -55,6 +57,8 @@ Restore adds a note when a plain copy needs one. It names what the drive didn't 
 
 Switch the restore bar from Beside to In place, and the version you picked goes back exactly where the live library is. This is for the case where the live library is damaged or gone and you want the archived copy to take over.
 
+In place is offered only for a built-in library, such as Photos or Messages, and only over the library the backup was made from. A backup of a folder you added is restored beside, even when the folder has the same name as a built-in library, and so is a version made before 1.6. The confirmation names what goes to the Trash.
+
 It is built to be safe. Cryoframe restores and verifies the archive into a staging copy first, and only once that copy is good does it move your current library to the Trash and swap the restored copy into place. If anything goes wrong before the swap, your live library is untouched. After the swap, the previous library is in the Trash, so the change is reversible.
 
 If a restore is cut off part way, by a crash, Force Quit, a logout or a restart, Cryoframe deals with it the next time it opens and shows an alert saying what it did and where everything is. It never deletes a verified copy or your library:
@@ -65,7 +69,7 @@ If a restore is cut off part way, by a crash, Force Quit, a logout or a restart,
 
 A restore that is cut off before its copy is complete, in place or beside, leaves only a hidden folder, never half a library under the library's own name. The next restore into that folder removes it.
 
-Quit the app that owns the library first. Cryoframe checks for this and tells you if, for example, Photos is still running.
+Quit the app that owns the library first. Cryoframe checks for this and tells you if, for example, Photos is still running. For Messages attachments, that means quitting Messages.
 
 ## Browse and extract a few files
 
