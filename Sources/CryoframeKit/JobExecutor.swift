@@ -92,6 +92,8 @@ public struct JobExecutor: Sendable {
         let byteSize: UInt64
         let contentDigest: String   // sha256 of the built artifact, to confirm copies match
         let verified: Bool?
+        /// what the mount-and-open check said, when it didn't pass
+        var verifyFailure: String? = nil
         let encrypted: Bool
         let buildDir: URL           // scratch dir to clean once distribution is done
         let dests: [Target]         // the available destinations to copy/ship it to
@@ -600,6 +602,18 @@ public struct JobExecutor: Sendable {
         // manifest. No recompression: the artifact was built once above.
         for build in builds {
             if control.isCancelled { builds.forEach(cleanupBuild); return .cancelled }
+            // A build that failed its mount-and-open check is no backup. Copied out, it
+            // was the newest version: the Keep rule counted it, and a few runs of a
+            // library gone bad pushed out every good version before it. It goes nowhere,
+            // and the versions already at each destination stay as they are.
+            if build.verified == false {
+                for dest in build.dests {
+                    results.append(.failed(library: build.library.displayName, destination: dest.displayName,
+                        error: "the new version didn't pass its check after it was built (\(build.verifyFailure ?? "it couldn't be opened")), so it wasn't copied to \(dest.displayName); the versions already there are kept"))
+                }
+                cleanupBuild(build)
+                continue
+            }
             var keepBuild = false      // a dropped resumable ship leaves a pending → keep the artifact for resume
             for dest in build.dests {
                 if control.isCancelled { builds.forEach(cleanupBuild); return .cancelled }
@@ -1384,9 +1398,12 @@ public struct JobExecutor: Sendable {
             throw ArchiveError.noArtifactProduced(buildDir)
         }
         var verified: Bool?
+        var verifyFailure: String?
         if job.verification == .mountAndOpen {
             onStage(.verifying)
-            verified = try StrongVerifier(runner: runner).verify(archive, type: library, passphrase: passphrase).passed
+            let report = try StrongVerifier(runner: runner).verify(archive, type: library, passphrase: passphrase)
+            verified = report.passed
+            if !report.passed { verifyFailure = report.details }
         }
         let digest = (try? Checksum.sha256(of: file)) ?? ""
         // the version's file list, beside the archive in scratch: an encrypted job's
@@ -1394,8 +1411,8 @@ public struct JobExecutor: Sendable {
         // One that can't be written leaves the version without a list, nothing more.
         let contents = listing.flatMap { ContentsListing.write($0.0, master: $0.1, encrypted: passphrase != nil, into: buildDir) }
         return SealedBuild(library: library, jobID: job.id, index: index, builtFile: file, format: archive.format,
-                           byteSize: size, contentDigest: digest, verified: verified, encrypted: passphrase != nil,
-                           buildDir: buildDir, dests: dests, notes: notes, contents: contents)
+                           byteSize: size, contentDigest: digest, verified: verified, verifyFailure: verifyFailure,
+                           encrypted: passphrase != nil, buildDir: buildDir, dests: dests, notes: notes, contents: contents)
     }
 
     private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL, target: Target,

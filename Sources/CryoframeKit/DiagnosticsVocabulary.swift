@@ -1068,6 +1068,7 @@ var
 verification
 verified
 verify
+verifyfailure
 version
 version's
 versions
