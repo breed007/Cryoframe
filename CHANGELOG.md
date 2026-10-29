@@ -32,6 +32,7 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 ### Known limits
 - Each night's copy in a mirror's history keeps what that night's run changed, so a library rewritten in whole every night, such as one large database file, costs its full size each night. While a mirror has history, everything a run writes takes new room on the drive, and the check for room before a run counts it that way.
 - The decay check can't tell which files a changed part of a mirror's disk image held, and the earlier copies in the mirror's history may hold the same damage. Starting the mirror over is the way back. A mirror in a cloud folder is checked only when "Download cloud archives to check them" is on, since reading it downloads it.
+- Notifications posted by scheduled backups while the app is quit are new in 1.8 and haven't yet been seen on many Macs. If one doesn't appear when you expect it, check System Settings ▸ Notifications, and set up a remote alert if you want to be sure to hear about a failure.
 
 ### Going back to 1.7.0
 If you go back to 1.7.0, your jobs and backups still work, with these differences:

@@ -151,7 +151,7 @@ private struct GeneralSettings: View {
             } header: {
                 Text("Notifications")
             } footer: {
-                Text("When Cryoframe isn't open, scheduled backups post them for the runs and checks they make. Nothing is shown if notifications for Cryoframe are turned off in System Settings ▸ Notifications.")
+                Text("When Cryoframe isn't open, scheduled backups post notifications for the runs and checks they make. Nothing is shown if notifications for Cryoframe are turned off in System Settings ▸ Notifications.")
             }
             Section {
                 Picker("Send to", selection: $remoteAlertType) {

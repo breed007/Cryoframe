@@ -12,7 +12,7 @@ A job that keeps one up-to-date copy (a live mirror or plain files) works differ
 
 ## Mirror history
 
-A live mirror keeps the copy from each of the last 7 nights, unless you change it. In the job editor, under Keep, Keep history offers Off, 7, 14 or 30 nights. It applies to mirror jobs made before 1.8 too. If a job runs more than once a night, only the last copy of each night is kept.
+A live mirror keeps the copy from each of the last 7 nights, unless you change it. In the job editor, under Keep, Keep history offers Off, 7, 14 or 30 nights. It applies to mirror jobs made before 1.8 too. If a job runs more than once a night, only the last copy of each night is kept. The count is of days a run made a copy, so a weekly job set to 7 keeps about seven weeks.
 
 Each copy is an APFS clone of the mirror's disk image, kept in a folder named "Mirror history" beside it. A clone shares everything that hasn't changed since, so a night's copy takes about what changed in the library that night. A library rewritten every night, such as one whole large database file, costs its full size each night.
 
