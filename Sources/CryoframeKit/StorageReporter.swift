@@ -20,6 +20,10 @@ public struct ArchiveSize: Sendable, Identifiable {
     /// a plain-files copy's Removed items (see PlainCopy): this folder, which only the
     /// person empties, in Storage
     public var removedItems: URL? = nil
+    /// a live mirror's history (see MirrorHistory), newest first, whose `bytes` are
+    /// about what it holds on the drive; `historyOf`, the mirror's folder
+    public var history: [MirrorHistory.Entry]? = nil
+    public var historyOf: URL? = nil
 }
 
 public struct JobStorage: Sendable, Identifiable {
@@ -49,12 +53,14 @@ public struct JobStorage: Sendable, Identifiable {
     /// copy is one copy, and Removed items are what was deleted from it.
     public var contentsSummary: String {
         let versions = archives.filter { $0.version != nil && $0.removedItems == nil }.count
-        let current = archives.filter { $0.version == nil && $0.removedItems == nil && !$0.kept }.count
-        let kept = archives.filter { $0.version == nil && $0.removedItems == nil && $0.kept }.count
+        let current = archives.filter { $0.version == nil && $0.removedItems == nil && $0.history == nil && !$0.kept }.count
+        let kept = archives.filter { $0.version == nil && $0.removedItems == nil && $0.history == nil && $0.kept }.count
+        let earlier = archives.compactMap(\.history).reduce(0) { $0 + $1.count }
         var parts: [String] = []
         if versions > 0 { parts.append("\(versions) archive\(versions == 1 ? "" : "s")") }
         if current > 0 { parts.append(current == 1 ? "a current copy" : "\(current) current copies") }
         if kept > 0 { parts.append(kept == 1 ? "a kept copy" : "\(kept) kept copies") }
+        if earlier > 0 { parts.append(earlier == 1 ? "an earlier copy" : "\(earlier) earlier copies") }
         if archives.contains(where: { $0.removedItems != nil }) { parts.append("Removed items") }
         guard let last = parts.last else { return "nothing backed up yet" }
         return parts.count > 1 ? parts.dropLast().joined(separator: ", ") + " and " + last : last
@@ -80,6 +86,20 @@ public enum StorageReporter {
                             if FileManager.default.fileExists(atPath: removed.path) {
                                 archives.append(ArchiveSize(library: "\(a.libraryName) · Removed items", version: nil,
                                                             bytes: JobExecutor.directorySize(removed), removedItems: removed))
+                            }
+                            continue
+                        }
+                        if a.format == .liveMirror, a.version == nil {
+                            // the mirror, and its history, measured by what it holds on its
+                            // own: a clone reads as big as the image it shares its blocks with
+                            archives.append(ArchiveSize(library: a.libraryName, version: nil,
+                                                        bytes: JobExecutor.directorySize(a.dir, skipping: MirrorHistory.folderName),
+                                                        kept: LibraryFolders.isKept(a)))
+                            let entries = MirrorHistory.entries(in: a.dir)
+                            if !entries.isEmpty {
+                                archives.append(ArchiveSize(library: "\(a.libraryName) · Mirror history", version: nil,
+                                                            bytes: MirrorHistory.aboutBytes(entries), kept: LibraryFolders.isKept(a),
+                                                            history: entries, historyOf: a.dir))
                             }
                             continue
                         }

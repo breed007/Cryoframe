@@ -50,6 +50,8 @@ public struct JobDraftState: Sendable, Equatable {
     public var gfsDaily = 7
     public var gfsWeekly = 4
     public var gfsMonthly = 6
+    /// nights of history an up-to-date disk-image copy keeps (see MirrorHistory); 0: none
+    public var historyNights = MirrorHistory.defaultNights
 
     public var freqKind = FreqKind.daily
     public var dailyTime: Date
@@ -264,6 +266,30 @@ public struct JobDraftState: Sendable, Equatable {
         return open + "What you delete from a library is kept in Removed items beside its copy, until you delete it in Storage."
     }
 
+    /// Whether history can be kept: only for one up-to-date copy kept as a disk image,
+    /// on a drive that can clone it. Each destination that can't, with why, in the
+    /// editor's words; `allUnavailable`, no chosen destination can (the setting is
+    /// then shown off). Asking a drive can wait on it: call it off the main thread.
+    public func historyIssues(unavailable: (Target) -> MirrorHistory.Unavailable? = {
+        MirrorHistory.unavailable(at: $0.destinationDir, target: $0) }) -> (issues: [String], allUnavailable: Bool) {
+        guard formatKind == "mirror" else { return ([], false) }
+        let found = dedupedTargets.map { ($0, unavailable($0)) }
+        let issues = found.compactMap { t, why in why.map { Self.historyIssue($0, destination: t.displayName) } }
+        return (issues, !found.isEmpty && found.allSatisfy { $0.1 != nil })
+    }
+
+    /// why `destination` keeps no history, as the editor says it
+    public static func historyIssue(_ why: MirrorHistory.Unavailable, destination: String) -> String {
+        switch why {
+        case .cloud:
+            return "No history in \(destination): a cloud folder would upload a whole copy for every night kept."
+        case .network:
+            return "No history on \(destination): a network drive can't be counted on to share unchanged data between copies, so each night would take a whole copy."
+        case .noClones(let described):
+            return "No history on \(destination): it is \(described), and only an APFS drive can share unchanged data between copies."
+        }
+    }
+
     public var defaultName: String {
         let names = selectedLibraries.map(\.displayName)
         let lib = names.isEmpty ? "Libraries" : (names.count <= 2 ? names.joined(separator: ", ") : "\(names.count) libraries")
@@ -294,12 +320,15 @@ public struct JobDraftState: Sendable, Equatable {
             if targets.filter({ $0.rotation?.group == g }).count < 2,
                self.targets.filter({ $0.rotation?.group == g }).count >= 2 { targets[i].rotation = nil }
         }
-        return BackupJob(id: id, name: name.isEmpty ? defaultName : name,
+        var job = BackupJob(id: id, name: name.isEmpty ? defaultName : name,
                          libraries: selectedLibraries, targets: targets, format: format,
                          frequency: frequency(calendar: calendar), verification: verification, runPolicy: runPolicy,
                          enabled: editingEnabled, encrypted: encrypted,
                          retention: isSealed ? retentionPolicy : .keepAll,
                          createdAt: editingCreatedAt ?? now)
+        // the default isn't written, so a job keeps following it
+        if formatKind == "mirror", historyNights != MirrorHistory.defaultNights { job.mirrorHistoryNights = max(historyNights, 0) }
+        return job
     }
 
     // MARK: mutators
@@ -525,6 +554,7 @@ public struct JobDraftState: Sendable, Equatable {
         case .sealedZip: formatKind = "zip"
         case .liveMirror:
             formatKind = "mirror"
+            historyNights = job.historyNights
         case .plainFiles:
             formatKind = "plain"
         }

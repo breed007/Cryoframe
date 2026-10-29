@@ -54,6 +54,9 @@ public struct ArchiveResult: Sendable, Equatable {
     public let format: ArchiveFormat
     /// a live mirror's check for decay, made once it was sealed (see BandCheck)
     public var bandCheck: BandCheckReport?
+    /// what the run says beside its result: a live mirror's history removed to make
+    /// room, or not saved (see MirrorHistory)
+    public var notes: [String] = []
     public init(artifacts: [URL], format: ArchiveFormat) {
         self.artifacts = artifacts; self.format = format
     }

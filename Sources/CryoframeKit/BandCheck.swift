@@ -125,6 +125,9 @@ public struct BandCheckReport: Codable, Sendable, Equatable {
     /// why the check couldn't be made, or was cut off: a band that couldn't be read,
     /// say. That isn't decay, and the run only says so.
     public var error: String?
+    /// the entries of the mirror's history when decay was found: they share the
+    /// mirror's blocks on the drive, so they may hold the same decay (see MirrorHistory)
+    public var history: Int?
 
     public init(library: String, destination: String = "", total: Int = 0, checked: Int = 0, recorded: Int = 0,
                 mismatches: Int = 0, damaged: [String] = [], recent: Int = 0, unverified: Int = 0,
@@ -159,6 +162,8 @@ public struct BandCheckSummary: Codable, Sendable, Equatable {
             let n = mismatches
             return "found decay in \(n) of the mirror's data bands, so it can't be trusted: start it over"
                 + (damaged.count > 1 || copies.count > 1 ? " (\(damaged.map(\.library).joined(separator: ", ")))" : "")
+                + (damaged.contains { ($0.history ?? 0) > 0 }
+                   ? "; its history shares the same parts of the drive, so its earlier copies may hold the same damage" : "")
         }
         if let broken = copies.first(where: { $0.error != nil }), let why = broken.error {
             return "the mirror couldn't be checked for decay (\(why))"

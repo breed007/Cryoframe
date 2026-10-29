@@ -56,6 +56,13 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
     /// the person's go-ahead for the Keep rule to apply to versions its folders
     /// adopted (see AdoptedVersions.swift); nil: none given
     public var adoptionConsents: [AdoptionConsent]?
+    /// how many nights of a live mirror's history to keep (see MirrorHistory): 0 keeps
+    /// none; nil, the default. New in 1.8, and optional, so 1.7 reads the job and
+    /// drops the field when it next writes it, which stops new history and deletes none.
+    public var mirrorHistoryNights: Int?
+
+    /// the nights of history this job keeps, its own setting or the default
+    public var historyNights: Int { max(mirrorHistoryNights ?? MirrorHistory.defaultNights, 0) }
 
     /// the primary destination — the one a run must reach. Secondaries can fail to a
     /// partial-success without failing the whole run.
@@ -86,6 +93,7 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, libraries, contentType, target, targets, format, frequency, verification, runPolicy, enabled, encrypted, retention, createdAt, adoptionConsents
+        case mirrorHistoryNights
     }
 
     public init(from decoder: Decoder) throws {
@@ -113,6 +121,7 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         retention = try c.decodeIfPresent(RetentionPolicy.self, forKey: .retention) ?? .keepAll
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         adoptionConsents = try? c.decodeIfPresent([AdoptionConsent].self, forKey: .adoptionConsents)
+        mirrorHistoryNights = try? c.decodeIfPresent(Int.self, forKey: .mirrorHistoryNights)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -131,6 +140,7 @@ public struct BackupJob: Codable, Sendable, Identifiable, Equatable {
         try c.encode(retention, forKey: .retention)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(adoptionConsents, forKey: .adoptionConsents)
+        try c.encodeIfPresent(mirrorHistoryNights, forKey: .mirrorHistoryNights)
     }
 
     /// Re-resolve any built-in libraries to their current (possibly overridden)

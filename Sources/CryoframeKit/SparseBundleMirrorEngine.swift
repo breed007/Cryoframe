@@ -72,20 +72,25 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     let mountBase: URL            // where the image is attached while a run updates it (see MirrorMounts)
     /// the check for decay made once the image is sealed (see BandCheck); nil: none
     let bandCheck: BandCheck.Settings?
+    /// the nights of history to keep, saved once the image is sealed (see
+    /// MirrorHistory); nil: none saved, and none removed but to make room
+    let history: Int?
 
     public init(sizing: MirrorSizing = .fromDestination, bandSectors: Int = 16384,
                 runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil,
-                mountBase: URL = MirrorMounts.defaultBase, bandCheck: BandCheck.Settings? = nil) {
+                mountBase: URL = MirrorMounts.defaultBase, bandCheck: BandCheck.Settings? = nil,
+                history: Int? = nil) {
         self.sizing = sizing; self.bandSectors = bandSectors; self.runner = runner; self.passphrase = passphrase
-        self.mountBase = mountBase; self.bandCheck = bandCheck
+        self.mountBase = mountBase; self.bandCheck = bandCheck; self.history = history
     }
 
     /// a fixed-size image, as tests use
     public init(sizeGB: Int, bandSectors: Int = 16384,
                 runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil,
-                mountBase: URL = MirrorMounts.defaultBase, bandCheck: BandCheck.Settings? = nil) {
+                mountBase: URL = MirrorMounts.defaultBase, bandCheck: BandCheck.Settings? = nil,
+                history: Int? = nil) {
         self.init(sizing: .fixed(gb: sizeGB), bandSectors: bandSectors, runner: runner,
-                  passphrase: passphrase, mountBase: mountBase, bandCheck: bandCheck)
+                  passphrase: passphrase, mountBase: mountBase, bandCheck: bandCheck, history: history)
     }
 
     public func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
@@ -109,6 +114,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // "Start this mirror over", asked for a damaged mirror: its image is put aside
         // and this run makes a new one (see MirrorSeal.startOverIfAsked)
         try MirrorSeal.startOverIfAsked(bundle, in: destinationDir, runner: runner.forTeardown)
+        // an entry of the mirror's history a run died making (see MirrorHistory.save)
+        MirrorHistory.sweepPartials(in: destinationDir)
 
         // An image found damaged after an earlier run may not even mount. Unless a
         // check now finds it sound (someone repaired it), say so plainly rather than
@@ -197,19 +204,50 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         }
         try MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted)
         MirrorSeal.removeReplaced(bundle)       // a mirror started over is complete again
-        guard let bandCheck else { return result }
-        var checked = result
-        checked.bandCheck = checkBands(bundle, in: destinationDir, name: source.name, settings: bandCheck)
-        return checked
+        var sealed = result
+        sealed.notes = watch.historyRemoved.isEmpty ? [] : [MirrorHistory.roomNote(watch.historyRemoved)].compactMap { $0 }
+        if let bandCheck {
+            sealed.bandCheck = checkBands(bundle, in: destinationDir, name: source.name, settings: bandCheck)
+        }
+        // decay found isn't kept as history: the mirror can't be trusted
+        if let nights = history, (sealed.bandCheck?.mismatches ?? 0) == 0 {
+            sealed.notes += saveHistory(bundle, in: destinationDir, written: watch.written, nights: nights)
+        }
+        return sealed
+    }
+
+    /// Keep the sealed image as the newest entry of its history, then remove what the
+    /// job no longer keeps (see MirrorHistory). Holding the image's lock, with nothing
+    /// of it attached, so no attach changes it while it is cloned. A run whose history
+    /// couldn't be saved still backed up: it says so, and doesn't fail.
+    private func saveHistory(_ bundle: URL, in dir: URL, written: UInt64, nights: Int) -> [String] {
+        runner.control?.begin("Saving the mirror's history", stage: .finishing)
+        guard let lock = ImageLock.acquire(bundle, wait: ImageLock.patience, control: runner.control) else {
+            return ["the mirror's history wasn't saved this run: its disk image was in use"]
+        }
+        defer { lock.release() }
+        let attached = MirrorMounts.attachedImagesIfKnown(runner: runner.forTeardown)
+        let target = bundle.resolvingSymlinksInPath().path
+        guard let attached, !attached.contains(where: { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == target }) else {
+            return ["the mirror's history wasn't saved this run: its disk image was open elsewhere on this Mac, or that couldn't be told"]
+        }
+        do {
+            try MirrorHistory.save(bundle: bundle, in: dir, written: written, at: Date())
+        } catch {
+            return ["the mirror's history wasn't saved this run (\(error.localizedDescription))"]
+        }
+        return MirrorHistory.prune(in: dir, nights: nights)
     }
 
     /// Check the sealed image's bands for decay (see BandCheck). Decay found marks the
     /// mirror damaged, so the health check, Restore and the next run all say so.
     private func checkBands(_ bundle: URL, in dir: URL, name: String, settings: BandCheck.Settings) -> BandCheckReport {
-        let report = BandCheck.run(bundle: bundle, in: dir, library: name, settings: settings, control: runner.control)
+        var report = BandCheck.run(bundle: bundle, in: dir, library: name, settings: settings, control: runner.control)
         if report.mismatches > 0 {
             MirrorSeal.markDamaged(dir, why: MirrorSeal.decayReason(report.damaged))
             MirrorSeal.markDecayed(dir, bands: report.damaged)
+            let entries = MirrorHistory.entries(in: dir).count
+            if entries > 0 { report.history = entries }     // they share the decayed blocks
         }
         return report
     }
@@ -336,13 +374,16 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 
         let capacity = StorageReporter.volume(of: destinationDir).total
         let ceiling = Self.sectors(gb: sizing.imageGB(destinationCapacity: capacity)) * 512
+        let reserve = MirrorSizing.reserve(capacity: capacity)
+        // before making, growing or shrinking anything; the mirror's history goes,
+        // oldest first, before the mirror is refused room
+        if let needs = source.sizeHint {
+            try makingRoom(in: destinationDir, watch: watch) {
+                try Self.checkRoom(for: needs, image: bundle, imageBytes: .max, destination: destinationDir, reserve: reserve)
+            }
+        }
         // what is free now, not what could be purged later (see JobExecutor.freeNow)
         let free = JobExecutor.freeNow(for: destinationDir)
-        let reserve = MirrorSizing.reserve(capacity: capacity)
-        // before making, growing or shrinking anything
-        if let needs = source.sizeHint {
-            try Self.checkRoom(for: needs, image: bundle, imageBytes: .max, destination: destinationDir, reserve: reserve)
-        }
         var imageBytes: UInt64
         if !fm.fileExists(atPath: bundle.path) {
             imageBytes = MirrorSizing.targetBytes(ceiling: ceiling, held: 0, free: free, reserve: reserve, minimum: 0)
@@ -356,7 +397,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                                  touched: &touched) ?? ceiling
         }
         if let needs = source.sizeHint {
-            try Self.checkRoom(for: needs, image: bundle, imageBytes: imageBytes, destination: destinationDir, reserve: reserve)
+            try makingRoom(in: destinationDir, watch: watch) {
+                try Self.checkRoom(for: needs, image: bundle, imageBytes: imageBytes, destination: destinationDir, reserve: reserve)
+            }
         }
 
         // watch the drive for as long as the image is attached (see MirrorWriteGuard)
@@ -424,7 +467,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             MountPoint.detach(mountpoint, runner: teardown)
             guard !MountPoint.isMounted(mountpoint) else { throw MountPointError.stillMounted(mountpoint.path) }
             try attach()
-            try MirrorCopy.verify(staged, against: source.root, control: runner.control, excluded: Set(source.excluded))
+            watch.written = try MirrorCopy.verify(staged, against: source.root, control: runner.control, excluded: Set(source.excluded))
             drive.sample()
             if drive.dipped { throw MirrorCopyError.driveFilledByAnother(swapped: false) }
             // what the library no longer holds is kept in the image before the previous
@@ -454,6 +497,20 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         MirrorCopy.flush(volume: mountpoint)
         MountPoint.detach(mountpoint, runner: teardown)
         guard !MountPoint.isMounted(mountpoint) else { throw MountPointError.stillMounted(mountpoint.path) }
+    }
+
+    /// `check`, a room check, run again after each entry of the mirror's history is
+    /// removed, oldest first, while it finds the drive short of room (see
+    /// MirrorHistory.makeRoom). The mirror always comes before its history; what went
+    /// is recorded in `watch` for the run to say. Out of history, the refusal stands.
+    private func makingRoom(in dir: URL, watch: RunWatch, _ check: () throws -> Void) throws {
+        let gone = MirrorHistory.makeRoom(MirrorHistory.entries(in: dir), fits: {
+            do { try check(); return true }
+            catch let e as MirrorSpaceError where e.isShortOfRoom { return false }
+            catch { return true }       // not a lack of room: the check below says what
+        }, remove: { e in (try? MirrorHistory.remove(e, in: dir)) != nil })
+        watch.historyRemoved += gone
+        try check()                     // the verdict, after whatever went
     }
 
     /// Size the image to `MirrorSizing.targetBytes`: grow one made at an older fixed
@@ -558,6 +615,14 @@ public enum MirrorSpaceError: Error, Equatable {
     /// the room is there, but only by eating into what is kept free on the drive
     case notEnoughRoomBesideReserve(needed: UInt64, free: UInt64, reserve: UInt64)
     case couldNotResize(String)
+
+    /// the drive hasn't the room, as opposed to the image (see makingRoom)
+    var isShortOfRoom: Bool {
+        switch self {
+        case .notEnoughRoom, .notEnoughRoomUntilPurged, .notEnoughRoomBesideReserve: return true
+        case .imageTooSmall, .couldNotResize: return false
+        }
+    }
 }
 
 extension MirrorSpaceError: LocalizedError {
@@ -714,13 +779,18 @@ public enum MirrorSeal {
 
     /// what a check says about the mirror in `dir`, recorded as damaged for `why`
     public static func damagedDetail(_ why: String, in dir: URL) -> String {
-        isDecayed(dir) ? decayedDetail(why) : damagedDetail(why)
+        isDecayed(dir) ? decayedDetail(why, history: !MirrorHistory.entries(in: dir).isEmpty) : damagedDetail(why)
     }
 
-    /// what a check says about a mirror whose bands decayed
-    public static func decayedDetail(_ why: String) -> String {
+    /// what a check says about a mirror whose bands decayed. `history`: the mirror
+    /// has history, which shares its blocks (see MirrorHistory).
+    public static func decayedDetail(_ why: String, history: Bool = false) -> String {
         "part of the mirror's disk image changed on its drive after it was written (\(why)), which is what a failing drive does; the backup in it can't be trusted. Start this mirror over from Storage."
+            + (history ? historyShares : "")
     }
+
+    /// what is said wherever decay is reported of a mirror that has history
+    static let historyShares = " The mirror's history shares the same parts of the drive, so its earlier copies may hold the same damage."
 
     // MARK: decay (see BandCheck)
     //

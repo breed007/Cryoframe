@@ -30,6 +30,10 @@ final class RunWatch: @unchecked Sendable {
     var drive: DriveWatch?
     /// the new copy went in place
     var swapped = false
+    /// the bytes of the files the run wrote into the image (see MirrorCopy.verify)
+    var written: UInt64 = 0
+    /// the entries of the mirror's history removed to make room (see MirrorHistory)
+    var historyRemoved: [MirrorHistory.Entry] = []
 }
 
 /// the lowest free space seen on a drive while a run writes to it.

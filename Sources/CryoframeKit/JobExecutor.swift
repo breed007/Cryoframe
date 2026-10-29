@@ -569,7 +569,7 @@ public struct JobExecutor: Sendable {
                         do {
                             results.append(try self.direct(job: job, library: library, source: source,
                                                            dest: libDir, target: t, runner: runner,
-                                                           passphrase: passphrase, onStage: onStage))
+                                                           passphrase: passphrase, notes: &notes, onStage: onStage))
                             poller.cancel()
                         } catch is CancelledError {
                             poller.cancel(); cancelled = true; break libraryLoop
@@ -1461,13 +1461,18 @@ public struct JobExecutor: Sendable {
     }
 
     private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL, target: Target,
-                        runner: CommandRunner, passphrase: String?,
+                        runner: CommandRunner, passphrase: String?, notes: inout [String],
                         onStage: @escaping @Sendable (BackupStage) -> Void) throws -> LibraryRunResult {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        // the nights of history the mirror keeps, where its drive can (see MirrorHistory)
+        let history = job.historyNights > 0 && MirrorHistory.unavailable(at: dest, target: target) == nil ? job.historyNights : nil
         // the mirror engine writes its own manifest: it has to re-seal the image after
         // a run that stops part-way, too (see MirrorSeal)
         let archive = try EngineFactory.engine(for: job.format, target: target, runner: runner, passphrase: passphrase,
-                                               bandCheck: bandChecks?.settings(for: job, target: target)).archive(source, to: dest)
+                                               bandCheck: bandChecks?.settings(for: job, target: target),
+                                               history: history).archive(source, to: dest)
+        let named = job.libraries.count > 1 || job.targets.count > 1 ? "\(library.displayName) on \(target.displayName): " : ""
+        for n in archive.notes where !notes.contains(named + n) { notes.append(named + n) }
         if var check = archive.bandCheck {
             check.library = library.displayName; check.destination = target.displayName
             runner.control?.record(check)           // for the run's record (see RunRecord.make)

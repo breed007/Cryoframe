@@ -138,8 +138,10 @@ enum MirrorCopy {
     /// A plain-files copy (see PlainCopy) is checked the same way, less the items it
     /// leaves out (`excluded`), and with its reads not cached (`uncached`): it has no
     /// image to detach.
+    /// Returns the bytes of the files the run wrote.
+    @discardableResult
     static func verify(_ s: Staged, against source: URL, control: RunControl?,
-                       excluded: Set<String> = [], uncached: Bool = false) throws {
+                       excluded: Set<String> = [], uncached: Bool = false) throws -> UInt64 {
         var found = try structure(of: s.next, against: source, previous: s.current, control: control, excluded: excluded)
         // the bytes of everything this run wrote, several files at a time (opening a
         // file is most of the cost for small ones)
@@ -160,6 +162,7 @@ enum MirrorCopy {
             found.note(rel.isEmpty ? "the library folder" : rel, what)
         }
         guard found.count == 0 else { throw MirrorCopyError.readBackMismatch(count: found.count, examples: found.examples) }
+        return found.writtenBytes
     }
 
     /// what differs between a copy and the library, item by item, and which files the
@@ -1041,6 +1044,7 @@ extension MirrorCopyError: LocalizedError {
             return "the mirror's disk image (\(image)) was found damaged after an earlier run whose drive filled (\(why)), and it still is. Its backup can't be trusted and may not open. To start this mirror afresh, choose Start This Mirror Over in Storage: the damaged image is kept until the new mirror is complete."
         case .imageDecayed(let image, let why):
             return "part of the mirror's disk image (\(image)) changed on its drive after it was written (\(why)). That is what a failing drive does, and the backup in it can't be trusted, so it isn't updated. Choose Start This Mirror Over in Storage to make a new one, on another drive if this one is failing; the damaged image is kept until the new mirror is complete."
+                + (MirrorHistory.entries(in: URL(fileURLWithPath: image).deletingLastPathComponent()).isEmpty ? "" : MirrorSeal.historyShares)
         case .updateNotConfirmed(let count, let examples):
             return "the mirror's update didn't reach the drive intact: checked afterwards, its copy differs from the library (\(count) item\(count == 1 ? "" : "s"): \(examples.joined(separator: "; "))). The mirror's disk image checked out and holds a complete copy, most likely the previous one. Run again; if this repeats, check the drive."
         case .couldNotConfirm(let why):

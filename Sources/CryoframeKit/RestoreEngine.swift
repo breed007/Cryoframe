@@ -144,6 +144,9 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
     /// versions holding them (see RemovedArchive), not a version of the library: its
     /// name says so, so it is never restored in place of the library
     public var removedItems = false
+    /// an earlier copy of a live mirror, kept in its history (see MirrorHistory);
+    /// `version` is when it was made
+    public var mirrorHistory = false
 
     public init(dir: URL, libraryName: String, format: ArchiveFormat, bytes: UInt64,
                 artifactNames: [String], encrypted: Bool = false, version: Date? = nil, libraryKey: String? = nil,
@@ -162,7 +165,7 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
 
     /// the folder holding the library's archives (a version's parent, or a mirror's own)
     public var libraryFolder: URL {
-        removedItems ? dir.deletingLastPathComponent().deletingLastPathComponent()
+        removedItems || mirrorHistory ? dir.deletingLastPathComponent().deletingLastPathComponent()
             : version != nil ? dir.deletingLastPathComponent() : dir
     }
 
@@ -206,9 +209,19 @@ public enum RestoreDiscovery {
     /// With `removedItems`, also each library folder's removed-items archives (see
     /// RemovedArchive), for Restore: they aren't versions of the library, so nothing
     /// that counts, measures, pairs or rehearses versions is handed them.
-    public static func scan(_ folder: URL, maxDepth: Int = 2, downloading: Bool = true, removedItems: Bool = false) -> [RestorableArchive] {
+    ///
+    /// With `history`, also each live mirror's history (see MirrorHistory), for
+    /// Restore, after the mirror: earlier copies of it, not versions of the library.
+    /// Without it, a scan finds what 1.7's does.
+    public static func scan(_ folder: URL, maxDepth: Int = 2, downloading: Bool = true, removedItems: Bool = false,
+                            history: Bool = false) -> [RestorableArchive] {
         var out: [RestorableArchive] = []
         walk(folder, depth: 0, maxDepth: maxDepth, downloading: downloading, removedItems: removedItems, into: &out)
+        if history {
+            for mirror in out where mirror.format == .liveMirror && mirror.version == nil {
+                out += MirrorHistory.entries(in: mirror.dir).compactMap { archive(at: $0.dir) }
+            }
+        }
         // two libraries of one name (two folders, or a library's folder and a 1.5
         // folder of its name): tell them apart by folder
         let folders = Dictionary(grouping: out, by: \.libraryName).mapValues { Set($0.map { $0.libraryFolder.lastPathComponent }) }
@@ -217,6 +230,7 @@ public enum RestoreDiscovery {
         }
         return out.sorted {
             $0.libraryName != $1.libraryName ? $0.libraryName < $1.libraryName
+                : $0.mirrorHistory != $1.mirrorHistory ? !$0.mirrorHistory      // a mirror's history after it
                 : ($0.version ?? .distantPast) > ($1.version ?? .distantPast)   // newest version first
         }
     }
@@ -289,7 +303,9 @@ public enum RestoreDiscovery {
         var folder = version != nil ? dir.deletingLastPathComponent() : dir
         let removed = version != nil && folder.lastPathComponent == PlainCopyLayout.removedFolder
             && LibraryIdentity.read(in: folder.deletingLastPathComponent()) != nil
-        if removed { folder = folder.deletingLastPathComponent() }
+        // an entry of a mirror's history: the library's is the mirror's folder
+        let history = version != nil && m.format == .liveMirror && folder.lastPathComponent == MirrorHistory.folderName
+        if removed || history { folder = folder.deletingLastPathComponent() }
         let identity = LibraryIdentity.read(in: folder)
         let name = identity?.name ?? folder.lastPathComponent
         var a = RestorableArchive(dir: dir, libraryName: removed ? RestorableArchive.removedItemsName(name) : name, format: m.format,
@@ -297,6 +313,7 @@ public enum RestoreDiscovery {
                                   encrypted: m.encrypted ?? false, version: version, libraryKey: identity?.key)
         a.contents = m.contents
         a.removedItems = removed
+        a.mirrorHistory = history
         return a
     }
 
