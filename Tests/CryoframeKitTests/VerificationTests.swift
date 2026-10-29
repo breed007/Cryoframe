@@ -174,7 +174,7 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
             ? CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - Resource temporarily unavailable")
             : CommandResult(status: 0, stdout: "ok", stderr: "")
     }
-    let r = try TestDiskImages.run(["attach"])
+    let r = try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach"])
     #expect(r.ok)
     #expect(attempts.value == 3)          // failed twice, succeeded on the third
 }
@@ -185,7 +185,7 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
         _ = attempts.bump()
         return CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - no such file or directory")
     }
-    let r = try TestDiskImages.run(["attach"])
+    let r = try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach"])
     #expect(!r.ok)
     #expect(attempts.value == 1)          // a genuine error fails fast, no backoff
 }
