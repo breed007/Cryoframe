@@ -666,9 +666,9 @@ public struct JobExecutor: Sendable {
                         poller.cancel()
                         // confirm the copy matches the verified build, so a copy that was
                         // corrupted in transit can't masquerade as a good backup.
-                        guard Self.copyMatches(result, expectedDigest: build.contentDigest, expectedBytes: build.byteSize) else {
+                        guard Self.confirmCopy(result, in: destDir, expectedDigest: build.contentDigest, expectedBytes: build.byteSize) else {
                             results.append(.failed(library: build.library.displayName, destination: dest.displayName,
-                                error: "the copy at \(dest.displayName) didn't match the source — it may have been corrupted in transit"))
+                                error: "the copy at \(dest.displayName) didn't match the source — it may have been corrupted in transit, so it was removed"))
                             continue
                         }
                         results.append(.completed(library: build.library.displayName, destination: dest.displayName,
@@ -1015,14 +1015,27 @@ public struct JobExecutor: Sendable {
         job.targets.flatMap { t in job.libraries.compactMap { lib in folderOf[t.id]?[lib.id].map { (lib, $0) } } }
     }
 
-    /// confirm a distributed copy matches the verified build. A single file is hashed
-    /// against the build's digest; split parts must sum to the build's byte size (their
-    /// per-part manifest covers content integrity at restore/health time).
-    static func copyMatches(_ result: ArchiveResult, expectedDigest: String, expectedBytes: UInt64) -> Bool {
-        if result.artifacts.count == 1 {
-            guard let d = try? Checksum.sha256(of: result.artifacts[0]) else { return false }
-            return expectedDigest.isEmpty || d == expectedDigest   // empty = couldn't hash at build; don't block
+    /// Whether the copy in `versionDir` matches the build; one that doesn't is removed,
+    /// its manifest first. Left there, that manifest, hashed from the damaged copy,
+    /// passed every later check, and the Keep rule counted it as the newest version.
+    static func confirmCopy(_ result: ArchiveResult, in versionDir: URL, expectedDigest: String, expectedBytes: UInt64) -> Bool {
+        guard copyMatches(result, expectedDigest: expectedDigest, expectedBytes: expectedBytes) else {
+            unlink(versionDir.appendingPathComponent(ArchiveManifest.sidecarName).path)
+            try? FileManager.default.removeItem(at: versionDir)
+            return false
         }
+        return true
+    }
+
+    /// confirm a distributed copy matches the verified build: hashed against the
+    /// build's digest, split parts joined in order (split(1) is byte-exact, so they
+    /// hash to the build's digest). The per-part manifest is hashed from the parts on
+    /// the drive, so it can't catch damage on the way there. With no digest (the build
+    /// couldn't be hashed) a split copy's size is all that is compared.
+    static func copyMatches(_ result: ArchiveResult, expectedDigest: String, expectedBytes: UInt64) -> Bool {
+        guard let d = try? Checksum.sha256(of: result.artifacts) else { return false }
+        guard expectedDigest.isEmpty else { return d == expectedDigest }
+        if result.artifacts.count == 1 { return true }     // couldn't hash at build; don't block
         let total = result.artifacts.reduce(UInt64(0)) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size]) as? UInt64 ?? 0) }
         return total == expectedBytes
     }

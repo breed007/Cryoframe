@@ -13,16 +13,24 @@ public enum Checksum {
     /// With `control`, Stop ends the hash (CancelledError) within 64 MB: a check of a
     /// large archive on a slow drive hashes for many minutes.
     public static func sha256(of file: URL, control: RunControl? = nil) throws -> String {
-        let handle = try FileHandle(forReadingFrom: file)
-        defer { try? handle.close() }
+        try sha256(of: [file], control: control)
+    }
+
+    /// the digest of `files` joined end to end, in order: a split archive's parts
+    /// hash to the digest of the file they were split from
+    public static func sha256(of files: [URL], control: RunControl? = nil) throws -> String {
         var hasher = SHA256()
         var chunks = 0
-        while true {
-            if let control, chunks % 64 == 0, control.isCancelled { throw CancelledError() }
-            let chunk = try handle.read(upToCount: 1 << 20) ?? Data()
-            if chunk.isEmpty { break }
-            hasher.update(data: chunk)
-            chunks += 1
+        for file in files {
+            let handle = try FileHandle(forReadingFrom: file)
+            defer { try? handle.close() }
+            while true {
+                if let control, chunks % 64 == 0, control.isCancelled { throw CancelledError() }
+                let chunk = try handle.read(upToCount: 1 << 20) ?? Data()
+                if chunk.isEmpty { break }
+                hasher.update(data: chunk)
+                chunks += 1
+            }
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
