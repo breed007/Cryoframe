@@ -224,6 +224,26 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(gone.error?.contains("went away") == true && !gone.failed, "\(String(describing: gone.error))")
     }
 
+    // Pause holds the check between bands, and the time paused isn't taken from its cap.
+    @Test func pauseHoldsTheCheckWithoutUsingItsTime() async throws {
+        let dir = tempDir("pause")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundle = try fakeBundle(in: dir, bands: 3)
+        let control = RunControl()
+        #expect(control.pause())
+        let resumer = Task.detached {
+            try? await Task.sleep(for: .milliseconds(400))
+            control.resume()
+        }
+        let started = Date()
+        var firstRead: Date?
+        let r = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(cap: 0.2), now: t0, control: control,
+                              hash: { url, c in firstRead = firstRead ?? Date(); return try Checksum.sha256(of: url, control: c) })
+        await resumer.value
+        #expect(try #require(firstRead).timeIntervalSince(started) >= 0.35)
+        #expect(r.checked == 3 && !r.stoppedEarly, "\(r)")
+    }
+
     @Test func aCloudFolderIsSkippedUnlessItsDownloadSettingIsOn() throws {
         let job = BackupJob(id: "j", name: "j", libraries: [.genericFolder(id: "l", displayName: "Lib", path: .home("Lib"))],
                             target: .localVolume(id: "t", name: "Disk", dir: URL(fileURLWithPath: "/tmp/x")),

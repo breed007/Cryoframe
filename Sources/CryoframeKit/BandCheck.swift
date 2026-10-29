@@ -347,7 +347,7 @@ public enum BandCheck {
     /// record what was read. Nothing may write to the image meanwhile: the caller holds
     /// the job's run lock, with the image detached.
     ///
-    /// The time cap covers the whole check. Bands this run changed are read first,
+    /// The time cap covers the whole check, less any time paused. Bands this run changed are read first,
     /// since a band not read until later could rot unseen in between; any the cap
     /// leaves unread are recorded unread, and are first in line next time.
     ///
@@ -362,6 +362,8 @@ public enum BandCheck {
                            hash: (URL, RunControl?) throws -> String = { try Checksum.sha256(of: $0, control: $1) }) -> BandCheckReport {
         var report = BandCheckReport(library: library)
         if let skip = settings.skip { report.skipped = skip; return report }
+        // from the start: listing a share's bands can be slow too
+        var deadline = clock().addingTimeInterval(settings.timeCap)
         let found: [BandStat]
         do { found = try stats(of: bundle) } catch {
             report.error = "its data bands couldn't be listed: \(error.localizedDescription)"
@@ -373,7 +375,6 @@ public enum BandCheck {
         let size = sliceSize(total: found.count, interval: settings.interval)
         var work = Self.plan(table: table, found: found, sliceSize: size)
         let bands = bundle.appendingPathComponent("bands", isDirectory: true)
-        let deadline = clock().addingTimeInterval(settings.timeCap)
         let bytes = (work.rehash + work.slice).reduce(UInt64(0)) { $0 + (work.table.entries[$1]?.size ?? 0) }
         control?.begin("Checking the mirror for decay", stage: .verifying, unit: .bytes, total: bytes)
         defer { control?.endStep() }
@@ -382,6 +383,12 @@ public enum BandCheck {
         var stopped = false
         var unread: (band: String, why: Error)?
         func readBand(_ name: String) -> String? {
+            // Pause holds the check here, between bands, and gives it back the time
+            if let control, control.isPaused {
+                let held = clock()
+                control.waitWhilePaused()
+                deadline = deadline.addingTimeInterval(clock().timeIntervalSince(held))
+            }
             if stopped || control?.isCancelled == true || clock() >= deadline { stopped = true; return nil }
             defer { control?.advance(by: work.table.entries[name]?.size ?? 0) }
             do { return try hash(bands.appendingPathComponent(name), control) }
