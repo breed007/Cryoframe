@@ -69,8 +69,8 @@ struct HelpView: View {
                     }
 
                     section("Notifications & the menu bar") {
-                        bullet("Cryoframe shows a status item in the menu bar: a glance at each job's last run, with a red triangle if anything failed. It also keeps the app resident, so it can notify you of scheduled runs even with the window closed. Quit it from the menu bar's Quit item.")
-                        bullet("Choose when to be notified in Settings ▸ General ▸ Notifications: never, on failure (default), or on every run.")
+                        bullet("Cryoframe shows a status item in the menu bar: a glance at each job's last run, with a red triangle if anything failed. It also keeps the app resident with its window closed. Quit it from the menu bar's Quit item; scheduled backups still run.")
+                        bullet("Choose when to be notified in Settings ▸ General ▸ Notifications: never, on failure (default), or on every run. Notifications appear even when Cryoframe isn't open, as long as notifications for Cryoframe are allowed in System Settings ▸ Notifications.")
                         bullet("Remote alerts (Settings ▸ General ▸ Remote alerts) push a failed, partial, or overdue backup to your phone or a chat channel via ntfy or a webhook (Slack/Discord/custom), for when you're away from the Mac. Use Send test alert to confirm it reaches you.")
                     }
 

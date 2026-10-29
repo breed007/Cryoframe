@@ -6,8 +6,10 @@
 //  resumes interrupted transfers, then runs any due jobs (up to the concurrency
 //  limit) through the same JobExecutor the GUI uses, then exits. Every run holds
 //  its job's run lock, so a job the app is already running is left to the app.
+//  When the app isn't open, it also posts the notices the app would have (Notifier).
 //
 
+import AppKit
 import Foundation
 import ServiceManagement
 import CryoframeShared
@@ -44,6 +46,7 @@ enum AgentMain {
         var due = Scheduler().jobsToStart(store.load(), now: Date(), running: running,
                                           stoppedThisPass: resumes.stoppedJobIDs)
         var alerts: [RunRecord] = []      // failures to start, delivered once the run loop is done
+        let finished = Finished()         // every run's record, for the notices on this Mac
         var notices: [(payload: AlertPolicy.Payload, record: RunRecord)] = []     // deferrals that have gone on
         let historyStore = RunHistoryStore.standard()
         // One history record per run of deferrals, kept up to date, rather than one
@@ -118,6 +121,7 @@ enum AgentMain {
                                                    startedAt: started, finishedAt: Date(), trigger: "scheduled")
                     }
                     historyStore.append(record)
+                    finished.add(record)
                     // each destination's trend, and a cloud run's versions for the upload check
                     RunFollowUp.record(record, job: current, health: .standard(), uploads: .standard(),
                                        lastCheck: HealthStore.standard().latest(forJob: current.id), checks: .standard())
@@ -141,7 +145,10 @@ enum AgentMain {
             storage: StorageReporter.report(store.load().jobs),
             retention: Dictionary(uniqueKeysWithValues: store.load().jobs.map { ($0.id, $0.retention) })
         ).filter { $0.kind == .tight && StorageNag.shouldWarn($0.destination, now: Date()) }
-        let overdue = overdueNotices(jobs: store.load().jobs, history: historyStore, lastRun: store.load().lastRun, now: Date())
+        let remoteThrottle = AlertThrottle(key: AlertThrottle.overdueRemoteKey), overdueAt = Date()
+        let overdue: [(AlertPolicy.Payload, @Sendable () -> Void)] = overdueAlerts(
+            jobs: store.load().jobs, history: historyStore, lastRun: store.load().lastRun, now: overdueAt, throttle: remoteThrottle)
+            .map { alert in (alert.payload, { remoteThrottle.recordSent(alert.subject, now: overdueAt) }) }
         sleepGuard.end()
 
         // Send everything before exiting. This process is the ONLY thing that will
@@ -149,6 +156,7 @@ enum AgentMain {
         // marks every record that predates its launch as already-seen, so a failure
         // it wasn't running for is never announced later.
         // re-point the optional pmset wake at the next due job (lastRun may have changed).
+        let runs = alerts + finished.records, madeChecks = checks      // for the notices, after
         let sem = DispatchSemaphore(value: 0)
         Task {
             for record in alerts { await RemoteAlert.deliver(for: record) }
@@ -172,15 +180,67 @@ enum AgentMain {
             sem.signal()
         }
         sem.wait()
+
+        // Last of all, so that if macOS won't take them nothing above has changed.
+        // Looked for here, on the main thread, just before posting.
+        let appOpen = appIsOpen()
+        let posted = DispatchSemaphore(value: 0)
+        Task {
+            await postNotices(runs: runs, checks: madeChecks, pressure: pressure, store: store, history: historyStore,
+                              appOpen: appOpen)
+            posted.signal()
+        }
+        posted.wait()
         exit(0)
     }
 
+    /// Notices on this Mac for what this pass did, as the app would post them (see
+    /// Notifier): when macOS allows them and the app isn't open. Each call to the
+    /// notification center is given up after 5 seconds (LocalNotice).
+    private static func postNotices(runs: [RunRecord], checks: [CheckRecording.Outcome],
+                                    pressure: [StoragePressure.Finding], store: JobStore, history: RunHistoryStore,
+                                    appOpen: Bool) async {
+        let policy = Notifier.current()
+        // the notification center needs the app's bundle; and with the app open, it posts
+        guard policy != .never, !appOpen, Bundle.main.bundleIdentifier != nil else { return }
+        let now = Date()
+        let ran = Set(history.all().map(\.jobID))
+        var notices = runs.compactMap { NoticeContent.run($0, policy: policy) }
+        for check in checks {
+            switch check {
+            case .recorded(let record):
+                if let n = NoticeContent.health(record, policy: policy, jobHasRun: ran.contains(record.jobID)) { notices.append(n) }
+            case .canceled(let stopped):
+                if let n = NoticeContent.stopped(stopped, policy: policy) { notices.append(n) }
+            }
+        }
+        notices += pressure.compactMap { NoticeContent.storage($0, policy: policy, now: now) }
+        // overdue jobs, from the ledger the app posts from too
+        let ledger = AlertThrottle.overdueLocal()
+        let overdue = overdueAlerts(jobs: store.load().jobs, history: history, lastRun: store.load().lastRun,
+                                    now: now, throttle: ledger)
+        guard !notices.isEmpty || !overdue.isEmpty,
+              AgentNotices.shouldPost(appOpen: appOpen, authorization: await LocalNotice.authorization()) else { return }
+        for notice in notices { await LocalNotice.post(notice) }
+        for alert in overdue {
+            guard let notice = NoticeContent.overdue(alert.payload, subject: alert.subject, policy: policy, now: now),
+                  let claim = ledger.claim(alert.subject, now: now) else { continue }
+            if !(await LocalNotice.post(notice)) { ledger.release(claim) }
+        }
+    }
+
+    /// whether the app is open: another process of this bundle, as macOS lists apps
+    private static func appIsOpen() -> Bool {
+        guard let id = Bundle.main.bundleIdentifier else { return false }
+        let me = getpid()
+        return NSRunningApplication.runningApplications(withBundleIdentifier: id).contains { $0.processIdentifier != me }
+    }
+
     /// Scheduled jobs gone late, as alerts (see AlertPolicy.overdueAlerts), each with
-    /// what to call once it has been delivered, so one that couldn't go is tried again
-    /// at the next pass.
-    private static func overdueNotices(jobs: [BackupJob], history: RunHistoryStore, lastRun: [String: Date],
-                                       now: Date) -> [(AlertPolicy.Payload, @Sendable () -> Void)] {
-        let throttle = AlertThrottle(key: AlertThrottle.overdueRemoteKey)
+    /// the subject to record in `throttle` once it has been delivered, so one that
+    /// couldn't go is tried again at the next pass.
+    private static func overdueAlerts(jobs: [BackupJob], history: RunHistoryStore, lastRun: [String: Date],
+                                      now: Date, throttle: AlertThrottle) -> [(payload: AlertPolicy.Payload, subject: String)] {
         let all = history.all()
         var latest: [String: RunRecord] = [:]
         for r in all where latest[r.jobID] == nil { latest[r.jobID] = r }
@@ -190,7 +250,14 @@ enum AgentMain {
         }
         return AlertPolicy.overdueAlerts(jobs: jobs, latest: latest, lastGood: history.lastGood(), unrecordedRuns: unrecorded,
                                          now: now, throttle: throttle)
-            .map { alert in (alert.payload, { throttle.recordSent(alert.subject, now: now) }) }
+    }
+
+    /// the records of the runs this pass made, added as each finishes
+    private final class Finished: @unchecked Sendable {
+        private let lock = NSLock()
+        private var list: [RunRecord] = []
+        var records: [RunRecord] { lock.lock(); defer { lock.unlock() }; return list }
+        func add(_ record: RunRecord) { lock.lock(); list.append(record); lock.unlock() }
     }
 
     /// Ask the helper to clean up after crashed runs before any run of ours starts.

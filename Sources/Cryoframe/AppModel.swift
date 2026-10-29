@@ -831,15 +831,14 @@ final class AppModel: ObservableObject {
     /// this Mac, with the same rules as the agent's remote alert: once a day, and at
     /// once again when it turns critical. Those went only to ntfy or a webhook, so
     /// without either set up the dashboard was the only place it showed. When the app
-    /// isn't running, only the remote alert (if set up) says so; the dashboard shows it
-    /// when the app next opens.
+    /// isn't running, the scheduled agent posts the same notice, from the same ledger.
     private func notifyOverdue() {
         guard Notifier.current() != .never else { return }
         let now = Date()
-        let throttle = AlertThrottle(key: AlertThrottle.overdueLocalKey)
+        let ledger = AlertThrottle.overdueLocal()
         for alert in AlertPolicy.overdueAlerts(jobs: jobs, latest: lastRecords, lastGood: lastGood,
-                                               unrecordedRuns: unrecordedRuns, now: now, throttle: throttle) {
-            Notifier.notifyOverdue(alert.payload, id: alert.subject) { throttle.recordSent(alert.subject, now: now) }
+                                               unrecordedRuns: unrecordedRuns, now: now, throttle: ledger) {
+            Notifier.notifyOverdue(alert.payload, subject: alert.subject, ledger: ledger, now: now)
         }
     }
 

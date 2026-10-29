@@ -222,6 +222,7 @@ copying
 cores
 corrupt
 corrupted
+corruption
 could
 couldn't
 count
@@ -276,6 +277,7 @@ destinations
 detach
 detached
 details
+detected
 dev
 device
 diagnostics
@@ -690,6 +692,7 @@ none
 not
 note
 nothing
+notices
 nouchg
 noverify
 now

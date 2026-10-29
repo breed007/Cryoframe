@@ -151,7 +151,7 @@ private struct GeneralSettings: View {
             } header: {
                 Text("Notifications")
             } footer: {
-                Text("Cryoframe stays in the menu bar so it can notify you of scheduled-run results even when the window is closed. Quit it from the menu bar to stop.")
+                Text("Shown even when Cryoframe isn't open: scheduled backups post them for the runs and checks they make. Nothing is shown if notifications for Cryoframe are turned off in System Settings ▸ Notifications.")
             }
             Section {
                 Picker("Send to", selection: $remoteAlertType) {
@@ -176,7 +176,7 @@ private struct GeneralSettings: View {
             } header: {
                 Text("Remote alerts")
             } footer: {
-                Text("Get a push on your phone when a backup fails, finishes partially, or an archive health check fails — even with the window closed. ntfy is the simplest (install the ntfy app, pick a topic). Fires independently of the notification setting above; the menu-bar app must be running to send.")
+                Text("Get a push on your phone when a backup fails, finishes partially, or an archive health check fails — even with the window closed. ntfy is the simplest (install the ntfy app, pick a topic). Fires independently of the notification setting above, and for scheduled backups whether or not the app is open.")
             }
             Section {
                 Picker("Re-verify archives", selection: $healthInterval) {

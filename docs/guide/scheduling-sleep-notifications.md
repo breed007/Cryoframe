@@ -24,7 +24,7 @@ Run now is never held back. Plugged in, on a desktop, or when the level cannot b
 
 ### Overdue jobs
 
-A scheduled job that has gone twice its interval without a good run is overdue: a nightly job with nothing good for two days, say. The dashboard turns that job yellow, and later red, because it judges each job by when it last ran well rather than by whether its last attempt happened. Cryoframe posts a notification while the app is running, and the scheduled agent sends a remote alert if you have set them up, at most once a day per job and again if it gets worse. The alerts stop once the job runs well.
+A scheduled job that has gone twice its interval without a good run is overdue: a nightly job with nothing good for two days, say. The dashboard turns that job yellow, and later red, because it judges each job by when it last ran well rather than by whether its last attempt happened. Cryoframe posts a notification on this Mac, whether or not the app is open, and sends a remote alert if you have set them up, at most once a day per job and again if it gets worse. The alerts stop once the job runs well.
 
 ## Keeping the Mac awake
 
@@ -40,13 +40,15 @@ This changes the system power schedule, which is why it is off by default and as
 
 ## The menu bar
 
-Cryoframe keeps a status item in the menu bar. It shows each job's last run at a glance and turns red if anything failed. The app stays resident there even with its window closed, which is what lets it run scheduled jobs and notify you about them. Quit it from the menu bar's Quit item.
+Cryoframe keeps a status item in the menu bar. It shows each job's last run at a glance and turns red if anything failed. The app stays resident there even with its window closed. Scheduled jobs run whether or not it is open. Quit it from the menu bar's Quit item.
 
 The menu-bar item also holds Verify all archives, Check for Updates, and Open Cryoframe.
 
 ## Notifications
 
 Choose when to be notified in Settings ▸ General ▸ Notifications: never, on failure, or on every run. On failure is the default. A failed health check notifies you as well, so a corrupted archive does not go unnoticed.
+
+Notifications appear even when Cryoframe isn't open. When the app is quit, the scheduled backups post them for the runs and checks they make, for overdue jobs, and for a destination about to run out of room. When the app is open, it posts them itself, so you never get the same one twice. If notifications for Cryoframe are turned off in System Settings ▸ Notifications, none appear, and remote alerts are the only way to hear about a failure.
 
 ## Remote alerts
 
@@ -57,4 +59,4 @@ Two kinds:
 - ntfy is the simplest. Install the ntfy app on your phone, pick a topic name, and enter `https://ntfy.sh/your-topic`. Anything sent to that topic arrives as a push.
 - Webhook posts a message to a URL. The payload includes both `text` and `content` fields, so a Slack or Discord incoming webhook works as-is, and a custom endpoint gets the structured fields too.
 
-Pick whether to alert on failures only or on every run, then use Send test alert to confirm it reaches you. Remote alerts fire independently of the notification setting above, so you can keep local banners off and still get the off-machine page. As with notifications, the menu-bar app has to be running to send them.
+Pick whether to alert on failures only or on every run, then use Send test alert to confirm it reaches you. Remote alerts fire independently of the notification setting above, so you can keep local banners off and still get the off-machine page. Alerts about scheduled backups are sent whether or not the app is open.

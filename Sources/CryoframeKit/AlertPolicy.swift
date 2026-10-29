@@ -159,44 +159,100 @@ public enum AlertPolicy {
 }
 
 /// Remembers when an alert about something was last sent, so the hourly agent says it
-/// once a day rather than every time it looks. Kept in `defaults` under `key`, by
-/// subject (a job id, a destination).
+/// once a day rather than every time it looks. Kept by subject (a job id, a
+/// destination), in `defaults` under `key`, or in a ledger file that the app and the
+/// agent share (see `overdueLocal`).
 public struct AlertThrottle: @unchecked Sendable {
     let defaults: UserDefaults
     let key: String
     let interval: TimeInterval
+    private let ledger: SharedJSONFile<[String: Double]>?
 
     /// overdue alerts sent to ntfy or a webhook, by the scheduled agent
     public static let overdueRemoteKey = "overdue.lastAlerted"
-    /// overdue notices posted on this Mac by the app while it runs. Kept apart from
-    /// the remote ones: the same subject in one key would let a notice on a screen
-    /// nobody is looking at hold back the alert to the phone for a day.
+    /// overdue notices posted on this Mac, where 1.7 kept them; 1.8 keeps them in a
+    /// ledger file instead (see `overdueLocal`). Kept apart from the remote ones: the
+    /// same subject in one place would let a notice on a screen nobody is looking at
+    /// hold back the alert to the phone for a day.
     public static let overdueLocalKey = "overdue.lastNotified"
 
     public init(defaults: UserDefaults = .standard, key: String, interval: TimeInterval = 24 * 60 * 60) {
-        self.defaults = defaults; self.key = key; self.interval = interval
+        self.defaults = defaults; self.key = key; self.interval = interval; ledger = nil
     }
 
-    public func shouldSend(_ subject: String, now: Date) -> Bool {
-        guard let last = (defaults.dictionary(forKey: key) as? [String: Double])?[subject] else { return true }
+    /// kept in the file at `url`, changed under its lock (see SharedJSONFile)
+    public init(ledgerAt url: URL, interval: TimeInterval = 24 * 60 * 60) {
+        defaults = .standard; key = ""; self.interval = interval
+        ledger = SharedJSONFile(url: url, lockName: url.deletingPathExtension().lastPathComponent + ".lock", empty: { [:] })
+    }
+
+    /// Overdue notices posted on this Mac. The app posts them while it runs and the
+    /// agent when it isn't open, so both keep them in one file, and a claim (see
+    /// `claim`) is made under its lock: the two looking at once post one notice.
+    public static func overdueLocal() -> AlertThrottle {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("app.cryoframe", isDirectory: true)
+        return AlertThrottle(ledgerAt: base.appendingPathComponent("overdue-notices.json"))
+    }
+
+    private func sent() -> [String: Double] {
+        ledger?.read() ?? (defaults.dictionary(forKey: key) as? [String: Double] ?? [:])
+    }
+
+    private func change<T>(_ edit: (inout [String: Double]) -> (changed: Bool, result: T)) -> T {
+        if let ledger { return ledger.update(edit) }
+        var map = defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
+        let (changed, result) = edit(&map)
+        if changed { defaults.set(map, forKey: key) }
+        return result
+    }
+
+    private func due(_ last: Double?, now: Date) -> Bool {
+        guard let last else { return true }
         return now.timeIntervalSince1970 - last >= interval || now.timeIntervalSince1970 < last
     }
 
+    public func shouldSend(_ subject: String, now: Date) -> Bool { due(sent()[subject], now: now) }
+
     /// when an alert about `subject` was last recorded as sent
     public func lastSent(_ subject: String) -> Date? {
-        ((defaults.dictionary(forKey: key) as? [String: Double])?[subject]).map { Date(timeIntervalSince1970: $0) }
+        sent()[subject].map { Date(timeIntervalSince1970: $0) }
     }
 
     public func recordSent(_ subject: String, now: Date) {
-        var map = defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
-        map[subject] = now.timeIntervalSince1970
-        defaults.set(map, forKey: key)
+        change { map in map[subject] = now.timeIntervalSince1970; return (true, ()) }
     }
 
     /// forget a subject that is fine again, so its next trouble is told at once
     public func clear(_ subject: String) {
-        var map = defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
-        guard map.removeValue(forKey: subject) != nil else { return }
-        defaults.set(map, forKey: key)
+        change { map in (map.removeValue(forKey: subject) != nil, ()) }
+    }
+
+    /// A subject's turn, taken: recorded as sent before the alert goes, so that of two
+    /// processes looking at once only one sends it. `release` hands it back when the
+    /// alert couldn't go, so it is owed rather than counted.
+    public struct Claim: Sendable, Equatable {
+        public let subject: String
+        let previous: Double?
+        let at: Double
+    }
+
+    /// the subject's turn when it is due, or nil when it isn't (or another has taken it)
+    public func claim(_ subject: String, now: Date) -> Claim? {
+        change { map in
+            let previous = map[subject]
+            guard due(previous, now: now) else { return (false, nil) }
+            map[subject] = now.timeIntervalSince1970
+            return (true, Claim(subject: subject, previous: previous, at: now.timeIntervalSince1970))
+        }
+    }
+
+    /// hand a claim back: the subject is as it was, unless something has changed it since
+    public func release(_ claim: Claim) {
+        change { map in
+            guard map[claim.subject] == claim.at else { return (false, ()) }
+            map[claim.subject] = claim.previous
+            return (true, ())
+        }
     }
 }
