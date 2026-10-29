@@ -160,19 +160,17 @@ enum MirrorIntegrity {
     }
 
     private static func checkAttaching(_ bundle: URL, passphrase: String?, runner: CommandRunner, before: Set<String>) -> Verdict {
-        var args = ["attach", "-nomount", "-readonly", "-nobrowse", bundle.path]
-        if passphrase != nil { args.append("-stdinpass") }
+        let attach = DiskImageTool.attachWithoutMount(image: bundle, encrypted: passphrase != nil)
         // recorded, so that a crash before the detach below leaves nothing that blocks the mirror
         guard let a = try? AttachRecords.recording(bundle, sparing: before, runner: runner.forTeardown, {
-            try runner.runRetryingBusy("/usr/bin/hdiutil", args, stdin: passphrase.map { Data($0.utf8) })
+            try runner.runRetryingBusy(attach, stdin: passphrase.map { Data($0.utf8) })
         }), a.ok else {
             return .unknown("the image wouldn't attach to be checked")
         }
-        let lines = a.stdout.split(separator: "\n")
-        let whole = lines.first.map { String($0.split(separator: " ", omittingEmptySubsequences: true).first ?? "") } ?? ""
-        defer { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", whole]) }
-        guard let container = lines.first(where: { $0.contains("Apple_APFS") })
-                .map({ String($0.split(separator: " ", omittingEmptySubsequences: true).first ?? "") }), !container.isEmpty else {
+        let devices = DiskImageTool.devices(fromAttach: a.stdout)
+        let whole = devices.first?.node ?? ""
+        defer { _ = try? runner.runRetryingBusy(DiskImageTool.detach(whole, force: true)) }
+        guard let container = devices.first(where: { $0.content.contains("Apple_APFS") })?.node else {
             return .unknown("no APFS container in the image")
         }
         guard let f = try? runner.run("/sbin/fsck_apfs", ["-n", container]) else { return .unknown("fsck_apfs didn't run") }

@@ -1129,6 +1129,7 @@ wrong
 xmark
 ya
 year
+yes
 yet
 you
 you're

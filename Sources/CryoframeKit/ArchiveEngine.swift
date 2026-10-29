@@ -10,8 +10,8 @@
 //
 //  Engines are agnostic to whether `root` is inside a snapshot mount or a plain
 //  directory, which makes them testable with tiny fixtures and no root.
-//  Command construction is factored into pure planners (ArchivePlan) so argv is
-//  unit-tested without invoking hdiutil/ditto.
+//  Command construction is factored into pure planners (ArchivePlan, and DiskImageTool
+//  for disk images) so argv is unit-tested without invoking hdiutil/ditto.
 //
 
 import Foundation
@@ -74,20 +74,9 @@ public struct Command: Sendable, Equatable {
     public init(_ tool: String, _ args: [String]) { self.tool = tool; self.args = args }
 }
 
-/// Pure command construction — no side effects, fully unit-testable.
+/// Pure command construction — no side effects, fully unit-testable. Disk-image
+/// commands are DiskImageTool's.
 public enum ArchivePlan {
-    /// read-only compressed dmg. (hdiutil -segmentSize is deprecated and ignored
-    /// for -srcfolder, so splitting is done post-hoc with split(1) — see ArchivePlan.split.)
-    /// `sizeMB`, when given, sets the size of the file system the folder is copied
-    /// into, instead of hdiutil's own guess (see DMGSizing).
-    public static func dmg(root: URL, output: URL, encrypted: Bool = false, sizeMB: UInt64? = nil) -> Command {
-        var args = ["create", "-srcfolder", root.path, "-format", "UDZO"]
-        if let sizeMB { args += ["-size", "\(sizeMB)m"] }
-        if encrypted { args += ["-encryption", "AES-256", "-stdinpass"] }   // passphrase via stdin
-        args += ["-ov", output.path]
-        return Command("/usr/bin/hdiutil", args)
-    }
-
     /// ditto preserves ACLs / resource forks / xattrs — a plain zip would not.
     public static func zip(root: URL, output: URL) -> Command {
         Command("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", root.path, output.path])
@@ -96,43 +85,6 @@ public enum ArchivePlan {
     /// post-hoc split of a finished file into <cap>-byte parts (for the zip path).
     public static func split(file: URL, cap: UInt64, prefix: String) -> Command {
         Command("/usr/bin/split", ["-b", "\(cap)", file.path, prefix])
-    }
-
-    /// `sectors`, when given, sets the size in 512-byte sectors instead of `sizeGB`.
-    public static func sparseBundleCreate(output: URL, name: String, sizeGB: Int, bandSectors: Int,
-                                          encrypted: Bool = false, sectors: UInt64? = nil) -> Command {
-        let size = sectors.map { ["-sectors", "\($0)"] } ?? ["-size", "\(sizeGB)g"]
-        var args = ["create", "-type", "SPARSEBUNDLE", "-fs", "APFS"] + size + ["-volname", name,
-                    "-imagekey", "sparse-band-size=\(bandSectors)"]
-        if encrypted { args += ["-encryption", "AES-256", "-stdinpass"] }
-        args += [output.path]
-        return Command("/usr/bin/hdiutil", args)
-    }
-
-    /// the image's size limits, in 512-byte sectors: "min<TAB>current<TAB>max".
-    public static func resizeLimits(image: URL, encrypted: Bool = false) -> Command {
-        Command("/usr/bin/hdiutil", ["resize", "-limits"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
-    }
-
-    /// grow an image (and the APFS volume inside it) to `sizeGB`. Measured on APFS
-    /// sparsebundles, plain and encrypted: the mounted volume reports the new size.
-    public static func resize(image: URL, sizeGB: Int, encrypted: Bool = false, sectors: UInt64? = nil) -> Command {
-        let size = sectors.map { ["-sectors", "\($0)"] } ?? ["-size", "\(sizeGB)g"]
-        return Command("/usr/bin/hdiutil", ["resize"] + size + (encrypted ? ["-stdinpass"] : []) + [image.path])
-    }
-
-    /// attach a sparsebundle or dmg at a known mountpoint. `readonly` for
-    /// verification mounts; read-write for the live-mirror rsync. `encrypted` adds
-    /// `-stdinpass` so the passphrase is read from stdin.
-    public static func attach(image: URL, mountpoint: URL, readonly: Bool = false, encrypted: Bool = false) -> Command {
-        var args = ["attach", image.path, "-mountpoint", mountpoint.path, "-nobrowse", "-owners", "on"]
-        if readonly { args.append("-readonly") }
-        if encrypted { args.append("-stdinpass") }
-        return Command("/usr/bin/hdiutil", args)
-    }
-
-    public static func detach(mountpoint: URL) -> Command {
-        Command("/usr/bin/hdiutil", ["detach", mountpoint.path])
     }
 
     /// incremental sync into the attached mirror; --delete prunes removed files,

@@ -36,7 +36,7 @@ public struct OpenedArchive: Sendable {
         if isBorrowed(mnt.deletingLastPathComponent()) {
             MountPoint.unmount(mnt, runner: runner)
         } else {
-            _ = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", mnt.path], stdin: nil)
+            _ = try? runner.run(DiskImageTool.detach(mnt.path, force: true))
         }
     }
 
@@ -262,7 +262,7 @@ public struct ArchiveReader: Sendable {
             do {
                 try AttachRecords.recording(image, sparing: before, mountedAt: mnt, runner: look) {
                     try DiskImageGate.serialized {
-                        try exec(ArchivePlan.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
+                        try exec(DiskImageTool.attach(image: image, mountpoint: mnt, readonly: true, encrypted: encrypted), stdin: stdin)
                     }
                 }
             } catch let stop as CancelledError {
@@ -392,25 +392,18 @@ public struct ArchiveReader: Sendable {
     /// attached before its own attach began) alone
     static func detachOrphans(ofImage image: URL, runner: CommandRunner, holding lock: ImageLock,
                               sparing: Set<String> = []) {
-        guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"]), r.ok,
-              let data = r.stdout.data(using: .utf8),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let images = root["images"] as? [[String: Any]] else { return }
+        guard let attaches = DiskImageTool.attaches(runner: runner) else { return }
         let target = image.resolvingSymlinksInPath().path
-        for img in images {
-            guard let path = img["image-path"] as? String,
-                  URL(fileURLWithPath: path).resolvingSymlinksInPath().path == target,
-                  let entities = img["system-entities"] as? [[String: Any]],
-                  !entities.contains(where: { $0["mount-point"] != nil }) else { continue }
+        for a in attaches {
+            guard URL(fileURLWithPath: a.path).resolvingSymlinksInPath().path == target, !a.mounted else { continue }
             // whole-disk entries first: detaching one takes its partitions with it.
-            let devices = entities.compactMap { $0["dev-entry"] as? String }
-                .sorted { $0.count < $1.count }
+            let devices = a.devices.sorted { $0.count < $1.count }
             // one attach's devices: any of them there before makes them all someone else's
             guard !devices.contains(where: sparing.contains) else { continue }
             // A detach issued during the contention that caused the failed attach is
             // itself likely to come back EAGAIN. Firing it once and discarding the
             // result leaves the orphan exactly where it was.
-            for dev in devices { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", dev, "-force"]) }
+            for dev in devices { _ = try? runner.runRetryingBusy(DiskImageTool.detach(dev, force: true)) }
         }
     }
 

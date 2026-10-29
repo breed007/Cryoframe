@@ -180,7 +180,7 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
             .archive(ArchiveSource(name: "Lib", root: src, sizeHint: JobExecutor.directorySize(src)), to: out)
 
         let limits = try ProcessCommandRunner().run(hdiutil, ["resize", "-limits"] + enc + [bundle.path], stdin: stdin)
-        let size = try #require(SparseBundleMirrorEngine.currentSectors(limits.stdout), "\(limits.stderr)") * 512
+        let size = try #require(DiskImageTool.limits(from: limits.stdout)?.current, "\(limits.stderr)")
         let held = Checksum.byteSize(of: bundle), free = try #require(JobExecutor.freeSpace(for: out))
         #expect(size <= held + free, "the image still claims \(size >> 20) MB; the drive can back \((held + free) >> 20) MB")
         #expect(try lookInside(bundle, passphrase: passphrase) { tree($0.appendingPathComponent("Lib")) } == tree(src))

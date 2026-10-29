@@ -514,7 +514,7 @@ private var deadOwner: ProcessIdentity {
         _ = try SparseBundleMirrorEngine(sizeGB: 2, passphrase: pass, mountBase: base)
             .archive(ArchiveSource(name: "Lib", root: src, sizeHint: JobExecutor.directorySize(src)), to: out)
         let limits = try ProcessCommandRunner().run(hdiutil, ["resize", "-limits", "-stdinpass", bundle.path], stdin: Data(pass.utf8))
-        let sectors = try #require(SparseBundleMirrorEngine.currentSectors(limits.stdout), "\(limits.stderr)")
+        let sectors = try #require(DiskImageTool.limits(from: limits.stdout)?.current, "\(limits.stderr)") / 512
         #expect(sectors * 512 >= UInt64(2 << 30) * 99 / 100, "the encrypted mirror wasn't grown: \(sectors) sectors")
         #expect(try ChecksumVerifier().reverify(archiveDir: out).passed)
 

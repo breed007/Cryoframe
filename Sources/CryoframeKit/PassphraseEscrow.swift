@@ -171,8 +171,8 @@ public struct KeyCheck: Sendable {
         // A damaged header makes an encrypted image attach as a plain raw disk, with any
         // passphrase at all (measured: 8 zeroed bytes at the start). hdiutil reads the
         // header without a passphrase; one it doesn't find encrypted is damaged.
-        if let r = try? look.run("/usr/bin/hdiutil", ["isencrypted", image.path], stdin: nil), r.ok,
-           r.stdout.contains("encrypted: NO") {
+        if let r = try? look.run(DiskImageTool.encryptionCheck(image: image)), r.ok,
+           DiskImageTool.isEncrypted(from: r.stdout) == false {
             return .damaged("it doesn't read as an encrypted disk image any more, so it is damaged")
         }
         // attached without mounting, so held from before the attach until it is
@@ -200,8 +200,8 @@ public struct KeyCheck: Sendable {
         do {
             result = try AttachRecords.recording(image, sparing: before, runner: look) {
                 try DiskImageGate.serialized {
-                    try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach", "-nomount", "-readonly", "-noverify", "-noautofsck",
-                                                                    "-stdinpass", image.path], stdin: Data(passphrase.utf8))
+                    try runner.runRetryingBusy(DiskImageTool.attachWithoutMount(image: image, encrypted: true, verify: false),
+                                               stdin: Data(passphrase.utf8))
                 }
             }
         } catch {
@@ -213,11 +213,11 @@ public struct KeyCheck: Sendable {
             return .unchecked(line.trimmingCharacters(in: .whitespaces))
         }
         // the first device listed is the image's own disk; detaching it detaches the rest
-        guard let device = result.stdout.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }).map(String.init) else {
+        guard let device = DiskImageTool.devices(fromAttach: result.stdout).first?.node else {
             return .unchecked("which disk it was attached as couldn't be told, so it is tried when it is restored")
         }
-        if (try? look.runRetryingBusy("/usr/bin/hdiutil", ["detach", device], stdin: nil))?.ok != true {
-            _ = try? look.run("/usr/bin/hdiutil", ["detach", "-force", device], stdin: nil)
+        if (try? look.runRetryingBusy(DiskImageTool.detach(device)))?.ok != true {
+            _ = try? look.run(DiskImageTool.detach(device, force: true))
         }
         return .opens
     }

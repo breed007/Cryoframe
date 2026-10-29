@@ -129,13 +129,13 @@ private struct StopBefore: CommandRunner {
     _ = try SparseBundleMirrorEngine(sizeGB: 3).archive(ArchiveSource(name: "Lib", root: src), to: out)
 
     let limits = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["resize", "-limits", bundle.path])
-    let current = try #require(SparseBundleMirrorEngine.currentSectors(limits.stdout))
+    let current = try #require(DiskImageTool.limits(from: limits.stdout)).current / 512
     #expect(current >= SparseBundleMirrorEngine.sectors(gb: 3) * 99 / 100, "still \(current) sectors")
     #expect(try filesInMirror(bundle) == 3)
 }
 
 @Test func resizeLimitsParseTheCurrentSize() {
-    #expect(SparseBundleMirrorEngine.currentSectors("45056\t2097072\t18014398509481903\n") == 2_097_072)
-    #expect(SparseBundleMirrorEngine.currentSectors("hdiutil: resize failed") == nil)
+    #expect(DiskImageTool.limits(from: "45056\t2097072\t18014398509481903\n")?.current == 2_097_072 * 512)
+    #expect(DiskImageTool.limits(from: "hdiutil: resize failed") == nil)
     #expect(SparseBundleMirrorEngine.sectors(gb: 1) == 2_097_152)
 }

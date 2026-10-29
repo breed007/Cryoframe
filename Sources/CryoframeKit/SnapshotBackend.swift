@@ -162,28 +162,18 @@ public extension CommandRunner {
     /// resize: killed part way, the image was left at either size, attachable, with
     /// nothing attached.
     static func letsFinish(_ launchPath: String, _ args: [String]) -> Bool {
-        guard (launchPath as NSString).lastPathComponent == "hdiutil" else { return false }
-        switch args.first {
-        case "attach": return true
-        case "create": return !args.contains("-srcfolder")
-        default: return false
-        }
+        DiskImageTool.isAttach(launchPath, args) || DiskImageTool.isBlankCreate(launchPath, args)
     }
 
     static func isAttach(_ launchPath: String, _ args: [String]) -> Bool {
-        (launchPath as NSString).lastPathComponent == "hdiutil" && args.first == "attach"
+        DiskImageTool.isAttach(launchPath, args)
     }
 
     /// every image attached right now, by the path it was attached from (as given
     /// and with symlinks resolved), from `hdiutil info`
     static func attachedImagePaths(runner: CommandRunner) -> Set<String> {
-        guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"], stdin: nil), r.ok,
-              let data = r.stdout.data(using: .utf8),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let images = root["images"] as? [[String: Any]] else { return [] }
         var out = Set<String>()
-        for img in images {
-            guard let path = img["image-path"] as? String else { continue }
+        for path in (DiskImageTool.attaches(runner: runner) ?? []).map(\.path) {
             let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
             out.formUnion([path, resolved, path.hasPrefix("/private/") ? String(path.dropFirst(8)) : "/private" + path])
         }

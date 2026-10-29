@@ -267,7 +267,7 @@ enum AttachRecords {
                   !r.devices.isEmpty, Set(r.devices).isSubset(of: a.devices), !a.mounted else { continue }
             // the image's own disk, listed first, takes the rest with it
             guard let whole = a.devices.first else { continue }
-            if (try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", whole, "-force"]))?.ok == true {
+            if (try? runner.runRetryingBusy(DiskImageTool.detach(whole, force: true)))?.ok == true {
                 try? fm.removeItem(at: file)
             }
         }

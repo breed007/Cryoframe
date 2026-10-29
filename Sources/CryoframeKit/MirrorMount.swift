@@ -53,19 +53,10 @@ public enum MirrorMounts {
     /// every place `image` is mounted on this Mac, from `hdiutil info`. Empty when it
     /// isn't attached, or when hdiutil couldn't be asked.
     public static func mountPoints(of image: URL, runner: CommandRunner) -> [String] {
-        guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"], stdin: nil), r.ok,
-              let data = r.stdout.data(using: .utf8),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let images = root["images"] as? [[String: Any]] else { return [] }
         let target = image.resolvingSymlinksInPath().path
-        var out: [String] = []
-        for img in images {
-            guard let path = img["image-path"] as? String,
-                  URL(fileURLWithPath: path).resolvingSymlinksInPath().path == target,
-                  let entities = img["system-entities"] as? [[String: Any]] else { continue }
-            out += entities.compactMap { $0["mount-point"] as? String }
-        }
-        return out
+        return (attachesIfKnown(runner: runner) ?? [])
+            .filter { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath().path == target }
+            .flatMap(\.mountPoints)
     }
 
     /// every device of `image` attached on this Mac, mounted or not (an attach with
@@ -105,7 +96,8 @@ public enum MirrorMounts {
     struct Attach {
         let path: String
         let devices: [String]
-        let mounted: Bool
+        let mountPoints: [String]
+        var mounted: Bool { !mountPoints.isEmpty }
         /// the process serving the attach (diskimages-helper). It lives exactly as long
         /// as the attach: a later attach of the same image gets another, even when it
         /// is handed the same device name, which macOS does (measured on macOS 26)
@@ -115,17 +107,7 @@ public enum MirrorMounts {
     /// every attach of a disk image on this Mac; nil when hdiutil couldn't be asked or
     /// its answer couldn't be read
     static func attachesIfKnown(runner: CommandRunner) -> [Attach]? {
-        guard let r = try? runner.run("/usr/bin/hdiutil", ["info", "-plist"], stdin: nil), r.ok,
-              let data = r.stdout.data(using: .utf8),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return nil }
-        let images = root["images"] as? [[String: Any]] ?? []       // absent when nothing is attached
-        return images.compactMap { img in
-            guard let path = img["image-path"] as? String else { return nil }
-            let entities = img["system-entities"] as? [[String: Any]] ?? []
-            return Attach(path: path, devices: entities.compactMap { $0["dev-entry"] as? String },
-                          mounted: entities.contains { $0["mount-point"] != nil },
-                          helper: (img["hdid-pid"] as? NSNumber)?.int32Value)
-        }
+        DiskImageTool.attaches(runner: runner)
     }
 
     /// detach `image` from wherever a process that no longer exists left it attached:

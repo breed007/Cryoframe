@@ -29,7 +29,7 @@ private func library(files n: Int) throws -> URL {
 /// the image's current size in bytes, from `hdiutil resize -limits`.
 private func imageBytes(_ bundle: URL) throws -> UInt64 {
     let r = try ProcessCommandRunner().run(hdiutil, ["resize", "-limits", bundle.path])
-    let sectors = try #require(SparseBundleMirrorEngine.currentSectors(r.stdout), "\(r.stdout) \(r.stderr)")
+    let sectors = try #require(DiskImageTool.limits(from: r.stdout)?.current, "\(r.stdout) \(r.stderr)") / 512
     return sectors * 512
 }
 

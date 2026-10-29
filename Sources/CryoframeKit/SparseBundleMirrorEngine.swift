@@ -224,8 +224,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             guard before.isEmpty else { throw MirrorCopyError.couldNotConfirm("it is attached elsewhere on this Mac") }
             let attached = try? AttachRecords.recording(bundle, sparing: before, mountedAt: mnt, runner: teardown) {
                 try DiskImageGate.serialized {
-                    try runner.runRetryingBusy("/usr/bin/hdiutil",
-                                               ArchivePlan.attach(image: bundle, mountpoint: mnt, readonly: true, encrypted: passphrase != nil).args,
+                    try runner.runRetryingBusy(DiskImageTool.attach(image: bundle, mountpoint: mnt, readonly: true,
+                                                                    encrypted: passphrase != nil),
                                                stdin: stdin)
                 }
             }
@@ -263,11 +263,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     private func compact(_ bundle: URL, stdin: Data?) {
         runner.control?.begin("Compacting the disk image", stage: .finishing)
         MirrorSeal.withdrawBands(in: bundle.deletingLastPathComponent())
-        // -puppetstrings: progress lines as it goes, which the tool watchdog counts
-        // (the disk-image daemon does the work, and hdiutil itself can sit idle)
-        var args = ["compact", "-puppetstrings", bundle.path]
-        if passphrase != nil { args.append("-stdinpass") }
-        _ = try? runner.forTeardown.run("/usr/bin/hdiutil", args, stdin: stdin)
+        _ = try? runner.forTeardown.run(DiskImageTool.compact(image: bundle, encrypted: passphrase != nil), stdin: stdin)
     }
 
     /// create or grow the image, attach it, bring the library copy up to date, detach.
@@ -325,9 +321,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         if !fm.fileExists(atPath: bundle.path) {
             imageBytes = MirrorSizing.targetBytes(ceiling: ceiling, held: 0, free: free, reserve: reserve, minimum: 0)
             touched = true
-            try execute(ArchivePlan.sparseBundleCreate(output: bundle, name: source.name, sizeGB: 0,
-                                                       bandSectors: bandSectors, encrypted: encrypted,
-                                                       sectors: max(imageBytes / 512, 1)), stdin: stdin)
+            try execute(DiskImageTool.sparseBundle(output: bundle, name: source.name, sizeGB: 0,
+                                                   bandSectors: bandSectors, encrypted: encrypted,
+                                                   sectors: max(imageBytes / 512, 1)), stdin: stdin)
         } else {
             imageBytes = try fit(bundle, ceiling: ceiling, free: free, reserve: reserve, stdin: stdin,
                                  touched: &touched) ?? ceiling
@@ -364,7 +360,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                 }
                 do {
                     try AttachRecords.recording(bundle, sparing: before, mountedAt: mountpoint, runner: teardown) {
-                        try DiskImageGate.serialized { try execute(ArchivePlan.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
+                        try DiskImageGate.serialized { try execute(DiskImageTool.attach(image: bundle, mountpoint: mountpoint, encrypted: encrypted), stdin: stdin) }
                     }
                 } catch let stop as CancelledError {
                     // Stop let the attach finish (see ProcessCommandRunner.letsFinish);
@@ -440,18 +436,17 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     private func fit(_ bundle: URL, ceiling: UInt64, free: UInt64?, reserve: UInt64, stdin: Data?,
                      touched: inout Bool) throws -> UInt64? {
         let encrypted = passphrase != nil
-        let limits = ArchivePlan.resizeLimits(image: bundle, encrypted: encrypted)
-        guard let r = try? runner.run(limits.tool, limits.args, stdin: stdin), r.ok,
-              let current = Self.currentSectors(r.stdout) else { return nil }   // unknown: leave it as it is
-        let minimum = (Self.minimumSectors(r.stdout) ?? 0) * 512
+        guard let r = try? runner.run(DiskImageTool.resizeLimits(image: bundle, encrypted: encrypted), stdin: stdin), r.ok,
+              let limits = DiskImageTool.limits(from: r.stdout) else { return nil }   // unknown: leave it as it is
+        let minimum = limits.minimum
         let target = MirrorSizing.targetBytes(ceiling: ceiling, held: Checksum.byteSize(of: bundle),
                                               free: free, reserve: reserve, minimum: minimum)
-        let now = current * 512
+        let now = limits.current
         // within 1% (partition overhead, the drive's free space moving a little): leave it
         guard now > target + target / 100 || now + now / 100 < target else { return now }
         touched = true
         do {
-            try execute(ArchivePlan.resize(image: bundle, sizeGB: 0, encrypted: encrypted, sectors: target / 512), stdin: stdin)
+            try execute(DiskImageTool.resize(image: bundle, sectors: target / 512, encrypted: encrypted), stdin: stdin)
         } catch ArchiveError.toolFailed(_, _, let stderr) {
             throw MirrorSpaceError.couldNotResize(ProcessCommandRunner.meaningful(stderr).split(separator: "\n").last.map(String.init) ?? "")
         }
@@ -516,16 +511,6 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     }
 
     /// `hdiutil resize -limits` prints "min current max" in 512-byte sectors.
-    static func currentSectors(_ limits: String) -> UInt64? {
-        let f = limits.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" })
-        return f.count >= 3 ? UInt64(f[1]) : nil
-    }
-
-    static func minimumSectors(_ limits: String) -> UInt64? {
-        let f = limits.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" })
-        return f.count >= 3 ? UInt64(f[0]) : nil
-    }
-
     /// hdiutil's "g" is GiB
     static func sectors(gb: Int) -> UInt64 { UInt64(max(gb, 0)) * (1 << 30) / 512 }
 

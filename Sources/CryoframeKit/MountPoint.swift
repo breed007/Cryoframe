@@ -38,10 +38,10 @@ public enum MountPoint {
     static func unmount(_ url: URL, runner: CommandRunner) {
         for i in 0..<5 {
             if !isMounted(url) { return }
-            if let r = try? runner.run("/usr/bin/hdiutil", ["unmount", url.path], stdin: nil), r.ok { return }
+            if let r = try? runner.run(DiskImageTool.unmount(url.path)), r.ok { return }
             Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
         }
-        if isMounted(url) { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["unmount", "-force", url.path]) }
+        if isMounted(url) { _ = try? runner.runRetryingBusy(DiskImageTool.unmount(url.path, force: true)) }
     }
 
     /// remove an EMPTY mount directory. Never recursive: if something is still
@@ -57,8 +57,8 @@ public enum MountPoint {
     /// place.
     public static func clear(_ url: URL, runner: CommandRunner) throws {
         if isMounted(url) {
-            _ = try? runner.run("/usr/bin/hdiutil", ["detach", url.path], stdin: nil)
-            if isMounted(url) { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", url.path]) }
+            _ = try? runner.run(DiskImageTool.detach(url.path))
+            if isMounted(url) { _ = try? runner.runRetryingBusy(DiskImageTool.detach(url.path, force: true)) }
             if isMounted(url) { throw MountPointError.stillMounted(url.path) }
         }
         // not mounted, so a recursive remove only touches this directory's own files
@@ -89,10 +89,10 @@ public enum MountPoint {
         let own = attach(mountedAt: url, runner: runner)
         for i in 0..<5 {
             if !isMounted(url) { break }
-            if let r = try? runner.run("/usr/bin/hdiutil", ["detach", url.path], stdin: nil), r.ok { break }
+            if let r = try? runner.run(DiskImageTool.detach(url.path)), r.ok { break }
             Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
         }
-        if isMounted(url) { _ = try? runner.runRetryingBusy("/usr/bin/hdiutil", ["detach", "-force", url.path]) }
+        if isMounted(url) { _ = try? runner.runRetryingBusy(DiskImageTool.detach(url.path, force: true)) }
         guard let own, !isMounted(url) else { return }
         for i in 0..<6 {
             guard let attaches = MirrorMounts.attachesIfKnown(runner: runner) else {
@@ -102,7 +102,7 @@ public enum MountPoint {
             // gone, or mounted again (someone else's attach now): nothing of ours left
             guard let left = attaches.first(where: { $0.path == own.path && $0.helper == own.helper && $0.devices.first == own.devices.first }),
                   !left.mounted, let whole = left.devices.first else { return }
-            if let r = try? runner.run("/usr/bin/hdiutil", ["detach", "-force", whole], stdin: nil), r.ok { return }
+            if let r = try? runner.run(DiskImageTool.detach(whole, force: true)), r.ok { return }
             Thread.sleep(forTimeInterval: 0.4 * Double(i + 1))
         }
     }

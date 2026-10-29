@@ -29,8 +29,8 @@ private func tempOutDir() -> URL {
 // MARK: - pure planners (argv)
 
 @Test func dmgPlanIsReadOnlyUDZO() {
-    let c = ArchivePlan.dmg(root: URL(fileURLWithPath: "/m/lib"),
-                            output: URL(fileURLWithPath: "/out/Lib.dmg"))
+    let c = DiskImageTool.folderImage(root: URL(fileURLWithPath: "/m/lib"),
+                                      output: URL(fileURLWithPath: "/out/Lib.dmg"))
     #expect(c.tool == "/usr/bin/hdiutil")
     #expect(c.args == ["create", "-srcfolder", "/m/lib", "-format", "UDZO", "-ov", "/out/Lib.dmg"])
 }
@@ -49,8 +49,8 @@ private func tempOutDir() -> URL {
 }
 
 @Test func sparseBundleCreatePlanHasBandSizeAndAPFS() {
-    let c = ArchivePlan.sparseBundleCreate(output: URL(fileURLWithPath: "/out/M.sparsebundle"),
-                                           name: "M", sizeGB: 500, bandSectors: 16384)
+    let c = DiskImageTool.sparseBundle(output: URL(fileURLWithPath: "/out/M.sparsebundle"),
+                                       name: "M", sizeGB: 500, bandSectors: 16384)
     #expect(c.args.contains("SPARSEBUNDLE"))
     #expect(c.args.contains("APFS"))
     #expect(c.args.contains("sparse-band-size=16384"))
@@ -212,5 +212,5 @@ private func tempOutDir() -> URL {
     try fh.close()
     let size = try #require(DMGSizing.sizeMB(for: base))
     #expect(size >= 2048 + 2048 / 10 && size < 2600, "\(size) MB")
-    #expect(ArchivePlan.dmg(root: base, output: base.appendingPathComponent("o.dmg"), sizeMB: size).args.contains("\(size)m"))
+    #expect(DiskImageTool.folderImage(root: base, output: base.appendingPathComponent("o.dmg"), sizeMB: size).args.contains("\(size)m"))
 }
