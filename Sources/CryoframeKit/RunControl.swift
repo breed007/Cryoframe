@@ -195,8 +195,10 @@ public final class RunControl: @unchecked Sendable {
     }
 
     /// tools whose process tree must never be SIGSTOPped — they crash when frozen.
-    private static func unsuspendable(_ comm: String) -> Bool {
-        comm.contains("hdiutil") || comm.contains("diskimages-helper")
+    /// `diskutil image` (and the diskimagesiod serving it) was never measured
+    /// paused, so a step it runs isn't paused either, as when hdiutil ran it.
+    static func unsuspendable(_ comm: String) -> Bool {
+        ["hdiutil", "diskimages-helper", "diskutil", "diskimagesiod"].contains { comm.contains($0) }
     }
 
     /// `root` and every descendant with its executable path, read fresh via `ps`

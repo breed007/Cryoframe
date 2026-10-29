@@ -284,6 +284,7 @@ dir
 directory
 disk
 diskimages
+diskimagesiod
 diskutil
 displayname
 ditto
@@ -600,6 +601,7 @@ master
 match
 matched
 matches
+max
 may
 mb
 mbr
@@ -944,6 +946,7 @@ stayed
 stays
 stderr
 stdinpass
+stdinpassphrase
 still
 stolen
 stop

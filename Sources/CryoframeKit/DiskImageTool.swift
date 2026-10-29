@@ -21,6 +21,37 @@ import Foundation
 
 public enum DiskImageTool {
     static let hdiutil = "/usr/bin/hdiutil"
+    static let diskutil = "/usr/sbin/diskutil"
+
+    /// The tool a command runs.
+    public enum Tool: Sendable, Equatable { case hdiutil, diskutil }
+
+    /// The tool that resizes an image, reads its size limits, and says whether it is
+    /// encrypted: `diskutil image` where it was measured to do the same as hdiutil,
+    /// otherwise hdiutil. Measured on macOS 27.0.1: the same limits within 80 sectors
+    /// (hdiutil's "current" leaves out the partition map), resizes of plain and
+    /// encrypted APFS sparse bundles that hdiutil then reads at the new size, and the
+    /// same refusal of a wrong passphrase. Decided once per process.
+    public static var sizing: Tool { diskutilImageMeasured ? .diskutil : .hdiutil }
+
+    /// Whether this Mac's diskutil has `image resize` and `image info` with the options
+    /// used here. Only macOS 27 was measured, so an older macOS keeps hdiutil even if
+    /// it has them.
+    static let diskutilImageMeasured: Bool = {
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 else { return false }
+        return offersDiskutilImage(runner: ProcessCommandRunner(quietLimit: 60))
+    }()
+
+    /// whether `runner`'s diskutil prints the help for `image resize` and `image info`
+    /// with every option those commands are given here
+    static func offersDiskutilImage(runner: CommandRunner) -> Bool {
+        func offers(_ verb: String, _ options: [String]) -> Bool {
+            guard let r = try? runner.run(diskutil, ["image", verb], stdin: nil), r.ok else { return false }
+            let help = r.stdout + r.stderr
+            return options.allSatisfy { help.contains($0) }
+        }
+        return offers("resize", ["--plist", "--size", "--stdinpassphrase"]) && offers("info", ["--plist", "--stdinpassphrase"])
+    }
 
     // MARK: - Making images
 
@@ -58,39 +89,88 @@ public enum DiskImageTool {
         public let maximum: UInt64
     }
 
-    /// the command that prints the image's size limits (see `limits(from:)`)
-    public static func resizeLimits(image: URL, encrypted: Bool = false) -> Command {
-        Command(hdiutil, ["resize", "-limits"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
+    /// the command that prints the image's size limits (see `limits(from:tool:)`).
+    /// diskutil prints them with no size given.
+    public static func resizeLimits(image: URL, encrypted: Bool = false, tool: Tool = sizing) -> Command {
+        switch tool {
+        case .hdiutil:  return Command(hdiutil, ["resize", "-limits"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
+        case .diskutil: return Command(diskutil, ["image", "resize", "--plist"] + (encrypted ? ["--stdinpassphrase"] : []) + [image.path])
+        }
     }
 
-    /// The limits `resizeLimits` printed: "min<TAB>current<TAB>max", in 512-byte
-    /// sectors. nil when the output isn't that.
-    public static func limits(from stdout: String) -> Limits? {
-        let f = stdout.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" })
-        guard f.count >= 3, let min = UInt64(f[0]), let current = UInt64(f[1]), let max = UInt64(f[2]) else { return nil }
-        return Limits(minimum: min * 512, current: current * 512, maximum: max > UInt64.max / 512 ? .max : max * 512)
+    /// The limits `resizeLimits` printed; nil when the output isn't them. hdiutil
+    /// prints "min<TAB>current<TAB>max" in 512-byte sectors, diskutil a property list
+    /// of the three in bytes.
+    public static func limits(from stdout: String, tool: Tool = .hdiutil) -> Limits? {
+        switch tool {
+        case .hdiutil:
+            let f = stdout.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" })
+            guard f.count >= 3, let min = UInt64(f[0]), let current = UInt64(f[1]), let max = UInt64(f[2]) else { return nil }
+            return Limits(minimum: min * 512, current: current * 512, maximum: max > UInt64.max / 512 ? .max : max * 512)
+        case .diskutil:
+            guard let d = dictionary(stdout), let min = (d["min"] as? NSNumber)?.uint64Value,
+                  let current = (d["current"] as? NSNumber)?.uint64Value,
+                  let max = (d["max"] as? NSNumber)?.uint64Value else { return nil }
+            return Limits(minimum: min, current: current, maximum: max)
+        }
+    }
+
+    /// `image`'s limits, asked of `runner` with `stdin` (the passphrase, when it is
+    /// encrypted); nil when they couldn't be told
+    static func limits(of image: URL, encrypted: Bool, stdin: Data?, runner: CommandRunner, tool: Tool = sizing) -> Limits? {
+        guard let r = try? runner.run(resizeLimits(image: image, encrypted: encrypted, tool: tool), stdin: stdin), r.ok else { return nil }
+        return limits(from: r.stdout, tool: tool)
     }
 
     /// Grow or shrink an image, and the APFS volume inside it, to `sectors` 512-byte
-    /// sectors. Measured on APFS sparse bundles, plain and encrypted: the mounted
-    /// volume reports the new size.
-    public static func resize(image: URL, sectors: UInt64, encrypted: Bool = false) -> Command {
-        Command(hdiutil, ["resize", "-sectors", "\(sectors)"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
+    /// sectors. Measured on APFS sparse bundles, plain and encrypted, with both tools:
+    /// the mounted volume reports the new size. diskutil takes bytes, and rounds them
+    /// to a multiple of 4 KB.
+    public static func resize(image: URL, sectors: UInt64, encrypted: Bool = false, tool: Tool = sizing) -> Command {
+        switch tool {
+        case .hdiutil:
+            return Command(hdiutil, ["resize", "-sectors", "\(sectors)"] + (encrypted ? ["-stdinpass"] : []) + [image.path])
+        case .diskutil:
+            return Command(diskutil, ["image", "resize", "--size", "\(sectors * 512)"]
+                           + (encrypted ? ["--stdinpassphrase"] : []) + [image.path])
+        }
     }
 
     // MARK: - Encryption
 
-    /// The command that says whether `image` is encrypted. It reads the image's
-    /// header and needs no passphrase.
-    public static func encryptionCheck(image: URL) -> Command {
-        Command(hdiutil, ["isencrypted", image.path])
+    /// The command that says whether `image` is encrypted. hdiutil reads the image's
+    /// header and needs no passphrase. diskutil is always given one on stdin: asked
+    /// of an encrypted image without it, it waited for one with nobody to type it
+    /// (measured: still waiting after five minutes). Given one, a plain image reads as
+    /// not encrypted, and an encrypted image with the wrong one fails, which says
+    /// nothing either way (measured).
+    public static func encryptionCheck(image: URL, tool: Tool = sizing) -> Command {
+        switch tool {
+        case .hdiutil:  return Command(hdiutil, ["isencrypted", image.path])
+        case .diskutil: return Command(diskutil, ["image", "info", "--plist", "--stdinpassphrase", image.path])
+        }
     }
 
     /// whether `encryptionCheck` found the image encrypted; nil when its output says neither
-    public static func isEncrypted(from stdout: String) -> Bool? {
-        if stdout.contains("encrypted: NO") { return false }
-        if stdout.contains("encrypted: YES") { return true }
-        return nil
+    public static func isEncrypted(from stdout: String, tool: Tool = .hdiutil) -> Bool? {
+        switch tool {
+        case .hdiutil:
+            if stdout.contains("encrypted: NO") { return false }
+            if stdout.contains("encrypted: YES") { return true }
+            return nil
+        case .diskutil:
+            guard let info = dictionary(stdout)?["Encryption Info"] as? [String: Any],
+                  let encrypted = info["Is Encrypted"] as? NSNumber else { return nil }
+            return encrypted.boolValue
+        }
+    }
+
+    /// whether `image` reads as encrypted, asked of `runner` (diskutil with
+    /// `passphrase` on stdin); nil when that couldn't be told
+    static func isEncrypted(_ image: URL, passphrase: String, runner: CommandRunner, tool: Tool = sizing) -> Bool? {
+        let stdin = tool == .diskutil ? Data(passphrase.utf8) : nil
+        guard let r = try? runner.run(encryptionCheck(image: image, tool: tool), stdin: stdin), r.ok else { return nil }
+        return isEncrypted(from: r.stdout, tool: tool)
     }
 
     // MARK: - Attaching
@@ -161,8 +241,7 @@ public enum DiskImageTool {
     /// Every attach `info` listed; nil when its output can't be read, which isn't the
     /// same as nothing attached. The list is absent from it when nothing is.
     static func attaches(from stdout: String) -> [MirrorMounts.Attach]? {
-        guard let data = stdout.data(using: .utf8),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return nil }
+        guard let root = dictionary(stdout) else { return nil }
         let images = root["images"] as? [[String: Any]] ?? []
         return images.compactMap { img in
             guard let path = img["image-path"] as? String else { return nil }
@@ -177,6 +256,12 @@ public enum DiskImageTool {
     static func attaches(runner: CommandRunner) -> [MirrorMounts.Attach]? {
         guard let r = try? runner.run(info()), r.ok else { return nil }
         return attaches(from: r.stdout)
+    }
+
+    /// the top-level dictionary of a property list a tool printed
+    static func dictionary(_ stdout: String) -> [String: Any]? {
+        guard let data = stdout.data(using: .utf8) else { return nil }
+        return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
     }
 
     // MARK: - What a command is

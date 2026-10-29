@@ -169,10 +169,9 @@ public struct KeyCheck: Sendable {
             return .unchecked("it is open elsewhere on this Mac, so it is tried when it is restored")
         }
         // A damaged header makes an encrypted image attach as a plain raw disk, with any
-        // passphrase at all (measured: 8 zeroed bytes at the start). hdiutil reads the
-        // header without a passphrase; one it doesn't find encrypted is damaged.
-        if let r = try? look.run(DiskImageTool.encryptionCheck(image: image)), r.ok,
-           DiskImageTool.isEncrypted(from: r.stdout) == false {
+        // passphrase at all (measured: 8 zeroed bytes at the start). One the encryption
+        // check reads as not encrypted is damaged (see DiskImageTool.encryptionCheck).
+        if DiskImageTool.isEncrypted(image, passphrase: passphrase, runner: look) == false {
             return .damaged("it doesn't read as an encrypted disk image any more, so it is damaged")
         }
         // attached without mounting, so held from before the attach until it is

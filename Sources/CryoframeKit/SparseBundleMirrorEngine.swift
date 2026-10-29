@@ -436,8 +436,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     private func fit(_ bundle: URL, ceiling: UInt64, free: UInt64?, reserve: UInt64, stdin: Data?,
                      touched: inout Bool) throws -> UInt64? {
         let encrypted = passphrase != nil
-        guard let r = try? runner.run(DiskImageTool.resizeLimits(image: bundle, encrypted: encrypted), stdin: stdin), r.ok,
-              let limits = DiskImageTool.limits(from: r.stdout) else { return nil }   // unknown: leave it as it is
+        guard let limits = DiskImageTool.limits(of: bundle, encrypted: encrypted, stdin: stdin,
+                                                runner: runner) else { return nil }   // unknown: leave it as it is
         let minimum = limits.minimum
         let target = MirrorSizing.targetBytes(ceiling: ceiling, held: Checksum.byteSize(of: bundle),
                                               free: free, reserve: reserve, minimum: minimum)
