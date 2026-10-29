@@ -28,7 +28,7 @@ private let hdiutil = "/usr/bin/hdiutil"
 private func attach(_ image: URL, at mnt: URL, _ extra: [String] = []) throws {
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", image.path, "-mountpoint", mnt.path, "-nobrowse"] + extra)
+        try TestDiskImages.run(["attach", image.path, "-mountpoint", mnt.path, "-nobrowse"] + extra)
     }
     try #require(r.ok && MountPoint.isMounted(mnt), "couldn't attach \(image.lastPathComponent): \(r.stderr)")
 }
@@ -73,8 +73,8 @@ private var deadOwner: ProcessIdentity {
             MountPoint.detach(host, runner: ProcessCommandRunner())
             for d in [scratch, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) }
         }
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "1g", "-fs", "APFS", "-volname", "Drive",
-                                                            "-type", "SPARSE", scratch.appendingPathComponent("drive").path])
+        let made = try TestDiskImages.run(["create", "-size", "1g", "-fs", "APFS", "-volname", "Drive",
+                                           "-type", "SPARSE", scratch.appendingPathComponent("drive").path])
         try #require(made.ok, "\(made.stderr)")
         try attach(scratch.appendingPathComponent("drive.sparseimage"), at: host)      // no -owners on: like a real external drive
         let info = try ProcessCommandRunner().run("/usr/sbin/diskutil", ["info", host.path])
@@ -142,8 +142,8 @@ private var deadOwner: ProcessIdentity {
         for name in ["Dead", "Live"] {
             let src = tempDir("src-\(name)")
             try Data(name.utf8).write(to: src.appendingPathComponent("a.txt"))
-            let r = try ProcessCommandRunner().run(hdiutil, ["create", "-srcfolder", src.path, "-format", "UDRW",
-                                                            base.appendingPathComponent("\(name).dmg").path])
+            let r = try TestDiskImages.run(["create", "-srcfolder", src.path, "-format", "UDRW",
+                                           base.appendingPathComponent("\(name).dmg").path])
             try? FileManager.default.removeItem(at: src)
             try #require(r.ok, "\(r.stderr)")
             images.append(base.appendingPathComponent("\(name).dmg"))

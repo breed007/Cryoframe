@@ -101,12 +101,12 @@ private let boot = vol("/System/Volumes/Data", "DATA-UUID", "Macintosh HD", onMa
     @Test func aRealVolumeIsFoundAgainAfterItMovesAndIsRenamed() throws {
         let base = folder("real"); defer { try? FileManager.default.removeItem(at: base) }
         let image = base.appendingPathComponent("drive.dmg")
-        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "20m", "-fs", "APFS", "-volname", "CF T7", image.path])
+        let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "APFS", "-volname", "CF T7", image.path])
         try #require(made.ok, "\(made.stderr)")
         func attach(_ at: URL) throws {
             try FileManager.default.createDirectory(at: at, withIntermediateDirectories: true)
             let r = try DiskImageGate.serialized {
-                try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", at.path, "-nobrowse"])
+                try TestDiskImages.run(["attach", image.path, "-mountpoint", at.path, "-nobrowse"])
             }
             try #require(r.ok && MountPoint.isMounted(at), "\(r.stderr)")
         }
@@ -114,7 +114,7 @@ private let boot = vol("/System/Volumes/Data", "DATA-UUID", "Macintosh HD", onMa
         defer {
             for m in [first, second] where MountPoint.isMounted(m) { MountPoint.detach(m, runner: ProcessCommandRunner()) }
             for d in MirrorMounts.attachedDevices(of: image, runner: ProcessCommandRunner()).prefix(1) {
-                _ = try? ProcessCommandRunner().run("/usr/bin/hdiutil", ["detach", "-force", d])
+                _ = try? TestDiskImages.run(["detach", "-force", d])
             }
         }
         try attach(first)

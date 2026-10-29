@@ -30,10 +30,10 @@ private func drive(_ fs: String, mb: Int, cluster: Int? = nil, in base: URL) thr
     var args = ["create", "-size", "\(mb)m", "-fs", fs, "-volname", "CARD", "-type", "UDIF"]
     if !fs.contains("APFS") { args += ["-layout", "MBRSPUD"] }
     if let cluster { args += ["-fsargs", "-b \(cluster)"] }
-    let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", args + [image.path], stdin: nil)
+    let made = try TestDiskImages.run(args + [image.path])
     try #require(made.ok, "couldn't make the drive: \(made.stderr)")
     let attached = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
+        try TestDiskImages.run(["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
     }
     try #require(attached.ok, "couldn't attach the drive: \(attached.stderr)")
     return (mount, { MountPoint.detach(mount, runner: ProcessCommandRunner()) })

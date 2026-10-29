@@ -573,12 +573,12 @@ private func rerecord(_ a: inout RestorableArchive) throws {
         // on a non-APFS volume, so the run reads it where it is (the fake helper can't snapshot)
         let mnt = base.appendingPathComponent("vol")
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src",
-                                                                       base.appendingPathComponent("src.dmg").path])
+        let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src",
+                                           base.appendingPathComponent("src.dmg").path])
         try #require(made.ok, "\(made.stderr)")
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", base.appendingPathComponent("src.dmg").path,
-                                                                            "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+            try TestDiskImages.run(["attach", base.appendingPathComponent("src.dmg").path,
+                                    "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
         }
         try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
         defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }

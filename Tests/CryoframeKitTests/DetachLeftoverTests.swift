@@ -55,11 +55,11 @@ private func holdOpen(_ device: String, for seconds: Double) throws -> Process {
             ArchiveReader.detachOrphans(ofImage: img, runner: ProcessCommandRunner())
             try? FileManager.default.removeItem(at: dir)
         }
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "64m", "-type", "SPARSEBUNDLE", "-fs", "APFS",
-                                                            "-volname", "B", img.path])
+        let made = try TestDiskImages.run(["create", "-size", "64m", "-type", "SPARSEBUNDLE", "-fs", "APFS",
+                                           "-volname", "B", img.path])
         try #require(made.ok, "\(made.stderr)")
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        let attached = try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", "-readonly", "-nobrowse", "-mountpoint", mnt.path, img.path])
+        let attached = try TestDiskImages.run(["attach", "-readonly", "-nobrowse", "-mountpoint", mnt.path, img.path])
         try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
         let whole = try #require(attaches(of: img).first?.devices.first)
 
@@ -85,7 +85,7 @@ private func holdOpen(_ device: String, for seconds: Double) throws -> Process {
         let bundle = try engine.archive(ArchiveSource(name: "Lib", root: src), to: out).artifacts[0]
         defer { ArchiveReader.detachOrphans(ofImage: bundle, runner: ProcessCommandRunner()) }
 
-        let held = try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", "-nomount", "-readonly", "-nobrowse", bundle.path])
+        let held = try TestDiskImages.run(["attach", "-nomount", "-readonly", "-nobrowse", bundle.path])
         try #require(held.ok, "\(held.stderr)")
         let whole = try #require(held.stdout.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }).map(String.init))
         let ends = Process()

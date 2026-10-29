@@ -133,10 +133,10 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
     let out = tempDir(); defer { try? FileManager.default.removeItem(at: out) }
     let dmg = out.appendingPathComponent("Docs.dmg")
     let runner = ProcessCommandRunner()
-    let made = try runner.run("/usr/bin/hdiutil", ["create", "-srcfolder", dir.path, "-format", "UDRW", "-ov", dmg.path])
+    let made = try TestDiskImages.run(["create", "-srcfolder", dir.path, "-format", "UDRW", "-ov", dmg.path])
     try #require(made.ok, "\(made.stderr)")
     let rw = tempDir()
-    let attached = try DiskImageGate.serialized { try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach", dmg.path, "-mountpoint", rw.path, "-nobrowse", "-owners", "on"]) }
+    let attached = try DiskImageGate.serialized { try TestDiskImages.run(["attach", dmg.path, "-mountpoint", rw.path, "-nobrowse", "-owners", "on"]) }
     try #require(attached.ok, "\(attached.stderr)")
     try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: rw.appendingPathComponent("locked.txt").path)
     MountPoint.detach(rw, runner: runner)
@@ -174,7 +174,7 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
             ? CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - Resource temporarily unavailable")
             : CommandResult(status: 0, stdout: "ok", stderr: "")
     }
-    let r = try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach"])
+    let r = try TestDiskImages.run(["attach"])
     #expect(r.ok)
     #expect(attempts.value == 3)          // failed twice, succeeded on the third
 }
@@ -185,7 +185,7 @@ private let liveDBType = ContentType(id: "test.photos", displayName: "TestPhotos
         _ = attempts.bump()
         return CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - no such file or directory")
     }
-    let r = try runner.runRetryingBusy("/usr/bin/hdiutil", ["attach"])
+    let r = try TestDiskImages.run(["attach"])
     #expect(!r.ok)
     #expect(attempts.value == 1)          // a genuine error fails fast, no backoff
 }

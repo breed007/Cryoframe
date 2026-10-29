@@ -33,7 +33,7 @@ private func inMirror<T>(_ bundle: URL, _ rel: String, _ body: (String) -> T) th
     let mnt = attrDir("look")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt) }
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
+        try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
     }
     try #require(r.ok && MountPoint.isMounted(mnt), "\(r.stderr)")
     return body(mnt.appendingPathComponent(rel).path)

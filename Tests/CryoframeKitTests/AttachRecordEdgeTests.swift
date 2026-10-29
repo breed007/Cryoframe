@@ -26,8 +26,8 @@ private func folder(_ tag: String) -> URL {
 /// a small plain sparsebundle in `dir`
 private func plainImage(in dir: URL) throws -> URL {
     let img = dir.appendingPathComponent("Lib.sparsebundle")
-    let r = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "20m", "-type", "SPARSEBUNDLE", "-fs", "APFS",
-                                                     "-volname", "Lib", img.path])
+    let r = try TestDiskImages.run(["create", "-size", "20m", "-type", "SPARSEBUNDLE", "-fs", "APFS",
+                                    "-volname", "Lib", img.path])
     try #require(r.ok, "\(r.stderr)")
     return img
 }
@@ -35,18 +35,18 @@ private func plainImage(in dir: URL) throws -> URL {
 /// attach `img` as another program would, waiting out the OS scanner's hold (see qa notes)
 private func outsideAttach(_ img: URL, _ extra: [String]) throws -> CommandResult {
     let args = ["attach"] + extra + [img.path]
-    var r = try ProcessCommandRunner().run(hdiutil, args)
+    var r = try TestDiskImages.run(args)
     let until = ProcessInfo.processInfo.systemUptime + 60
     while !r.ok, r.stderr.contains("temporarily unavailable"), ProcessInfo.processInfo.systemUptime < until {
         Thread.sleep(forTimeInterval: 2)
-        r = try ProcessCommandRunner().run(hdiutil, args)
+        r = try TestDiskImages.run(args)
     }
     return r
 }
 
 private func detachAll(_ img: URL) {
     for d in MirrorMounts.attachedDevices(of: img, runner: ProcessCommandRunner()).sorted(by: { $0.count < $1.count }).prefix(1) {
-        _ = try? ProcessCommandRunner().run(hdiutil, ["detach", "-force", d])
+        _ = try? TestDiskImages.run(["detach", "-force", d])
     }
 }
 
@@ -87,7 +87,7 @@ private func records(in base: URL) -> [URL] {
         let before: Set<String> = how == "listed before" ? Set(holder) : []
         Thread.sleep(forTimeInterval: 0.05)
         let borrowed = try AttachRecords.recording(img, sparing: before, runner: ProcessCommandRunner(), owner: dead, in: base) {
-            try ProcessCommandRunner().run(hdiutil, ["attach", "-readonly", "-nomount", img.path])
+            try TestDiskImages.run(["attach", "-readonly", "-nomount", img.path])
         }
         #expect(records(in: base).isEmpty, "\(how): the holder's attach was recorded as the reader's (hdiutil said \(borrowed.status))")
         AttachRecords.releaseLeftovers(of: img, runner: ProcessCommandRunner(), holding: lock, in: base)

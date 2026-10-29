@@ -84,12 +84,12 @@ private func sh(_ cmd: String, in dir: URL) throws {
         // helper can't snapshot); as in DMGSourceCheckTests
         let mnt = base.appendingPathComponent("vol")
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src",
-                                                                       base.appendingPathComponent("src.dmg").path])
+        let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src",
+                                           base.appendingPathComponent("src.dmg").path])
         try #require(made.ok, "\(made.stderr)")
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", base.appendingPathComponent("src.dmg").path,
-                                                                            "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+            try TestDiskImages.run(["attach", base.appendingPathComponent("src.dmg").path,
+                                    "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
         }
         try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
         defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
@@ -139,12 +139,12 @@ private func sh(_ cmd: String, in dir: URL) throws {
         defer { unlock(base); try? FileManager.default.removeItem(at: base) }
         let mnt = base.appendingPathComponent("vol")
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "200m", "-fs", "HFS+", "-volname", "Src",
-                                                                       base.appendingPathComponent("src.dmg").path])
+        let made = try TestDiskImages.run(["create", "-size", "200m", "-fs", "HFS+", "-volname", "Src",
+                                           base.appendingPathComponent("src.dmg").path])
         try #require(made.ok, "\(made.stderr)")
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", base.appendingPathComponent("src.dmg").path,
-                                                                            "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+            try TestDiskImages.run(["attach", base.appendingPathComponent("src.dmg").path,
+                                    "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
         }
         try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
         defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }

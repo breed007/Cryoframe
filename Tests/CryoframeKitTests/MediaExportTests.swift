@@ -500,11 +500,11 @@ private func names(_ p: MediaExportPlan) -> [String] { p.copies.map { "\($0.fold
         defer { cleanup() }
         let image = base.appendingPathComponent("card.dmg"), card = base.appendingPathComponent("card", isDirectory: true)
         try FileManager.default.createDirectory(at: card, withIntermediateDirectories: true)
-        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "32m", "-fs", "ExFAT", "-volname", "CARD",
-                                                                       "-layout", "MBRSPUD", "-type", "UDIF", image.path], stdin: nil)
+        let made = try TestDiskImages.run(["create", "-size", "32m", "-fs", "ExFAT", "-volname", "CARD",
+                                           "-layout", "MBRSPUD", "-type", "UDIF", image.path], stdin: nil)
         try #require(made.ok, "\(made.stderr)")
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", card.path, "-nobrowse"])
+            try TestDiskImages.run(["attach", image.path, "-mountpoint", card.path, "-nobrowse"])
         }
         try #require(attached.ok, "\(attached.stderr)")
         defer { MountPoint.detach(card, runner: ProcessCommandRunner()) }

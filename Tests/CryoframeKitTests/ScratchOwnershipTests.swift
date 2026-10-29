@@ -35,12 +35,12 @@ private func exists(_ url: URL) -> Bool {
 /// snapshots)
 private func mountedImage(_ image: URL, at mnt: URL, size: String = "40m", fs: String = "HFS+") throws {
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-    let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", size, "-fs", fs, "-type", "SPARSE",
-                                                                   "-volname", "Lib", image.path])
+    let made = try TestDiskImages.run(["create", "-size", size, "-fs", fs, "-type", "SPARSE",
+                                       "-volname", "Lib", image.path])
     try #require(made.ok, "\(made.stderr)")
     let attached = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path + ".sparseimage",
-                                                                        "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+        try TestDiskImages.run(["attach", image.path + ".sparseimage",
+                                "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
     }
     try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
 }

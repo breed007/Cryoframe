@@ -134,8 +134,8 @@ private struct Boom: Error {}
         for m in [m1, m2] { try FileManager.default.createDirectory(at: m, withIntermediateDirectories: true) }
         defer { MountPoint.detach(m1, runner: ProcessCommandRunner()); MountPoint.detach(m2, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: d) }
         let r = ProcessCommandRunner()
-        try #require(try r.run("/usr/bin/hdiutil", ["create", "-size", "10m", "-fs", "HFS+", "-volname", "X", img.path]).ok)
-        let first = try DiskImageGate.serialized { try r.runRetryingBusy("/usr/bin/hdiutil", ["attach", img.path, "-mountpoint", m1.path, "-nobrowse"]) }
+        try #require(try TestDiskImages.run(["create", "-size", "10m", "-fs", "HFS+", "-volname", "X", img.path]).ok)
+        let first = try DiskImageGate.serialized { try TestDiskImages.run(["attach", img.path, "-mountpoint", m1.path, "-nobrowse"]) }
         try #require(first.ok && MountPoint.isMounted(m1), "\(first.stderr)")
         let start = ProcessInfo.processInfo.systemUptime
         let second = try r.runRetryingBusy("/usr/bin/hdiutil", ["attach", img.path, "-mountpoint", m2.path, "-nobrowse"])
@@ -154,8 +154,8 @@ private struct Boom: Error {}
         try FileManager.default.createDirectory(at: m, withIntermediateDirectories: true)
         defer { MountPoint.detach(m, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: d) }
         let r = ProcessCommandRunner()
-        try #require(try r.run("/usr/bin/hdiutil", ["create", "-size", "10m", "-fs", "HFS+", "-volname", "Y", img.path]).ok)
-        let a = try DiskImageGate.serialized { try r.runRetryingBusy("/usr/bin/hdiutil", ["attach", img.path, "-mountpoint", m.path, "-nobrowse"]) }
+        try #require(try TestDiskImages.run(["create", "-size", "10m", "-fs", "HFS+", "-volname", "Y", img.path]).ok)
+        let a = try DiskImageGate.serialized { try TestDiskImages.run(["attach", img.path, "-mountpoint", m.path, "-nobrowse"]) }
         try #require(a.ok && MountPoint.isMounted(m), "\(a.stderr)")
         // something sitting in the volume for 1.5 s
         let squatter = Process()

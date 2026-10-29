@@ -121,12 +121,12 @@ private func unlock(_ d: URL) {
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
         // the library on a volume that isn't APFS, so the run reads it where it is (no
         // snapshot), as the fake helper can't make one
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src",
-                                                            base.appendingPathComponent("src.dmg").path])
+        let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src",
+                                           base.appendingPathComponent("src.dmg").path])
         try #require(made.ok, "\(made.stderr)")
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", base.appendingPathComponent("src.dmg").path,
-                                                                 "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+            try TestDiskImages.run(["attach", base.appendingPathComponent("src.dmg").path,
+                                    "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
         }
         try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
         defer {

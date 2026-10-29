@@ -39,7 +39,7 @@ private func lookInside<T>(_ bundle: URL, _ body: (URL) throws -> T) throws -> T
     let mnt = rbDir("look")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt) }
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
+        try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
     }
     try #require(r.ok && MountPoint.isMounted(mnt), "\(r.stderr)")
     return try body(mnt)
@@ -95,13 +95,13 @@ private func lookInside<T>(_ bundle: URL, _ body: (URL) throws -> T) throws -> T
         let src = rbDir("gapsrc").appendingPathComponent("Lib")
         try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
         for i in 0..<10 { try randomData(10 << 20).write(to: src.appendingPathComponent("p\(i).raw")) }
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "380m", "-fs", "APFS", "-volname", "Drive", "-type", "SPARSE",
-                                                            scratch.appendingPathComponent("drive").path])
+        let made = try TestDiskImages.run(["create", "-size", "380m", "-fs", "APFS", "-volname", "Drive", "-type", "SPARSE",
+                                           scratch.appendingPathComponent("drive").path])
         try #require(made.ok, "\(made.stderr)")
         let drive = scratch.appendingPathComponent("mnt")
         try FileManager.default.createDirectory(at: drive, withIntermediateDirectories: true)
         let a = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", scratch.appendingPathComponent("drive.sparseimage").path, "-mountpoint", drive.path, "-nobrowse"])
+            try TestDiskImages.run(["attach", scratch.appendingPathComponent("drive.sparseimage").path, "-mountpoint", drive.path, "-nobrowse"])
         }
         try #require(a.ok, "\(a.stderr)")
         defer {

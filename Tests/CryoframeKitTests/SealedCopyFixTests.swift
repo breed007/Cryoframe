@@ -42,12 +42,12 @@ private func sh(_ cmd: String, in dir: URL) throws {
 /// a disk image of `size` and `fs` made at `image` and mounted at `mnt`
 private func mountedImage(_ image: URL, at mnt: URL, size: String, fs: String) throws {
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-    let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", size, "-fs", fs, "-type", "SPARSE",
-                                                                   "-volname", "Fix", image.path])
+    let made = try TestDiskImages.run(["create", "-size", size, "-fs", fs, "-type", "SPARSE",
+                                       "-volname", "Fix", image.path])
     try #require(made.ok, "\(made.stderr)")
     let attached = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path + ".sparseimage",
-                                                                        "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+        try TestDiskImages.run(["attach", image.path + ".sparseimage",
+                                "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
     }
     try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
 }

@@ -60,7 +60,7 @@ private func imageRoot(_ bundle: URL) throws -> [String] {
     let mnt = tempDir("look")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt) }
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
+        try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
     }
     try #require(r.ok, "couldn't attach the mirror to look inside: \(r.stderr)")
     return (try FileManager.default.contentsOfDirectory(atPath: mnt.path)).filter { $0 != ".fseventsd" }.sorted()

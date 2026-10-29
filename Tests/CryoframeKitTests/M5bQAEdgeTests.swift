@@ -31,10 +31,10 @@ private struct QADrive {
 
     static func make(name: String, in base: URL) throws -> QADrive {
         let image = base.appendingPathComponent("drive.dmg")
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-quiet", "-size", "40m", "-fs", "APFS", "-volname", name,
-                                                            "-layout", "GPTSPUD", image.path])
+        let made = try TestDiskImages.run(["create", "-quiet", "-size", "40m", "-fs", "APFS", "-volname", name,
+                                           "-layout", "GPTSPUD", image.path])
         try #require(made.ok, "\(made.stderr)")
-        let attached = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", "-nobrowse", image.path]) }
+        let attached = try DiskImageGate.serialized { try TestDiskImages.run(["attach", "-nobrowse", image.path]) }
         try #require(attached.ok, "\(attached.stderr)")
         let mountPath = try #require(attached.stdout.split(separator: "\n").compactMap { line -> String? in
             guard let r = line.range(of: "/Volumes/") else { return nil }
@@ -47,7 +47,7 @@ private struct QADrive {
 
     func eject() {
         let current = DriveRename.drive(uuid)?.mountPoint ?? mount
-        _ = try? ProcessCommandRunner().run(hdiutil, ["detach", current.path, "-force"])
+        _ = try? TestDiskImages.run(["detach", current.path, "-force"])
     }
 }
 
@@ -111,14 +111,14 @@ private struct FailingHdiutil: CommandRunner {
         defer { drive.eject() }
         let inner = drive.mount.appendingPathComponent("Backups/Papers/2026-09-01-020000/Papers.dmg")
         try FileManager.default.createDirectory(at: inner.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-quiet", "-size", "2m", "-fs", "HFS+", "-volname", "In", inner.path])
+        let made = try TestDiskImages.run(["create", "-quiet", "-size", "2m", "-fs", "HFS+", "-volname", "In", inner.path])
         try #require(made.ok, "\(made.stderr)")
         let att = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", "-nobrowse", "-nomount", "-readonly", inner.path])
+            try TestDiskImages.run(["attach", "-nobrowse", "-nomount", "-readonly", inner.path])
         }
         try #require(att.ok, "\(att.stderr)")
         let dev = try #require(att.stdout.split(separator: "\n").first.map { String($0.split(separator: "\t").first ?? "").trimmingCharacters(in: .whitespaces) })
-        defer { _ = try? ProcessCommandRunner().run(hdiutil, ["detach", dev, "-force"]) }
+        defer { _ = try? TestDiskImages.run(["detach", dev, "-force"]) }
         let (store, job) = jobOnDriveA(name, base: base)
 
         do {
@@ -229,10 +229,10 @@ private func qaSourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
     let mnt = base.appendingPathComponent("vol")
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
     let dmg = base.appendingPathComponent("src.dmg")
-    let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src", dmg.path])
+    let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src", dmg.path])
     try #require(made.ok, "\(made.stderr)")
     let attached = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", dmg.path, "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+        try TestDiskImages.run(["attach", dmg.path, "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
     }
     try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
     let papers = mnt.appendingPathComponent("Papers")

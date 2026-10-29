@@ -54,7 +54,7 @@ private func sh(_ script: String) throws -> CommandResult {
     @Test func theNoteMatchesARealFolderAndItsStepsWork() throws {
         let base = folder("real")
         defer {
-            _ = try? ProcessCommandRunner().run(hdiutil, ["detach", "-force", base.appendingPathComponent("look").path])
+            _ = try? TestDiskImages.run(["detach", "-force", base.appendingPathComponent("look").path])
             try? FileManager.default.removeItem(at: base)
         }
         let dest = base.appendingPathComponent("dest")
@@ -97,8 +97,8 @@ private func sh(_ script: String) throws -> CommandResult {
         let look = base.appendingPathComponent("look")
         try FileManager.default.createDirectory(at: look, withIntermediateDirectories: true)
         let opened = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", "-readonly", "-nobrowse", "-mountpoint", look.path,
-                                                                 dest.appendingPathComponent("Projects/Projects.sparsebundle").path])
+            try TestDiskImages.run(["attach", "-readonly", "-nobrowse", "-mountpoint", look.path,
+                                    dest.appendingPathComponent("Projects/Projects.sparsebundle").path])
         }
         #expect(opened.ok, "\(opened.stderr)")
         #expect(FileManager.default.fileExists(atPath: look.appendingPathComponent("Projects/data.bin").path))
@@ -133,13 +133,13 @@ private func sh(_ script: String) throws -> CommandResult {
             MountPoint.detach(mnt, runner: ProcessCommandRunner())
             try? FileManager.default.removeItem(at: base)
         }
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "64m", "-fs", "ExFAT", "-volname", "SHARED",
-                                                            base.appendingPathComponent("x.dmg").path])
+        let made = try TestDiskImages.run(["create", "-size", "64m", "-fs", "ExFAT", "-volname", "SHARED",
+                                           base.appendingPathComponent("x.dmg").path])
         try #require(made.ok, "\(made.stderr)")
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", base.appendingPathComponent("x.dmg").path,
-                                                                 "-mountpoint", mnt.path, "-nobrowse"])
+            try TestDiskImages.run(["attach", base.appendingPathComponent("x.dmg").path,
+                                    "-mountpoint", mnt.path, "-nobrowse"])
         }
         try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
         let dest = mnt.appendingPathComponent("Backups")

@@ -49,7 +49,7 @@ private func mode(_ url: URL) -> mode_t {
 private func attach(_ image: URL, at mnt: URL, _ extra: [String] = [], stdin: Data? = nil) throws {
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", image.path, "-mountpoint", mnt.path, "-nobrowse"] + extra, stdin: stdin)
+        try TestDiskImages.run(["attach", image.path, "-mountpoint", mnt.path, "-nobrowse"] + extra, stdin: stdin)
     }
     try #require(r.ok && MountPoint.isMounted(mnt), "couldn't attach \(image.lastPathComponent): \(r.stderr)")
 }
@@ -90,8 +90,8 @@ private func devices(of image: URL) -> (count: Int, mounted: Bool) {
 
 /// a scratch drive of `size`, attached the way external drives are (ownership ignored)
 private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
-    let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", size, "-fs", "APFS", "-volname", "Drive",
-                                                        "-type", "SPARSE", dir.appendingPathComponent("drive").path])
+    let made = try TestDiskImages.run(["create", "-size", size, "-fs", "APFS", "-volname", "Drive",
+                                       "-type", "SPARSE", dir.appendingPathComponent("drive").path])
     try #require(made.ok, "\(made.stderr)")
     let mnt = dir.appendingPathComponent("mnt")
     try attach(dir.appendingPathComponent("drive.sparseimage"), at: mnt)
@@ -163,9 +163,9 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
         let out = drive.appendingPathComponent("Lib")
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let bundle = out.appendingPathComponent("Lib.sparsebundle")
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-type", "SPARSEBUNDLE", "-fs", "APFS", "-size", "1g", "-volname", "Lib",
-                                                            "-imagekey", "sparse-band-size=16384"]
-                                                  + (passphrase != nil ? ["-encryption", "AES-256", "-stdinpass"] : []) + [bundle.path], stdin: stdin)
+        let made = try TestDiskImages.run(["create", "-type", "SPARSEBUNDLE", "-fs", "APFS", "-size", "1g", "-volname", "Lib",
+                                           "-imagekey", "sparse-band-size=16384"]
+                                 + (passphrase != nil ? ["-encryption", "AES-256", "-stdinpass"] : []) + [bundle.path], stdin: stdin)
         try #require(made.ok, "\(made.stderr)")
         let mnt = fitDir("old")
         try attach(bundle, at: mnt, ["-owners", "on"] + enc, stdin: stdin)
@@ -390,7 +390,7 @@ private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
         let lock = try #require(ImageLock.acquire(bundle, wait: 30))
         let attached = try AttachRecords.recording(bundle, sparing: [], runner: ProcessCommandRunner(), owner: dead) {
             try DiskImageGate.serialized {
-                try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", "-nomount", "-readonly", "-nobrowse", bundle.path])
+                try TestDiskImages.run(["attach", "-nomount", "-readonly", "-nobrowse", bundle.path])
             }
         }
         lock.release()

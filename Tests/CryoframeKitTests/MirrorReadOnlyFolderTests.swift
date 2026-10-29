@@ -70,7 +70,7 @@ private func put(_ root: URL, _ rel: String, _ text: String) throws {
         let mount = base.appendingPathComponent("look", isDirectory: true)
         try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-readonly", "-nobrowse", "-mountpoint", mount.path])
+            try TestDiskImages.run(["attach", image.path, "-readonly", "-nobrowse", "-mountpoint", mount.path])
         }
         try #require(attached.ok, "couldn't attach the mirror: \(attached.stderr)")
         defer { MountPoint.detach(mount, runner: ProcessCommandRunner()) }

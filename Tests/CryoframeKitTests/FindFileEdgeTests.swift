@@ -66,11 +66,11 @@ private func hfsSource(_ base: URL) throws -> URL {
     let mnt = base.appendingPathComponent("vol")
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
     let image = base.appendingPathComponent("src.dmg")
-    let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src", image.path])
+    let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src", image.path])
     try #require(made.ok, "\(made.stderr)")
     let attached = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", mnt.path,
-                                                                        "-nobrowse", "-owners", "on"])
+        try TestDiskImages.run(["attach", image.path, "-mountpoint", mnt.path,
+                                "-nobrowse", "-owners", "on"])
     }
     try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
     return mnt

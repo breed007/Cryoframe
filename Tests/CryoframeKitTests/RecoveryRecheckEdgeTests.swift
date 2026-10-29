@@ -72,11 +72,11 @@ private func report(error: String) -> String {
         var held: String?
         var image: URL?
         defer {
-            if let held { _ = try? ProcessCommandRunner().run(hdiutil, ["detach", "-force", held]) }
+            if let held { _ = try? TestDiskImages.run(["detach", "-force", held]) }
             // and whatever else attached this scratch image, so nothing outlives its folder
             if let image {
                 for d in MirrorMounts.attachedDevices(of: image, runner: ProcessCommandRunner()).prefix(1) {
-                    _ = try? ProcessCommandRunner().run(hdiutil, ["detach", "-force", d])
+                    _ = try? TestDiskImages.run(["detach", "-force", d])
                 }
             }
             try? FileManager.default.removeItem(at: base)
@@ -99,11 +99,11 @@ private func report(error: String) -> String {
         // A system process sometimes attaches a freshly written image itself (writable,
         // no mount point, for minutes; seen in full-suite runs) and this attach then
         // says "Resource temporarily unavailable". Wait a bounded time for it.
-        var attached = try ProcessCommandRunner().run(hdiutil, args, stdin: Data("right".utf8))
+        var attached = try TestDiskImages.run(args, stdin: Data("right".utf8))
         let until = ProcessInfo.processInfo.systemUptime + 60
         while !attached.ok, attached.stderr.contains("temporarily unavailable"), ProcessInfo.processInfo.systemUptime < until {
             Thread.sleep(forTimeInterval: 2)
-            attached = try ProcessCommandRunner().run(hdiutil, args, stdin: Data("right".utf8))
+            attached = try TestDiskImages.run(args, stdin: Data("right".utf8))
         }
         try #require(attached.ok, "\(attached.stderr)")
         held = device(attached)

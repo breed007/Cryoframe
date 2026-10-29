@@ -79,7 +79,7 @@ private func lookInside<T>(_ bundle: URL, _ body: (URL) throws -> T) throws -> T
     let mnt = guardDir("look")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt) }
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
+        try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
     }
     try #require(r.ok && MountPoint.isMounted(mnt), "\(r.stderr)")
     return try body(mnt)
@@ -175,7 +175,7 @@ private func setTag(_ url: URL, _ value: String, name: String = "com.example.tag
 
         // what the failed run left: a staging copy with one file's data lost
         let mnt = guardDir("plant")
-        let a = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse"]) }
+        let a = try DiskImageGate.serialized { try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse"]) }
         try #require(a.ok, "\(a.stderr)")
         let staging = mnt.appendingPathComponent("\(MirrorCopy.stagingName)/Lib")
         try fm.createDirectory(at: staging.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -207,11 +207,11 @@ private func setTag(_ url: URL, _ value: String, name: String = "com.example.tag
         }
         for i in 0..<2 {
             let img = scratch.appendingPathComponent("twin\(i)")
-            let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "64m", "-fs", "APFS", "-volname", "Backups", "-type", "SPARSE", img.path])
+            let made = try TestDiskImages.run(["create", "-size", "64m", "-fs", "APFS", "-volname", "Backups", "-type", "SPARSE", img.path])
             try #require(made.ok, "\(made.stderr)")
             let mnt = scratch.appendingPathComponent("m\(i)")
             try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-            let a = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", img.path + ".sparseimage", "-mountpoint", mnt.path, "-nobrowse"]) }
+            let a = try DiskImageGate.serialized { try TestDiskImages.run(["attach", img.path + ".sparseimage", "-mountpoint", mnt.path, "-nobrowse"]) }
             try #require(a.ok, "\(a.stderr)")
             drives.append(mnt)
         }

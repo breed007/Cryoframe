@@ -58,12 +58,12 @@ private func mtime(_ url: URL) -> Int {
 /// a disk image mounted at `mnt`, read live by a run (the fake helper makes no snapshots)
 private func mountedImage(_ image: URL, at mnt: URL) throws {
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-    let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "40m", "-fs", "HFS+", "-type", "SPARSE",
-                                                                   "-volname", "Lib", image.path])
+    let made = try TestDiskImages.run(["create", "-size", "40m", "-fs", "HFS+", "-type", "SPARSE",
+                                       "-volname", "Lib", image.path])
     try #require(made.ok, "\(made.stderr)")
     let attached = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path + ".sparseimage",
-                                                                        "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+        try TestDiskImages.run(["attach", image.path + ".sparseimage",
+                                "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
     }
     try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
 }
@@ -131,8 +131,8 @@ private func archiveIn(_ dest: URL) throws -> RestorableArchive {
         let probe = base.appendingPathComponent("probe")
         try FileManager.default.createDirectory(at: probe, withIntermediateDirectories: true)
         try sh("echo a > app.log && chflags uappnd app.log", in: probe)
-        let direct = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-srcfolder", probe.path, "-format", "UDZO",
-                                                                         base.appendingPathComponent("probe.dmg").path])
+        let direct = try TestDiskImages.run(["create", "-srcfolder", probe.path, "-format", "UDZO",
+                                             base.appendingPathComponent("probe.dmg").path])
         // measured refused on macOS 27.0.1; a macOS that takes it builds direct and keeps every lock
         let refused = !direct.ok && FilteredCopy.refusedOutright(direct.stderr)
 

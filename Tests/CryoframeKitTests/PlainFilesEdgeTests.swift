@@ -28,11 +28,11 @@ private func drive(_ fs: String, mb: Int, in base: URL) throws -> (mount: URL, d
     let image = base.appendingPathComponent("drive-\(UUID().uuidString).dmg")
     let mount = base.appendingPathComponent("vol-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
-    let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "\(mb)m", "-fs", fs, "-volname", "CARD",
-                                                                   "-type", "UDIF", "-layout", "MBRSPUD", image.path], stdin: nil)
+    let made = try TestDiskImages.run(["create", "-size", "\(mb)m", "-fs", fs, "-volname", "CARD",
+                                       "-type", "UDIF", "-layout", "MBRSPUD", image.path], stdin: nil)
     try #require(made.ok, "couldn't make the drive: \(made.stderr)")
     let attached = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
+        try TestDiskImages.run(["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
     }
     try #require(attached.ok, "couldn't attach the drive: \(attached.stderr)")
     return (mount, { MountPoint.detach(mount, runner: ProcessCommandRunner()) })

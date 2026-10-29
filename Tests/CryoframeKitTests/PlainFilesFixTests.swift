@@ -114,11 +114,11 @@ private let exfatLike = FileSystemProfile(kind: .exfat, fsType: "exfat", foldsCa
         defer { try? FileManager.default.removeItem(at: base) }
         let image = base.appendingPathComponent("drive.dmg"), mount = base.appendingPathComponent("vol", isDirectory: true)
         try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
-        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "32m", "-fs", "HFS+", "-volname", "MAC",
-                                                                       "-type", "UDIF", image.path], stdin: nil)
+        let made = try TestDiskImages.run(["create", "-size", "32m", "-fs", "HFS+", "-volname", "MAC",
+                                           "-type", "UDIF", image.path], stdin: nil)
         try #require(made.ok, "\(made.stderr)")
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
+            try TestDiskImages.run(["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
         }
         try #require(attached.ok, "\(attached.stderr)")
         defer { MountPoint.detach(mount, runner: ProcessCommandRunner()) }
@@ -189,11 +189,11 @@ private let exfatLike = FileSystemProfile(kind: .exfat, fsType: "exfat", foldsCa
         }
         let image = base.appendingPathComponent("drive.dmg"), mount = base.appendingPathComponent("vol", isDirectory: true)
         try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
-        let made = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["create", "-size", "32m", "-fs", "HFS+", "-volname", "MAC",
-                                                                       "-type", "UDIF", image.path], stdin: nil)
+        let made = try TestDiskImages.run(["create", "-size", "32m", "-fs", "HFS+", "-volname", "MAC",
+                                           "-type", "UDIF", image.path], stdin: nil)
         try #require(made.ok, "\(made.stderr)")
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
+            try TestDiskImages.run(["attach", image.path, "-mountpoint", mount.path, "-nobrowse"])
         }
         try #require(attached.ok, "\(attached.stderr)")
         defer { MountPoint.detach(mount, runner: ProcessCommandRunner()) }

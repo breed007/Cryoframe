@@ -56,7 +56,7 @@ private func insideMirror(_ bundle: URL) throws -> (library: [String: Data], roo
     let mnt = tempDir("look")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt) }
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
+        try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
     }
     try #require(r.ok, "couldn't attach the mirror to look inside: \(r.stderr)")
     let root = (try FileManager.default.contentsOfDirectory(atPath: mnt.path)).filter { $0 != ".fseventsd" }.sorted()
@@ -209,7 +209,7 @@ private struct DiesMidRsync: CommandRunner {
         #expect(inside.root == ["Lib"], "the previous copy was left behind: \(inside.root)")
         let mnt = tempDir("acl-look")
         defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt) }
-        let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
+        let r = try DiskImageGate.serialized { try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
         try #require(r.ok)
         let ls = try ProcessCommandRunner().run("/bin/ls", ["-led", mnt.appendingPathComponent("Lib").path])
         #expect(ls.stdout.contains("deny delete"), "the new copy lost its folder's ACL:\n\(ls.stdout)")
@@ -308,7 +308,7 @@ private struct DiesMidRsync: CommandRunner {
         try JSONEncoder().encode(ProcessIdentity(pid: me.pid, startedAt: me.startedAt - 1))
             .write(to: work.appendingPathComponent(OpenedArchive.ownerFileName))
         let r = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", result.artifacts[0].path, "-mountpoint", mnt.path, "-nobrowse"])
+            try TestDiskImages.run(["attach", result.artifacts[0].path, "-mountpoint", mnt.path, "-nobrowse"])
         }
         try #require(r.ok, "\(r.stderr)")
         defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()) }
@@ -422,7 +422,7 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
 
         let mnt = tempDir("ro-look")
         defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? fm.removeItem(at: mnt) }
-        let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
+        let r = try DiskImageGate.serialized { try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
         try #require(r.ok, "\(r.stderr)")
         let copy = mnt.appendingPathComponent("Lib/objects/a*b [1]?")
         #expect(tree(mnt.appendingPathComponent("Lib")) == tree(src))
@@ -500,7 +500,7 @@ private final class UsageAtRsync: CommandRunner, @unchecked Sendable {
 
         // the library folder goes missing inside an otherwise sound image
         let mnt = tempDir("reh-mnt")
-        let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", result.artifacts[0].path, "-mountpoint", mnt.path, "-nobrowse"]) }
+        let r = try DiskImageGate.serialized { try TestDiskImages.run(["attach", result.artifacts[0].path, "-mountpoint", mnt.path, "-nobrowse"]) }
         try #require(r.ok, "\(r.stderr)")
         try FileManager.default.moveItem(at: mnt.appendingPathComponent("Lib"), to: mnt.appendingPathComponent("Elsewhere"))
         MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt)
@@ -539,7 +539,7 @@ extension ReadOnlyFilesInAMirror {
 
         let mnt = tempDir("bs-look")
         defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? fm.removeItem(at: mnt) }
-        let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
+        let r = try DiskImageGate.serialized { try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"]) }
         try #require(r.ok, "\(r.stderr)")
         let lib = mnt.appendingPathComponent("Lib")
         #expect(tree(lib) == tree(src))
@@ -585,12 +585,12 @@ extension ReadOnlyFilesInAMirror {
     @Test func aDriveFilledBySomethingElseMidRunFailsTheRunAndKeepsThePreviousCopy() throws {
         let scratch = tempDir("other"), base = tempDir("base"), back = tempDir("back")
         let src = try library(files: 10)
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "300m", "-fs", "APFS", "-volname", "Drive",
-                                                            "-type", "SPARSE", scratch.appendingPathComponent("drive").path])
+        let made = try TestDiskImages.run(["create", "-size", "300m", "-fs", "APFS", "-volname", "Drive",
+                                           "-type", "SPARSE", scratch.appendingPathComponent("drive").path])
         try #require(made.ok, "\(made.stderr)")
         let drive = scratch.appendingPathComponent("mnt")
         try FileManager.default.createDirectory(at: drive, withIntermediateDirectories: true)
-        let a = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", scratch.appendingPathComponent("drive.sparseimage").path, "-mountpoint", drive.path, "-nobrowse"]) }
+        let a = try DiskImageGate.serialized { try TestDiskImages.run(["attach", scratch.appendingPathComponent("drive.sparseimage").path, "-mountpoint", drive.path, "-nobrowse"]) }
         try #require(a.ok, "\(a.stderr)")
         defer {
             MountPoint.detach(drive, runner: ProcessCommandRunner())
@@ -670,7 +670,7 @@ extension MirrorCrashSafety {
 
         let mnt = tempDir("stuck-mnt")
         func attachRW() throws {
-            let r = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse"]) }
+            let r = try DiskImageGate.serialized { try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse"]) }
             try #require(r.ok, "\(r.stderr)")
         }
         try attachRW()

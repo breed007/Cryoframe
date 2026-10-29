@@ -259,13 +259,12 @@ private func restoreFixture(_ base: URL, name: String) throws -> (archive: Resto
         let base = tempFolder("pairhfs")
         defer { try? FileManager.default.removeItem(at: base) }
         let image = base.appendingPathComponent("twin.dmg"), mnt = base.appendingPathComponent("mnt")
-        let r = ProcessCommandRunner()
-        let made = try r.run("/usr/bin/hdiutil", ["create", "-size", "20m", "-fs", "HFS+", "-volname", "CF17Twin", "-o", image.path, "-quiet"], stdin: nil)
+        let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "HFS+", "-volname", "CF17Twin", "-o", image.path, "-quiet"], stdin: nil)
         try #require(made.ok, "\(made.stderr)")
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
-        let attached = try r.run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-mountpoint", mnt.path, image.path], stdin: nil)
+        let attached = try TestDiskImages.run(["attach", "-nobrowse", "-mountpoint", mnt.path, image.path], stdin: nil)
         try #require(attached.ok, "\(attached.stderr)")
-        defer { _ = try? r.run("/usr/bin/hdiutil", ["detach", mnt.path, "-force"], stdin: nil) }
+        defer { _ = try? TestDiskImages.run(["detach", mnt.path, "-force"], stdin: nil) }
 
         let src = base.appendingPathComponent("Photos Library.photoslibrary")
         try put(src, "database/Photos.sqlite", "db")

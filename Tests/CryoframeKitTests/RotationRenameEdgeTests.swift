@@ -29,12 +29,12 @@ private let start = Date(timeIntervalSince1970: 1_790_000_000)
         let mnt = base.appendingPathComponent("vol")
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
         let hdiutil = "/usr/bin/hdiutil"
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src",
-                                                            base.appendingPathComponent("src.dmg").path])
+        let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src",
+                                           base.appendingPathComponent("src.dmg").path])
         try #require(made.ok, "\(made.stderr)")
         let attached = try DiskImageGate.serialized {
-            try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", base.appendingPathComponent("src.dmg").path,
-                                                                 "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+            try TestDiskImages.run(["attach", base.appendingPathComponent("src.dmg").path,
+                                    "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
         }
         try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
         defer {

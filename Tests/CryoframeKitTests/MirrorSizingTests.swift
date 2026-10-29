@@ -35,14 +35,14 @@ private func imageBytes(_ bundle: URL) throws -> UInt64 {
 
 /// a scratch drive of `size` (hdiutil units), attached the way external drives are.
 private func scratchDrive(_ size: String, in dir: URL) throws -> URL {
-    let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", size, "-fs", "APFS", "-volname", "Drive",
-                                                        "-type", "SPARSE", dir.appendingPathComponent("drive").path])
+    let made = try TestDiskImages.run(["create", "-size", size, "-fs", "APFS", "-volname", "Drive",
+                                       "-type", "SPARSE", dir.appendingPathComponent("drive").path])
     try #require(made.ok, "\(made.stderr)")
     let mnt = dir.appendingPathComponent("mnt")
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", dir.appendingPathComponent("drive.sparseimage").path,
-                                                             "-mountpoint", mnt.path, "-nobrowse"])
+        try TestDiskImages.run(["attach", dir.appendingPathComponent("drive.sparseimage").path,
+                                "-mountpoint", mnt.path, "-nobrowse"])
     }
     try #require(r.ok, "\(r.stderr)")
     return mnt

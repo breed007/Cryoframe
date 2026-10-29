@@ -94,7 +94,7 @@ private func copyMatches(_ bundle: URL, _ lib: URL, root expected: [String]) thr
     let mnt = realTemp("look")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt) }
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
+        try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
     }
     try #require(r.ok, "couldn't attach the mirror: \(r.stderr)")
     let root = try FileManager.default.contentsOfDirectory(atPath: mnt.path).filter { $0 != ".fseventsd" }.sorted()

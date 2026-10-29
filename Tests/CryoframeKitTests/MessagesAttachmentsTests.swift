@@ -210,7 +210,7 @@ private func filesInImage(_ bundle: URL) throws -> [String] {
     let mnt = tempDir("look")
     defer { MountPoint.detach(mnt, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: mnt) }
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy("/usr/bin/hdiutil", ["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
+        try TestDiskImages.run(["attach", bundle.path, "-mountpoint", mnt.path, "-nobrowse", "-readonly"])
     }
     try #require(r.ok, "couldn't attach the image: \(r.stderr)")
     return files(mnt).filter { !$0.hasPrefix(".") }

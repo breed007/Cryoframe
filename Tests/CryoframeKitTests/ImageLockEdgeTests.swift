@@ -34,7 +34,7 @@ private func folder(_ tag: String) -> URL {
         defer {
             if let image {
                 for d in MirrorMounts.attachedDevices(of: image, runner: ProcessCommandRunner()).prefix(1) {
-                    _ = try? ProcessCommandRunner().run(hdiutil, ["detach", "-force", d])
+                    _ = try? TestDiskImages.run(["detach", "-force", d])
                 }
             }
             try? FileManager.default.removeItem(at: base)
@@ -50,11 +50,11 @@ private func folder(_ tag: String) -> URL {
         // the outside holder (as Disk Utility or Terminal would attach it)
         var args = ["attach", "-nomount", "-stdinpass", img.path]
         if mode == "read-only" { args.insert("-readonly", at: 1) }
-        var held = try ProcessCommandRunner().run(hdiutil, args, stdin: Data("right".utf8))
+        var held = try TestDiskImages.run(args, stdin: Data("right".utf8))
         let until = ProcessInfo.processInfo.systemUptime + 60      // the OS scanner (see qa notes)
         while !held.ok, held.stderr.contains("temporarily unavailable"), ProcessInfo.processInfo.systemUptime < until {
             Thread.sleep(forTimeInterval: 2)
-            held = try ProcessCommandRunner().run(hdiutil, args, stdin: Data("right".utf8))
+            held = try TestDiskImages.run(args, stdin: Data("right".utf8))
         }
         try #require(held.ok, "\(held.stderr)")
         let device = try #require(held.stdout.split(whereSeparator: \.isWhitespace).first(where: { $0.hasPrefix("/dev/disk") }).map(String.init))

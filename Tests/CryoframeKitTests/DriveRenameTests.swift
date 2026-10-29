@@ -33,10 +33,10 @@ private struct TestDrive {
 
     static func make(_ fs: String, name: String, in base: URL) throws -> TestDrive {
         let image = base.appendingPathComponent("\(fs.filter(\.isLetter)).dmg")
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-quiet", "-size", "40m", "-fs", fs, "-volname", name,
-                                                            "-layout", "GPTSPUD", image.path])
+        let made = try TestDiskImages.run(["create", "-quiet", "-size", "40m", "-fs", fs, "-volname", name,
+                                           "-layout", "GPTSPUD", image.path])
         try #require(made.ok, "\(made.stderr)")
-        let attached = try DiskImageGate.serialized { try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", "-nobrowse", image.path]) }
+        let attached = try DiskImageGate.serialized { try TestDiskImages.run(["attach", "-nobrowse", image.path]) }
         try #require(attached.ok, "\(attached.stderr)")
         let mountPath = try #require(attached.stdout.split(separator: "\n").compactMap { line -> String? in
             guard let r = line.range(of: "/Volumes/") else { return nil }
@@ -52,7 +52,7 @@ private struct TestDrive {
 
     func eject() {
         let current = DriveRename.drive(uuid)?.mountPoint ?? mount
-        _ = try? ProcessCommandRunner().run(hdiutil, ["detach", current.path, "-force"])
+        _ = try? TestDiskImages.run(["detach", current.path, "-force"])
     }
 }
 

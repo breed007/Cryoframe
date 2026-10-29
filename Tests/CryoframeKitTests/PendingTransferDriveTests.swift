@@ -155,10 +155,10 @@ private func sourceVolume(in base: URL) throws -> (mnt: URL, papers: URL) {
     let mnt = base.appendingPathComponent("vol")
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
     let dmg = base.appendingPathComponent("src.dmg")
-    let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src", dmg.path])
+    let made = try TestDiskImages.run(["create", "-size", "20m", "-fs", "HFS+", "-volname", "Src", dmg.path])
     try #require(made.ok, "\(made.stderr)")
     let attached = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", dmg.path, "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
+        try TestDiskImages.run(["attach", dmg.path, "-mountpoint", mnt.path, "-nobrowse", "-owners", "on"])
     }
     try #require(attached.ok && MountPoint.isMounted(mnt), "\(attached.stderr)")
     let papers = mnt.appendingPathComponent("Papers")

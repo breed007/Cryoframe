@@ -54,7 +54,7 @@ private func tree(_ root: URL) -> [String: Data] {
 private func attach(_ image: URL, at mnt: URL, _ extra: [String] = [], stdin: Data? = nil) throws {
     try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
     let r = try DiskImageGate.serialized {
-        try ProcessCommandRunner().runRetryingBusy(hdiutil, ["attach", image.path, "-mountpoint", mnt.path, "-nobrowse"] + extra, stdin: stdin)
+        try TestDiskImages.run(["attach", image.path, "-mountpoint", mnt.path, "-nobrowse"] + extra, stdin: stdin)
     }
     try #require(r.ok && MountPoint.isMounted(mnt), "couldn't attach \(image.lastPathComponent): \(r.stderr)")
 }
@@ -461,8 +461,8 @@ private var deadOwner: ProcessIdentity {
         let src = edgeDir("fillsrc").appendingPathComponent("Lib")
         try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
         for i in 0..<16 { try randomData(12 << 20).write(to: src.appendingPathComponent("p\(i).raw")) }
-        let made = try ProcessCommandRunner().run(hdiutil, ["create", "-size", "400m", "-fs", "APFS", "-volname", "Small",
-                                                            "-type", "SPARSE", scratch.appendingPathComponent("drive").path])
+        let made = try TestDiskImages.run(["create", "-size", "400m", "-fs", "APFS", "-volname", "Small",
+                                           "-type", "SPARSE", scratch.appendingPathComponent("drive").path])
         try #require(made.ok, "\(made.stderr)")
         let drive = scratch.appendingPathComponent("mnt")
         try attach(scratch.appendingPathComponent("drive.sparseimage"), at: drive)
