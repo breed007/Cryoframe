@@ -62,7 +62,8 @@ final class RestoreModel: ObservableObject {
     func requestInPlace(_ a: RestorableArchive) {
         guard let (type, _) = liveLocation(of: a) else { return }
         if a.encrypted, passphrase.isEmpty { errorMessage = "Enter the archive's passphrase first."; return }
-        if let proc = type.owningProcess, WorkspaceProcessDetector().isRunning(proc) {
+        // Messages attachments has no app of its own, and Messages has its folder open
+        if let proc = type.inPlaceOwner, WorkspaceProcessDetector().isRunning(proc) {
             errorMessage = "Quit \(proc.displayName) before replacing its library in place."; return
         }
         pendingInPlace = a

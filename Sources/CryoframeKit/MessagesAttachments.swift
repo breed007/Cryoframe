@@ -44,6 +44,12 @@ public extension ContentType {
     /// the library this one is part of, whose backup covers it (see CoverageAdvisor)
     var partOf: String? { id == Self.messagesAttachmentsID ? ContentType.messages.id : nil }
 
+    /// the app to quit before this library is replaced in place: its own, or for
+    /// Messages attachments, Messages, which has its folder open
+    var inPlaceOwner: OwningProcess? {
+        owningProcess ?? (id == Self.messagesAttachmentsID ? ContentType.messages.owningProcess : nil)
+    }
+
     /// Whether an item named `name` in this library is left out of its backups, and
     /// what is in it. nil: nothing is. A name holding a backslash is never left out:
     /// rsync's filters can't match one (see MirrorCopy.update), so it is copied.

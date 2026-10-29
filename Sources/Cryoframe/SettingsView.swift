@@ -249,6 +249,8 @@ private struct GeneralSettings: View {
 
 private struct ScheduleSettings: View {
     @StateObject private var schedule = ScheduleManager()
+    /// why the last Enable or Disable failed; the status is read again either way
+    @State private var scheduleError: String?
 
     var body: some View {
         Form {
@@ -256,9 +258,12 @@ private struct ScheduleSettings: View {
                 HStack {
                     Text("Agent:"); Text(schedule.statusText).foregroundStyle(.secondary)
                     Spacer()
-                    if schedule.isEnabled { Button("Disable") { try? schedule.unregister() } }
-                    else { Button("Enable") { try? schedule.register() } }
+                    if schedule.isEnabled { Button("Disable") { change { try schedule.unregister() } } }
+                    else { Button("Enable") { change { try schedule.register() } } }
                     Button("Refresh") { schedule.refresh() }
+                }
+                if let scheduleError {
+                    Text(scheduleError).font(.caption).foregroundStyle(Color.cryoWarn).fixedSize(horizontal: false, vertical: true)
                 }
             }
             Section {
@@ -267,5 +272,14 @@ private struct ScheduleSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Enable or Disable, saying why it failed. A failure used to be dropped, and the
+    /// status not read again, so a schedule that needs approval in System Settings
+    /// still said what it had said before.
+    private func change(_ action: () throws -> Void) {
+        do { try action(); scheduleError = nil }
+        catch { scheduleError = error.localizedDescription }
+        schedule.refresh()
     }
 }

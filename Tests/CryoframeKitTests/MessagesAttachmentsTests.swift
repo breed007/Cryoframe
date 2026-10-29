@@ -96,6 +96,15 @@ private let wanted = ["0a/01/AAAA-1111/IMG_0001.HEIC", "0a/01/AAAA-1111/IMG_0001
         d.selectedLibraryIDs = [ContentType.messages.id, ContentType.messagesAttachments.id]
         #expect(d.libraryOverlaps == ["Messages already includes Messages attachments, so this job keeps them twice. To keep only the photos, videos and files, choose Messages attachments alone."])
     }
+
+    // Replacing the attachments folder in place under a running Messages trashed it
+    // from under the app: a restore in place asks for Messages to be quit first.
+    @Test func aRestoreInPlaceOfTheAttachmentsAsksForMessagesToBeQuit() {
+        #expect(ContentType.messagesAttachments.owningProcess == nil)        // backed up with Messages open
+        #expect(ContentType.messagesAttachments.inPlaceOwner?.bundleIdentifier == "com.apple.MobileSMS")
+        #expect(docs.inPlaceOwner == nil)
+        #expect(ContentType.photos.inPlaceOwner == ContentType.photos.owningProcess)
+    }
 }
 
 @Suite(.serialized) struct MessagesAttachmentsCopyTests {
