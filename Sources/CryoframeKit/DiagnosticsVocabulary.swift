@@ -856,6 +856,7 @@ rule
 run
 running
 runs
+rwx
 safari
 safely
 safer

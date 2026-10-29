@@ -239,7 +239,7 @@ enum FilteredCopy {
         guard lstat(folder.path, &st) == 0 else { return }
         _ = try? runner.run("/usr/bin/chflags", ["-R", "0", folder.path], stdin: nil)
         _ = try? runner.run("/bin/chmod", ["-R", "-N", folder.path], stdin: nil)
-        _ = try? runner.run("/bin/chmod", ["-R", "u+w", folder.path], stdin: nil)
+        _ = try? runner.run("/bin/chmod", ["-R", "u+rwX", folder.path], stdin: nil)
         try? fm.removeItem(at: folder)
     }
 

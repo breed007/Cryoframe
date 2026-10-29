@@ -1083,7 +1083,7 @@ public enum RemovedItems {
             } catch {
                 // a locked item or a read-only folder (a Mac's drive keeps them)
                 _ = try? ProcessCommandRunner().run("/usr/bin/chflags", ["-R", "nouchg", folder.path], stdin: nil)
-                _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "u+w", folder.path], stdin: nil)
+                _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "u+rwX", folder.path], stdin: nil)
                 if (try? FileManager.default.removeItem(at: folder)) != nil { deleted += 1 } else { failed.append(folder.lastPathComponent) }
             }
         }

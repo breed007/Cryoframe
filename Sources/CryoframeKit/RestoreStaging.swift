@@ -146,7 +146,7 @@ public final class RestoreStaging {
         if (try? FileManager.default.removeItem(at: dir)) != nil { return }
         // a library's read-only folders or locked files (a restore keeps them so)
         _ = try? ProcessCommandRunner().run("/usr/bin/chflags", ["-R", "nouchg", dir.path], stdin: nil)
-        _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "u+w", dir.path], stdin: nil)
+        _ = try? ProcessCommandRunner().run("/bin/chmod", ["-R", "u+rwX", dir.path], stdin: nil)
         try? FileManager.default.removeItem(at: dir)
     }
 

@@ -967,10 +967,11 @@ enum MirrorCopy {
         try? fm.removeItem(at: staging)
         guard fm.fileExists(atPath: staging.path), control?.isCancelled != true else { return }
         // locked items, deny-delete ACLs, and read-only folders (all of which the copy
-        // keeps) are what stops a plain remove
+        // keeps) are what stops a plain remove, and so does a folder its owner can't
+        // list (rsync keeps a mode of 000): u+rwX opens each before chmod goes into it
         _ = try? runner.run("/usr/bin/chflags", ["-R", "0", staging.path], stdin: nil)
         _ = try? runner.run("/bin/chmod", ["-R", "-N", staging.path], stdin: nil)
-        _ = try? runner.run("/bin/chmod", ["-R", "u+w", staging.path], stdin: nil)
+        _ = try? runner.run("/bin/chmod", ["-R", "u+rwX", staging.path], stdin: nil)
         guard control?.isCancelled != true else { return }
         try? fm.removeItem(at: staging)
     }
