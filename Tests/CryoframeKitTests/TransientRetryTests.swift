@@ -104,3 +104,91 @@ private func hdiutil(failing verb: String, with stderr: String, attached: String
         #expect(!ArchiveReader.isTransient(e("hdiutil: attach failed - Authentication error")))
     }
 }
+
+/// A sealed image build on the macOS 27 CI runner sometimes fails "create failed - No
+/// such file or directory" with nothing missing. That build, and only that one, is
+/// tried once more, and only while what it reads and writes into is still there.
+@Suite(.serialized) struct MissingFileRetryTests {
+    static let enoent = "hdiutil: create failed - No such file or directory"
+
+    /// a library folder and a destination, with an hdiutil whose `create` answers
+    /// `answers` in turn (the last one again after that): a success writes the image
+    func build(_ answers: [String?], before: @escaping @Sendable (_ library: URL, _ dest: URL) -> Void = { _, _ in })
+        throws -> (result: Result<ArchiveResult, Error>, creates: Int) {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("enoent-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: base) }
+        let library = base.appendingPathComponent("src/Photos")
+        let dest = base.appendingPathComponent("dest")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: library.appendingPathComponent("a.jpg"))
+        let tally = Tally()
+        let runner = ScriptedCommandRunner { (_: String, args: [String]) -> CommandResult in
+            guard args.first == "create" else { return CommandResult(status: 0, stdout: "", stderr: "") }
+            tally.bump("create")
+            before(library, dest)
+            let answer: String? = answers[min(tally["create"], answers.count) - 1]
+            guard let said = answer else {
+                FileManager.default.createFile(atPath: args[args.count - 1], contents: Data("dmg".utf8))
+                return CommandResult(status: 0, stdout: "", stderr: "")
+            }
+            return CommandResult(status: 1, stdout: "", stderr: said)
+        }
+        let engine = SealedArchiveEngine(.dmg, runner: runner)
+        let result = Result<ArchiveResult, Error>(catching: { () throws -> ArchiveResult in
+            try engine.archive(ArchiveSource(name: "Photos", root: library), to: dest)
+        })
+        return (result, tally["create"])
+    }
+
+    @Test func aMissingFileWithEverythingThereIsTriedOnceMore() throws {
+        let (result, creates) = try build([Self.enoent, nil])
+        #expect(creates == 2)
+        #expect(try result.get().artifacts.map(\.lastPathComponent) == ["Photos.dmg"])
+    }
+
+    // the second failure is reported exactly as the first would have been
+    @Test func aSecondMissingFileIsReportedAsBefore() throws {
+        let (result, creates) = try build([Self.enoent])
+        #expect(creates == 2)
+        guard case .failure(let error) = result, case ArchiveError.toolFailed(let tool, let status, let text)? = error as? ArchiveError else {
+            Issue.record("expected toolFailed, got \(result)"); return
+        }
+        #expect(tool == "hdiutil" && status == 1 && text == Self.enoent)
+    }
+
+    // the library or the destination gone during the build: really missing
+    @Test func nothingIsRetriedWhenTheFolderOrTheDestinationIsGone() throws {
+        let noLibrary = try build([Self.enoent, nil]) { (library: URL, _: URL) -> Void in _ = try? FileManager.default.removeItem(at: library) }
+        #expect(noLibrary.creates == 1)
+        let noDest = try build([Self.enoent, nil]) { (_: URL, dest: URL) -> Void in _ = try? FileManager.default.removeItem(at: dest) }
+        #expect(noDest.creates == 1)
+    }
+
+    @Test(arguments: [
+        "hdiutil: create failed - Permission denied",
+        "hdiutil: create failed - Resource busy\nhdiutil: create failed - No space left on device",
+        "hdiutil: create failed - No such file or directory\nhdiutil: create failed - Operation not permitted",
+        "hdiutil: create failed - File exists",
+    ])
+    func anotherErrorIsNotRetried(_ stderr: String) throws {
+        let (result, creates) = try build([stderr, nil])
+        #expect(creates == 1, "\(stderr) was tried \(creates) times")
+        #expect(throws: ArchiveError.self) { try result.get() }
+    }
+
+    // a missing file is retried for a folder image only, and not when hdiutil names
+    // an item it could not read
+    @Test func onlyAFolderImageIsRetried() {
+        let dir = FileManager.default.temporaryDirectory
+        let failed = CommandResult(status: 1, stdout: "", stderr: Self.enoent)
+        let folder = DiskImageTool.folderImage(root: dir, output: dir.appendingPathComponent("o.dmg"))
+        #expect(SealedArchiveEngine.isMissingWithEverythingThere(folder, failed))
+        let blank = DiskImageTool.sparseBundle(output: dir.appendingPathComponent("o.sparsebundle"), name: "o", sizeGB: 1, bandSectors: 16384)
+        #expect(!SealedArchiveEngine.isMissingWithEverythingThere(blank, failed))
+        let attach = Command("/usr/bin/hdiutil", ["attach", dir.appendingPathComponent("o.dmg").path])
+        #expect(!SealedArchiveEngine.isMissingWithEverythingThere(attach, CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - No such file or directory")))
+        let named = CommandResult(status: 1, stdout: "could not access /x/a.jpg - No such file or directory", stderr: Self.enoent)
+        #expect(!SealedArchiveEngine.isMissingWithEverythingThere(folder, named))
+        #expect(!SealedArchiveEngine.isMissingWithEverythingThere(folder, CommandResult(status: 0, stdout: "", stderr: Self.enoent)))
+    }
+}

@@ -87,10 +87,40 @@ public struct SealedArchiveEngine: ArchiveEngine {
     }
 
     private func execute(_ command: Command, stdin: Data? = nil) throws {
-        let r = try runner.runRetryingBusy(command.tool, command.args, stdin: stdin)
+        var r = try runner.runRetryingBusy(command.tool, command.args, stdin: stdin)
+        if Self.isMissingWithEverythingThere(command, r) {
+            Thread.sleep(forTimeInterval: Self.missingRetryPause)
+            r = try runner.runRetryingBusy(command.tool, command.args, stdin: stdin)
+        }
         guard r.ok else {
             throw ArchiveError.toolFailed(tool: (command.tool as NSString).lastPathComponent,
                                           status: r.status, stderr: Self.failureText(r))
+        }
+    }
+
+    static let missingRetryPause: TimeInterval = 1
+
+    /// Whether a failed image build is worth one more try: an `hdiutil create
+    /// -srcfolder` that failed only "create failed - No such file or directory" while
+    /// the folder it copies and the folder it writes into are both still there. The
+    /// macOS 27 CI runner does that about once a run, in a different build each time,
+    /// with nothing missing; a real Mac on 27 may too. Nothing else is retried on a
+    /// missing file: a missing input is reported at once, as is every other error the
+    /// busy retry treats as permanent, and so is an item hdiutil names as one it
+    /// could not access.
+    static func isMissingWithEverythingThere(_ command: Command, _ r: CommandResult) -> Bool {
+        let args = command.args
+        guard !r.ok, (command.tool as NSString).lastPathComponent == "hdiutil", args.first == "create",
+              let flag = args.firstIndex(of: "-srcfolder"), flag + 1 < args.count, let output = args.last else { return false }
+        let said = ProcessCommandRunner.meaningful(r.stderr)
+        guard said.localizedCaseInsensitiveContains("create failed - No such file or directory"),
+              !r.stdout.localizedCaseInsensitiveContains("could not access") else { return false }
+        let others = ProcessCommandRunner.permanentToolErrors.filter { $0 != "no such file" }
+        guard !others.contains(where: { (e: String) -> Bool in said.localizedCaseInsensitiveContains(e) }) else { return false }
+        let parent = URL(fileURLWithPath: output).deletingLastPathComponent().path
+        return [args[flag + 1], parent].allSatisfy { (path: String) -> Bool in
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
         }
     }
 
