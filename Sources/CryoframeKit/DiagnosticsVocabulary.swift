@@ -209,6 +209,7 @@ contain
 container
 containers
 containing
+content
 contents
 control
 copied
@@ -448,6 +449,7 @@ here
 hfs
 hhmmss
 hidden
+hint
 history
 hits
 hold
@@ -636,6 +638,7 @@ more
 most
 mount
 mounted
+mountoptions
 mountpoint
 move
 moved

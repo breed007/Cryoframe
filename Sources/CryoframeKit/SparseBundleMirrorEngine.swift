@@ -320,6 +320,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         var imageBytes: UInt64
         if !fm.fileExists(atPath: bundle.path) {
             imageBytes = MirrorSizing.targetBytes(ceiling: ceiling, held: 0, free: free, reserve: reserve, minimum: 0)
+            try DiskImageTool.refuseExisting(bundle)        // a link to nothing isn't "no image"
             touched = true
             try execute(DiskImageTool.sparseBundle(output: bundle, name: source.name, sizeGB: 0,
                                                    bandSectors: bandSectors, encrypted: encrypted,

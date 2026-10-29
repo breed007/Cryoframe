@@ -34,6 +34,18 @@ public enum DiskImageTool {
     /// same refusal of a wrong passphrase. Decided once per process.
     public static var sizing: Tool { diskutilImageMeasured ? .diskutil : .hdiutil }
 
+    /// Attach and detach through `diskutil image`: off in 1.8. Its attach is served by
+    /// diskimagesiod rather than diskimages-helper (measured on macOS 27.0.1), and
+    /// what Cryoframe knows of an attach in progress was measured against the latter:
+    /// the process an attach record follows, the tool watchdog's count of the helper's
+    /// work, Pause's refusal to stop it, and the wait for a saturated disk-image system
+    /// (see AttachRecords, ToolWatchdog, RunControl, DiskImageGate). Each needs
+    /// measuring again before this is turned on.
+    public static let attachesWithDiskutil = false
+
+    /// the tool that attaches and detaches images (see `attachesWithDiskutil`)
+    public static var attaching: Tool { attachesWithDiskutil ? .diskutil : .hdiutil }
+
     /// Whether this Mac's diskutil has `image resize` and `image info` with the options
     /// used here. Only macOS 27 was measured, so an older macOS keeps hdiutil even if
     /// it has them.
@@ -78,6 +90,15 @@ public enum DiskImageTool {
         if encrypted { args += ["-encryption", "AES-256", "-stdinpass"] }
         args += [output.path]
         return Command(hdiutil, args)
+    }
+
+    /// Refuse to make an image where something already is. `diskutil image create`
+    /// replaces an existing image without a word (measured: a new image, exit 0), and
+    /// hdiutil does with -ov, so every image made that must not replace one is checked
+    /// here first, whichever tool makes it. A link counts, even one to nothing.
+    public static func refuseExisting(_ output: URL) throws {
+        var st = stat()
+        if lstat(output.path, &st) == 0 { throw DiskImageExists(path: output.path) }
     }
 
     // MARK: - Size
@@ -178,20 +199,39 @@ public enum DiskImageTool {
     /// Attach an image at a known mount point, without showing it in the Finder, with
     /// ownership honored. `readonly` for reading and checking; read-write for the
     /// mirror's rsync. `encrypted` reads the passphrase from stdin.
-    public static func attach(image: URL, mountpoint: URL, readonly: Bool = false, encrypted: Bool = false) -> Command {
-        var args = ["attach", image.path, "-mountpoint", mountpoint.path, "-nobrowse", "-owners", "on"]
-        if readonly { args.append("-readonly") }
-        if encrypted { args.append("-stdinpass") }
-        return Command(hdiutil, args)
+    /// diskutil mounts without ownership unless told (measured, read-only and
+    /// read-write), and the read-back's comparison of owners then fails on every file,
+    /// so it is always given `--mountOptions owners`.
+    public static func attach(image: URL, mountpoint: URL, readonly: Bool = false, encrypted: Bool = false,
+                              tool: Tool = attaching) -> Command {
+        switch tool {
+        case .hdiutil:
+            var args = ["attach", image.path, "-mountpoint", mountpoint.path, "-nobrowse", "-owners", "on"]
+            if readonly { args.append("-readonly") }
+            if encrypted { args.append("-stdinpass") }
+            return Command(hdiutil, args)
+        case .diskutil:
+            var args = ["image", "attach", "--plist", "--nobrowse", "--mountOptions", "owners", "--mountPoint", mountpoint.path]
+            if readonly { args.append("--readOnly") }
+            if encrypted { args.append("--stdinpassphrase") }
+            return Command(diskutil, args + [image.path])
+        }
     }
 
     /// Attach an image read-only as devices, with nothing mounted. `verify` false skips
-    /// the checksum and the file-system check, for an attach that only proves the key.
-    public static func attachWithoutMount(image: URL, encrypted: Bool, verify: Bool = true) -> Command {
-        var args = ["attach", "-nomount", "-readonly", "-nobrowse"]
-        if !verify { args += ["-noverify", "-noautofsck"] }
-        if encrypted { args.append("-stdinpass") }
-        return Command(hdiutil, args + [image.path])
+    /// the checksum and the file-system check, for an attach that only proves the key;
+    /// diskutil has no way to skip them.
+    public static func attachWithoutMount(image: URL, encrypted: Bool, verify: Bool = true, tool: Tool = attaching) -> Command {
+        switch tool {
+        case .hdiutil:
+            var args = ["attach", "-nomount", "-readonly", "-nobrowse"]
+            if !verify { args += ["-noverify", "-noautofsck"] }
+            if encrypted { args.append("-stdinpass") }
+            return Command(hdiutil, args + [image.path])
+        case .diskutil:
+            return Command(diskutil, ["image", "attach", "--plist", "--noMount", "--readOnly"]
+                           + (encrypted ? ["--stdinpassphrase"] : []) + [image.path])
+        }
     }
 
     /// One device an attach handed back, and what it holds ("GUID_partition_scheme",
@@ -202,9 +242,16 @@ public enum DiskImageTool {
     }
 
     /// The devices an attach printed, the image's own disk first. hdiutil prints one
-    /// line a device: its node, then what it holds.
+    /// line a device: its node, then what it holds. diskutil prints a property list
+    /// whose nodes have no "/dev/" (measured: "disk25s1").
     public static func devices(fromAttach stdout: String) -> [Device] {
-        stdout.split(separator: "\n").compactMap { line in
+        if let entities = dictionary(stdout)?["system-entities"] as? [[String: Any]] {
+            return entities.compactMap { e in
+                guard let node = e["dev-entry"] as? String, !node.isEmpty else { return nil }
+                return Device(node: node.hasPrefix("/dev/") ? node : "/dev/" + node, content: e["content-hint"] as? String ?? "")
+            }
+        }
+        return stdout.split(separator: "\n").compactMap { line in
             let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
             guard let node = f.first, node.hasPrefix("/dev/") else { return nil }
             return Device(node: String(node), content: f.count > 1 ? String(f[1]) : "")
@@ -214,9 +261,13 @@ public enum DiskImageTool {
     // MARK: - Detaching
 
     /// Detach the image attached as `target` (a mount point or a device), taking every
-    /// device of it away. `force` detaches it even while files on it are open.
-    public static func detach(_ target: String, force: Bool = false) -> Command {
-        Command(hdiutil, ["detach", target] + (force ? ["-force"] : []))
+    /// device of it away. `force` detaches it even while files on it are open (not
+    /// measured with diskutil's eject).
+    public static func detach(_ target: String, force: Bool = false, tool: Tool = attaching) -> Command {
+        switch tool {
+        case .hdiutil:  return Command(hdiutil, ["detach", target] + (force ? ["-force"] : []))
+        case .diskutil: return Command(diskutil, ["eject"] + (force ? ["force"] : []) + [target])
+        }
     }
 
     /// Unmount the volume at `mountpoint` and leave its device attached.
@@ -268,13 +319,26 @@ public enum DiskImageTool {
 
     /// whether `launchPath` and `args` attach an image
     static func isAttach(_ launchPath: String, _ args: [String]) -> Bool {
-        (launchPath as NSString).lastPathComponent == "hdiutil" && args.first == "attach"
+        switch (launchPath as NSString).lastPathComponent {
+        case "hdiutil":  return args.first == "attach"
+        case "diskutil": return args.starts(with: ["image", "attach"])
+        default:         return false
+        }
     }
 
     /// Whether `launchPath` and `args` make an empty image: a sparse bundle, not one
     /// made from a folder.
     static func isBlankCreate(_ launchPath: String, _ args: [String]) -> Bool {
         (launchPath as NSString).lastPathComponent == "hdiutil" && args.first == "create" && !args.contains("-srcfolder")
+    }
+}
+
+/// An image wasn't made because something is already at its path (see
+/// DiskImageTool.refuseExisting).
+public struct DiskImageExists: Error, Equatable, LocalizedError {
+    public let path: String
+    public var errorDescription: String? {
+        "Something is already at \(path), so a new disk image wasn't made over it."
     }
 }
 

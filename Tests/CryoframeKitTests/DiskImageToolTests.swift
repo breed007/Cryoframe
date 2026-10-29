@@ -84,6 +84,66 @@ import Foundation
         #expect(RunControl.unsuspendable("/usr/bin/hdiutil") && !RunControl.unsuspendable("/usr/bin/rsync"))
     }
 
+    /// Attach and eject through diskutil, behind a switch that is off in 1.8
+    @Test func diskutilAttachingAndEjecting() {
+        #expect(!DiskImageTool.attachesWithDiskutil)
+        #expect(DiskImageTool.attach(image: image, mountpoint: mnt).tool == "/usr/bin/hdiutil")
+        #expect(DiskImageTool.detach("/dev/disk9").tool == "/usr/bin/hdiutil")
+        let rw = DiskImageTool.attach(image: image, mountpoint: mnt, tool: .diskutil)
+        #expect(rw.tool == "/usr/sbin/diskutil")
+        #expect(rw.args == ["image", "attach", "--plist", "--nobrowse", "--mountOptions", "owners", "--mountPoint", mnt.path, image.path])
+        #expect(DiskImageTool.attach(image: image, mountpoint: mnt, readonly: true, encrypted: true, tool: .diskutil).args
+                == ["image", "attach", "--plist", "--nobrowse", "--mountOptions", "owners", "--mountPoint", mnt.path,
+                    "--readOnly", "--stdinpassphrase", image.path])
+        #expect(DiskImageTool.attachWithoutMount(image: image, encrypted: true, verify: false, tool: .diskutil).args
+                == ["image", "attach", "--plist", "--noMount", "--readOnly", "--stdinpassphrase", image.path])
+        #expect(DiskImageTool.detach(mnt.path, tool: .diskutil).args == ["eject", mnt.path])
+        #expect(DiskImageTool.detach("/dev/disk9", force: true, tool: .diskutil).args == ["eject", "force", "/dev/disk9"])
+        #expect(DiskImageTool.isAttach(rw.tool, rw.args))
+        #expect(ProcessCommandRunner.letsFinish(rw.tool, rw.args))
+        #expect(!DiskImageTool.isAttach("/usr/sbin/diskutil", ["eject", mnt.path]))
+        #expect(!DiskImageTool.isAttach("/usr/sbin/diskutil", ["image", "info", image.path]))
+    }
+
+    /// `diskutil image create` replaces what is there without a word
+    @Test func noImageIsMadeOverAnything() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("cf-dit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let free = base.appendingPathComponent("new.sparsebundle")
+        try DiskImageTool.refuseExisting(free)
+        let file = base.appendingPathComponent("old.sparsebundle")
+        try Data().write(to: file)
+        #expect(throws: DiskImageExists(path: file.path)) { try DiskImageTool.refuseExisting(file) }
+        let link = base.appendingPathComponent("link.sparsebundle")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: base.appendingPathComponent("gone").path)
+        #expect(throws: DiskImageExists.self) { try DiskImageTool.refuseExisting(link) }
+    }
+
+    /// On a Mac where `diskutil image` is used, its attach as built here honors
+    /// ownership, and its eject takes the image away.
+    @Test(.enabled(if: DiskImageTool.diskutilImageMeasured)) func aDiskutilAttachHonorsOwners() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("cf-dit-\(UUID().uuidString)")
+        let bundle = base.appendingPathComponent("o.sparsebundle"), at = base.appendingPathComponent("mnt")
+        try FileManager.default.createDirectory(at: at, withIntermediateDirectories: true)
+        defer { MountPoint.detach(at, runner: ProcessCommandRunner()); try? FileManager.default.removeItem(at: base) }
+        let made = try TestDiskImages.run(DiskImageTool.sparseBundle(output: bundle, name: "DIT", sizeGB: 0, bandSectors: 16384,
+                                                                     sectors: 102_400).args)
+        try #require(made.ok, "\(made.stderr)")
+        let attached = try DiskImageGate.serialized {
+            try ProcessCommandRunner().runRetryingBusy(DiskImageTool.attach(image: bundle, mountpoint: at, readonly: true, tool: .diskutil))
+        }
+        try #require(attached.ok && MountPoint.isMounted(at), "\(attached.stderr)")
+        let devices = DiskImageTool.devices(fromAttach: attached.stdout)
+        #expect(devices.first?.node.hasPrefix("/dev/disk") == true && devices.contains { $0.content == "Apple_APFS_Volume" }, "\(devices)")
+        var fs = statfs()
+        try #require(statfs(at.path, &fs) == 0)
+        #expect(fs.f_flags & UInt32(MNT_IGNORE_OWNERSHIP) == 0, "mounted ignoring owners")
+        let ejected = try ProcessCommandRunner().runRetryingBusy(DiskImageTool.detach(at.path, tool: .diskutil))
+        #expect(ejected.ok, "\(ejected.stderr)")
+        #expect(!MountPoint.isMounted(at))
+    }
+
     /// Stop lets an attach and the making of an empty image finish (see letsFinish)
     @Test func whatACommandIs() {
         let attach = DiskImageTool.attach(image: image, mountpoint: mnt)
@@ -167,6 +227,12 @@ import Foundation
         #expect(DiskImageTool.devices(fromAttach: "hdiutil: attach failed - Authentication error").isEmpty)
     }
 
+    @Test func aDiskutilAttachsDevicesAreRead() {
+        let devices = DiskImageTool.devices(fromAttach: Self.diskutilAttach)
+        #expect(devices.map(\.node) == ["/dev/disk25", "/dev/disk25s1", "/dev/disk26", "/dev/disk26s1"])
+        #expect(devices.first { $0.content.contains("Apple_APFS") }?.node == "/dev/disk25s1")
+        #expect(DiskImageTool.devices(fromAttach: "Error: Incorrect passphrase").isEmpty)
+    }
 
     @Test func theAttachedListIsRead() throws {
         let attaches = try #require(DiskImageTool.attaches(from: Self.info))
@@ -220,6 +286,20 @@ import Foundation
             <key>current</key><integer>104857600</integer>
             <key>max</key><integer>144115188075855872</integer>
             <key>min</key><integer>6332416</integer>
+        </dict>
+        """)
+
+    /// `diskutil image attach --plist --noMount` (trimmed: sizes and names left out)
+    static let diskutilAttach = plist("""
+        <dict>
+            <key>system-entities</key>
+            <array>
+                <dict><key>content-hint</key><string>GUID_partition_scheme</string><key>dev-entry</key><string>disk25</string></dict>
+                <dict><key>content-hint</key><string>Apple_APFS</string><key>dev-entry</key><string>disk25s1</string></dict>
+                <dict><key>content-hint</key><string>Apple_APFS_Container</string><key>dev-entry</key><string>disk26</string></dict>
+                <dict><key>content-hint</key><string>Apple_APFS_Volume</string><key>dev-entry</key><string>disk26s1</string>
+                      <key>filesystem-type</key><string>apfs</string></dict>
+            </array>
         </dict>
         """)
 
