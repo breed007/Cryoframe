@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- registered by the app at launch in place of app.cryoframe.agent.plist (see
+         AgentRegistration). A change to what launchd is told here reaches an install
+         only through a new name: registering the same one again does nothing. -->
+    <key>Label</key>
+    <string>app.cryoframe.agent.v2</string>
+    <!-- the app's own executable; the env var switches it into headless agent mode -->
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/Cryoframe</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CRYOFRAME_AGENT</key>
+        <string>1</string>
+    </dict>
+    <!-- start hourly, on the hour, to run due jobs; the Scheduler decides what
+         actually fires. A calendar interval, not StartInterval: launchd.plist(5)
+         says a StartInterval firing that falls while the Mac is asleep is missed,
+         while calendar intervals missed in sleep are run, once, when it wakes. So
+         the wake set for a scheduled backup (WakeScheduler) starts the agent. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <!-- Standard, stated so it is never changed to Background: launchd runs a
+         Background agent at priority 4, and a backup tool starved of CPU looks
+         stalled to the watchdog. Standard is the same as leaving it unset (measured:
+         spawn type daemon, priority 20, either way). -->
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <!-- ride the app's Full Disk Access grant -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>app.cryoframe</string>
+    </array>
+</dict>
+</plist>

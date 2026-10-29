@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- The agent 1.7 and earlier registered, kept only so the app can retire it once
+         it has registered app.cryoframe.agent.v2.plist (see AgentRegistration). A
+         pass this one starts after that ends at once. Change the v2 plist, not this. -->
     <key>Label</key>
     <string>app.cryoframe.agent</string>
     <!-- the app's own executable; the env var switches it into headless agent mode -->

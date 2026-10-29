@@ -14,6 +14,7 @@ Notable changes to Cryoframe. Versions follow [semantic versioning](https://semv
 - A live mirror's disk image is never made over something already at its place, even a link to a file that no longer exists. On every version of macOS, the run now fails instead and names the path, so you can look at what is there first.
 
 ### Fixed
+- **Waking the Mac for a scheduled backup now runs the backup.** The wake happened, but the hourly check that starts backups could be skipped while the Mac slept, and the Mac could go back to sleep before the backup ran. That check now runs when the Mac wakes. On a Mac updated from an earlier version, this takes effect the first time Cryoframe opens after the update, which may make macOS say that Cryoframe added a login item.
 - A restore drill of a Photos or Messages library kept as plain files opened the copy's database in a way that could write to it. The drill now only reads it, so checking a backup never changes it.
 
 ## [1.7.0] — 2026-10-03

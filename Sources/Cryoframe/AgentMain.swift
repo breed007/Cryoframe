@@ -17,6 +17,13 @@ import CryoframeKit
 
 enum AgentMain {
     static func run() {
+        // a pass the agent definition of 1.7 and earlier started, once the app has
+        // registered this version's: that one does the work (see AgentRegistration)
+        let label = ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"]
+        let current = label == AgentRegistration.legacyLabel
+            && SMAppService.agent(plistName: AgentRegistration.currentPlist).status == .enabled
+        guard AgentRegistration.passShouldRun(launchedAs: label, currentEnabled: current) else { exit(0) }
+        AgentPassLock.hold()        // for as long as this pass runs, so the app won't retire it mid-pass
         let store = JobStore.standard()
         let locks = RunLocks.standard()
         cleanUpLeftovers(jobIDs: store.load().jobs.map(\.id), locks: locks)

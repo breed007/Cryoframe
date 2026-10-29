@@ -15,7 +15,7 @@ import Foundation
     @Test func theAgentIsNotLeftToLaunchdsThrottling() throws {
         let plist = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/Cryoframe/app.cryoframe.agent.plist")
+            .appendingPathComponent("Sources/Cryoframe/" + AgentRegistration.currentPlist)
         let dict = try #require(try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any])
         let type = dict["ProcessType"] as? String
         #expect(type == "Standard" || type == "Adaptive", "ProcessType is \(type ?? "unset")")

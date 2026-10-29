@@ -136,6 +136,7 @@ final class AppModel: ObservableObject {
                 JobExecutor.sweepOrphanedScratch(scratchBase: base, pendingStore: .standard(), locks: locks, knownJobIDs: known)
             }
         }
+        moveScheduleToCurrentAgent()            // an install from 1.7 keeps its old agent until moved
         watchOtherRuns()
         // a logout, restart or shutdown quits without asking (see QuitGuard)
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil,
@@ -820,6 +821,7 @@ final class AppModel: ObservableObject {
                     self.clock = Date()
                     let on = self.schedule.isEnabled
                     if on != self.scheduleOn { self.scheduleOn = on }
+                    self.moveScheduleToCurrentAgent()       // a no-op once moved
                     self.notifyOverdue()
                 }
                 try? await Task.sleep(for: .seconds(2))
@@ -840,6 +842,13 @@ final class AppModel: ObservableObject {
                                                unrecordedRuns: unrecordedRuns, now: now, throttle: ledger) {
             Notifier.notifyOverdue(alert.payload, subject: alert.subject, ledger: ledger, now: now)
         }
+    }
+
+    /// see ScheduleManager.moveToCurrentAgent; a run another process holds may be a
+    /// pass of the old agent, which retiring it would kill
+    private func moveScheduleToCurrentAgent() {
+        let locks = runLocks, ids = jobs.map(\.id)
+        schedule.moveToCurrentAgent { locks.holders(of: ids).contains { !$0.value.isThisProcess } }
     }
 
     func refreshOtherRuns() {

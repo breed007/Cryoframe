@@ -26,11 +26,13 @@ private func job(_ id: String, _ frequency: BackupFrequency, enabled: Bool = tru
 @Suite struct WakeLaunchTests {
     @Test func theAgentIsStartedByACalendarIntervalThatAWakeCatchesUp() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let data = try Data(contentsOf: root.appendingPathComponent("Sources/Cryoframe/app.cryoframe.agent.plist"))
-        let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        #expect(plist["StartInterval"] == nil)                   // missed while asleep, never made up
-        let calendar = try #require(plist["StartCalendarInterval"] as? [String: Int])
-        #expect(calendar == ["Minute": 0])                       // hourly, as before
+        for name in [AgentRegistration.currentPlist, AgentRegistration.legacyPlist] {
+            let data = try Data(contentsOf: root.appendingPathComponent("Sources/Cryoframe/" + name))
+            let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+            #expect(plist["StartInterval"] == nil, "\(name)")      // missed while asleep, never made up
+            let calendar = try #require(plist["StartCalendarInterval"] as? [String: Int])
+            #expect(calendar == ["Minute": 0], "\(name)")          // hourly, as before
+        }
     }
 
     @Test func anAgentStartedJustBeforeAJobsTimeWaitsForIt() {

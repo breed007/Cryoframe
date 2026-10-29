@@ -117,15 +117,20 @@ targets:
           DEST="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchDaemons"
           mkdir -p "$DEST"
           cp "${SRCROOT}/Sources/CryoframeHelper/app.cryoframe.helper.plist" "$DEST/"
-      - name: Embed LaunchAgent plist
+      # the agent this version registers, and the one 1.7 registered, kept so the
+      # app can retire it (see AgentRegistration)
+      - name: Embed LaunchAgent plists
         inputFiles:
+          - $(SRCROOT)/Sources/Cryoframe/app.cryoframe.agent.v2.plist
           - $(SRCROOT)/Sources/Cryoframe/app.cryoframe.agent.plist
         outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/app.cryoframe.agent.v2.plist
           - $(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/app.cryoframe.agent.plist
         script: |
           set -e
           DEST="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Library/LaunchAgents"
           mkdir -p "$DEST"
+          cp "${SRCROOT}/Sources/Cryoframe/app.cryoframe.agent.v2.plist" "$DEST/"
           cp "${SRCROOT}/Sources/Cryoframe/app.cryoframe.agent.plist" "$DEST/"
 
   # ── unit tests for the engine, run with fakes — no root, no XPC ──────────────
