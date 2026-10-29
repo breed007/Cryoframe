@@ -24,7 +24,7 @@ Run now is never held back. Plugged in, on a desktop, or when the level cannot b
 
 ### Overdue jobs
 
-A scheduled job that has gone twice its interval without a good run is overdue: a nightly job with nothing good for two days, say. The dashboard turns that job yellow, and later red, because it judges each job by when it last ran well rather than by whether its last attempt happened. Cryoframe posts a notification on this Mac, whether or not the app is open, and sends a remote alert if you have set them up, at most once a day per job and again if it gets worse. The alerts stop once the job runs well.
+A scheduled job that has gone twice its interval without a good run is overdue: a nightly job with nothing good for two days, say. The dashboard turns that job yellow, and later red, because it judges each job by when it last ran well rather than by whether its last attempt happened. Cryoframe posts a notification on this Mac (the scheduled backups post it when the app is quit), and sends a remote alert if you have set them up, at most once a day per job and again if it gets worse. The alerts stop once the job runs well.
 
 ## Keeping the Mac awake
 
@@ -48,7 +48,7 @@ The menu-bar item also holds Verify all archives, Check for Updates, and Open Cr
 
 Choose when to be notified in Settings ▸ General ▸ Notifications: never, on failure, or on every run. On failure is the default. A failed health check notifies you as well, so a corrupted archive does not go unnoticed.
 
-Notifications appear even when Cryoframe isn't open. When the app is quit, the scheduled backups post them for the runs and checks they make, for overdue jobs, and for a destination about to run out of room. When the app is open, it posts them itself, so you never get the same one twice. If notifications for Cryoframe are turned off in System Settings ▸ Notifications, none appear, and remote alerts are the only way to hear about a failure.
+When Cryoframe is quit, the scheduled backups post notifications themselves: for the runs and checks they make, for overdue jobs, and for a destination about to run out of room. When the app is open, it posts them instead, and the scheduled backups don't, so the two don't both post the same one. An open app shows a destination about to run out of room on the dashboard rather than in a notification. How macOS shows them follows System Settings ▸ Notifications and Focus. If notifications for Cryoframe are turned off there, none are shown, and remote alerts are the only way to hear about a failure.
 
 ## Remote alerts
 

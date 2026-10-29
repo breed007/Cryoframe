@@ -71,6 +71,10 @@ Versions before 1.6 deleted any `<folder>/build/<item>` inside the scratch locat
 - Plain-files jobs are kept in a file of their own, `jobs-files.json`, which 1.6.0 doesn't read and leaves alone. They don't appear or run in 1.6.0, and they're back when you return to 1.7. Their copies stay on the drives as ordinary files.
 - 1.6.0 backs up Messages attachments as an ordinary folder. It copies link previews, and it keeps nothing you delete in Messages: a live mirror drops those files, and pruning deletes old versions without saving them first. Removed items and removed-items archives made by 1.7 are left as they are.
 
+### Going back to 1.7.0: turn the schedule on again
+
+1.8 registers the schedule with macOS under a name 1.7.0 doesn't know. After going back, 1.7.0 shows the schedule as off in Settings ▸ Schedule, and scheduled backups may not run. Turn the schedule on again there.
+
 ### Reporting a problem
 
 Choose Help ▸ Report a Problem… (or the button at the bottom of the Help window). Cryoframe builds a plain-text report for a GitHub issue: the versions of Cryoframe and macOS, how your jobs are set up, and what recent runs and checks said. Your names, paths, file names, and passphrases are left out; jobs, folders, and destinations are numbered instead. You read the report before you save it, and nothing is sent anywhere until you attach it to an issue yourself.
