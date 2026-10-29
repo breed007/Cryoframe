@@ -553,8 +553,8 @@ struct RestoreView: View {
                     if let v, plain {
                         plainFilesSummary(v)
                     } else {
-                        Text("Current mirror — no version history").font(.callout.weight(.semibold))
-                        Text("A live mirror is one copy kept up to date in place, so there's a single state to restore: right now. Point-in-time versions are only kept for sealed archives (DMG or zip).")
+                        Text("Current mirror, with no history yet").font(.callout.weight(.semibold))
+                        Text("This mirror holds one copy, kept up to date, so there's a single state to restore: right now. A mirror on an APFS drive connected to this Mac keeps the copy from each of the last nights once Keep history is on, and Restore lists those here. Dated versions are also kept by the disk image and zip formats.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         // said before a restore uses it, not only when the restore's check refuses it
                         if let v, let why = MirrorSeal.damage(in: v.dir) {
