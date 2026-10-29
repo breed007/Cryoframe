@@ -546,7 +546,13 @@ public struct JobExecutor: Sendable {
                                                    error: folderFailures[t.id]?[library.id] ?? "\(t.displayName) is unavailable"))
                             continue
                         }
-                        let mirrorExists = FileManager.default.fileExists(atPath: libDir.appendingPathComponent(source.name + ".sparsebundle").path)
+                        let bundle = libDir.appendingPathComponent(source.name + ".sparsebundle", isDirectory: true)
+                        if let why = Self.startOverRefusal(bundle, in: libDir, destination: t.displayName, copyBytes: stats.copyBytes,
+                                                           free: Self.freeSpace(for: t.destinationDir)) {
+                            results.append(.failed(library: library.displayName, destination: t.displayName, error: why))
+                            continue
+                        }
+                        let mirrorExists = FileManager.default.fileExists(atPath: bundle.path)
                         if !mirrorExists {
                             let copySize = stats.copyBytes
                             let needed = copySize + copySize / 20
@@ -1380,6 +1386,27 @@ public struct JobExecutor: Sendable {
     /// printed the enum case instead ("toolFailed(tool: \"hdiutil\", status: 1, …)"),
     /// and none of those sentences ever reached a per-library failure.
     static func failureText(_ error: Error) -> String { error.localizedDescription }
+
+    /// Why a mirror asked to start over, or being started over, can't be, before the
+    /// run touches it: the drive hasn't room for the new image beside the damaged one,
+    /// which is kept until the new one is complete (see MirrorSeal.startOverIfAsked).
+    /// Left to run, the new image filled the drive behind the old one, and every start
+    /// over after that did the same. The request stands, so a run after space is freed
+    /// goes ahead. A drive that doesn't say what's free (`free` nil) isn't refused.
+    static func startOverRefusal(_ bundle: URL, in dir: URL, destination: String, copyBytes: UInt64, free: UInt64?) -> String? {
+        guard let free, MirrorSeal.startOverRequested(dir) || FileManager.default.fileExists(atPath: MirrorSeal.replaced(bundle).path),
+              let room = MirrorSeal.startOverRoom(bundle, in: dir) else { return nil }
+        let needed = copyBytes + copyBytes / 20
+        guard free < needed, room.credit < needed - free else { return nil }
+        let more = human(needed - room.credit), have = human(free)
+        if room.removingDamagedFirst {
+            return "not enough space on \(destination) for a new mirror, even with the damaged one removed: needs ~\(more), only \(have) free. Free up space on \(destination), or move the job to a bigger drive."
+        }
+        if room.underWay {
+            return "not enough space on \(destination) to finish starting the mirror over: needs ~\(more) more, only \(have) free. The damaged mirror is still kept, hidden beside the new one, until the new one is complete. Free up space on \(destination), or remove the damaged mirror from Storage."
+        }
+        return "not enough space on \(destination) to start the mirror over beside the damaged one, which is kept until the new one is complete: needs ~\(more), only \(have) free. Free up space on \(destination), or choose Start This Mirror Over in Storage again and remove the damaged mirror first."
+    }
 
     static func human(_ bytes: UInt64) -> String {
         let f = ByteCountFormatter(); f.countStyle = .file

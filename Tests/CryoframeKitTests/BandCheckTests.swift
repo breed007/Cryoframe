@@ -500,3 +500,111 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(FileManager.default.fileExists(atPath: bundle.path) && !MirrorSeal.startOverRequested(dir))
     }
 }
+
+// MARK: - starting a mirror over
+
+// The damaged image is kept until the new one is complete, so starting over needs
+// room for both. That is known before anything starts, and a start over that can't
+// fit is never left half built behind the old image.
+@Suite struct StartingOverRoom {
+
+    private let fm = FileManager.default
+    private let copy: UInt64 = 1_000_000
+    private var need: UInt64 { copy + copy / 20 }
+
+    private func refusal(_ bundle: URL, _ free: UInt64?) -> String? {
+        JobExecutor.startOverRefusal(bundle, in: bundle.deletingLastPathComponent(), destination: "Disk", copyBytes: copy, free: free)
+    }
+
+    @Test func aStartOverThatWontFitBesideTheDamagedMirrorIsRefusedBeforeItBegins() throws {
+        let dir = tempDir("room")
+        defer { try? fm.removeItem(at: dir) }
+        let bundle = try fakeBundle(in: dir, bands: 2)
+        MirrorSeal.markDamaged(dir, why: "x")
+        #expect(refusal(bundle, 0) == nil)                  // nothing asked: not this check's business
+        try MirrorSeal.requestStartOver(dir)
+        let refused = try #require(refusal(bundle, need - 1))
+        #expect(refused.hasPrefix("not enough space on Disk to start the mirror over beside the damaged one"), "\(refused)")
+        #expect(refused.contains("remove the damaged mirror first"))
+        #expect(refusal(bundle, need) == nil)
+        #expect(refusal(bundle, nil) == nil)                // a drive that doesn't say what's free
+        // removing the damaged one first counts the room it gives back
+        let old = JobExecutor.directorySize(bundle)
+        try MirrorSeal.requestStartOver(dir, removingDamagedFirst: true)
+        #expect(refusal(bundle, need - old) == nil)
+        #expect(refusal(bundle, need - old - 1)?.contains("even with the damaged one removed") == true)
+        #expect(fm.fileExists(atPath: bundle.path) && MirrorSeal.startOverRequested(dir))   // refused: nothing touched
+    }
+
+    @Test func removingTheDamagedMirrorFirstDeletesItBeforeTheNewOneIsMade() throws {
+        let dir = tempDir("remove")
+        defer { try? fm.removeItem(at: dir) }
+        let bundle = try fakeBundle(in: dir, bands: 2)
+        MirrorSeal.markDamaged(dir, why: "x")
+        MirrorSeal.markDecayed(dir, bands: ["1"])
+        try BandTable().write(in: dir)
+        try Data().write(to: dir.appendingPathComponent(ArchiveManifest.sidecarName))
+        try MirrorSeal.requestStartOver(dir, removingDamagedFirst: true)
+        try MirrorSeal.startOverIfAsked(bundle, in: dir, runner: ProcessCommandRunner())
+        #expect(!fm.fileExists(atPath: bundle.path) && !fm.fileExists(atPath: MirrorSeal.replaced(bundle).path))
+        #expect(MirrorSeal.damage(in: dir) == nil && !MirrorSeal.isDecayed(dir) && !MirrorSeal.startOverRequested(dir))
+        #expect(!fm.fileExists(atPath: dir.appendingPathComponent(ArchiveManifest.sidecarName).path))
+        #expect(try BandTable.read(in: dir) == nil)
+    }
+
+    // The first start over put the damaged image aside, and the drive filled before
+    // the new one was complete.
+    @Test func anUnfinishedStartOverIsNeverStuckBehindTheOldImage() throws {
+        let base = tempDir("underway")
+        defer { try? fm.removeItem(at: base) }
+        let lib = ContentType.genericFolder(id: "l", displayName: "Lib", path: .home("Lib"))
+        let target = Target.localVolume(id: "t", name: "Disk", dir: base)
+        let job = BackupJob(id: "j", name: "Lib", libraries: [lib], target: target, format: .liveMirror(sizeGB: 1),
+                            frequency: .daily(hour: 1, minute: 0), createdAt: t0)
+        let dir = base.appendingPathComponent("Lib")
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try LibraryIdentity(job: job, library: lib).write(in: dir)
+        let bundle = try fakeBundle(in: dir, bands: 2)
+        MirrorSeal.markDamaged(dir, why: "x")
+        try MirrorSeal.requestStartOver(dir)
+        try MirrorSeal.startOverIfAsked(bundle, in: dir, runner: ProcessCommandRunner())
+        let aside = MirrorSeal.replaced(bundle)
+        #expect(fm.fileExists(atPath: aside.path) && !fm.fileExists(atPath: bundle.path))
+        let partial = try fakeBundle(in: dir, bands: 1)
+
+        // the next run, asked nothing, says why it can't go on and what to do
+        let held = try #require(refusal(partial, 0))
+        #expect(held.contains("still kept") && held.contains("remove the damaged mirror from Storage"), "\(held)")
+        // what the new one already holds counts, and it carries on from there
+        #expect(refusal(partial, need - JobExecutor.directorySize(partial)) == nil)
+        // Storage lists it, with what removing the old one would free
+        let listed = try #require(MirrorSeal.damaged(job: job, target: target, freeSpace: { _ in 0 }).first)
+        #expect(listed.underWay && !listed.imageDamaged && listed.oldBytes == JobExecutor.directorySize(aside), "\(listed)")
+        #expect(!listed.roomBeside)
+
+        // removed first: the old image goes, and the half-built one stays to be finished
+        try MirrorSeal.requestStartOver(dir, removingDamagedFirst: true)
+        try MirrorSeal.startOverIfAsked(partial, in: dir, runner: ProcessCommandRunner())
+        #expect(!fm.fileExists(atPath: aside.path) && fm.fileExists(atPath: partial.path) && !MirrorSeal.startOverRequested(dir))
+        #expect(refusal(partial, 0) == nil)
+        #expect(MirrorSeal.damaged(job: job, target: target).isEmpty)
+    }
+
+    // An old image left aside after the new mirror sealed (its removal failed) is the
+    // one a later start over removes, not the newer mirror.
+    @Test func aLeftoverOldImageIsRemovedRatherThanTheNewerMirror() throws {
+        let dir = tempDir("leftover")
+        defer { try? fm.removeItem(at: dir) }
+        let bundle = try fakeBundle(in: dir, bands: 2)
+        try Data("new".utf8).write(to: bundle.appendingPathComponent("which"))
+        let aside = MirrorSeal.replaced(bundle)
+        try fm.createDirectory(at: aside, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: aside.appendingPathComponent("which"))
+        try Data().write(to: dir.appendingPathComponent(ArchiveManifest.sidecarName))   // the new one sealed since
+        MirrorSeal.markDamaged(dir, why: "x")
+        try MirrorSeal.requestStartOver(dir)
+        try MirrorSeal.startOverIfAsked(bundle, in: dir, runner: ProcessCommandRunner())
+        #expect(try String(contentsOf: aside.appendingPathComponent("which"), encoding: .utf8) == "new")
+        #expect(!fm.fileExists(atPath: bundle.path))
+    }
+}

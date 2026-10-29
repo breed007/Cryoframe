@@ -66,26 +66,51 @@ struct StorageView: View {
         } message: {
             Text("What was deleted from the library \(emptying?.label ?? "") is deleted from the backup too. This can't be undone.")
         }
-        .alert("Start this mirror over?", isPresented: Binding(get: { startingOver != nil }, set: { if !$0 { startingOver = nil } })) {
-            Button("Start Over") {
-                if let s = startingOver {
-                    startingOver = nil
-                    do {
-                        try MirrorSeal.requestStartOver(s.mirror.dir)
-                        model.runNow(s.job)
-                    } catch {
-                        startOverError = "Couldn't start \(s.mirror.library) over: \(error.localizedDescription)"
-                    }
+        .alert(startOverTitle, isPresented: Binding(get: { startingOver != nil }, set: { if !$0 { startingOver = nil } })) {
+            if let s = startingOver, s.mirror.imageDamaged, s.mirror.roomBeside {
+                Button("Start Over") { startOver(s, removingDamagedFirst: false) }
+            } else if let s = startingOver {
+                Button(s.mirror.imageDamaged ? "Remove Damaged Mirror and Start Over" : "Remove Damaged Mirror", role: .destructive) {
+                    startOver(s, removingDamagedFirst: true)
                 }
             }
             Button("Cancel", role: .cancel) { startingOver = nil }
         } message: {
-            Text("\(startingOver?.job.name ?? "The job") runs now and makes a new mirror of \(startingOver?.mirror.library ?? "the library") from scratch, which takes as long as its first run did. The damaged mirror is kept until the new one is complete, then deleted. If its drive is failing, move the job to another drive instead.")
+            Text(startOverMessage)
         }
         .alert("Start Over", isPresented: Binding(get: { startOverError != nil }, set: { if !$0 { startOverError = nil } })) {
             Button("OK", role: .cancel) { startOverError = nil }
         } message: {
             Text(startOverError ?? "")
+        }
+    }
+
+    private var startOverTitle: String {
+        guard let m = startingOver?.mirror else { return "" }
+        if !m.imageDamaged { return "Remove the damaged mirror?" }
+        return m.roomBeside ? "Start this mirror over?" : "Not enough room to keep the damaged mirror"
+    }
+
+    private var startOverMessage: String {
+        guard let job = startingOver?.job, let m = startingOver?.mirror else { return "" }
+        let bytes = { (n: UInt64) in ByteCountFormatter.string(fromByteCount: Int64(clamping: n), countStyle: .file) }
+        let gone = "Until the new mirror is complete, there is no backup of \(m.library) on this drive."
+        if !m.imageDamaged {
+            return "\(m.library) is being started over, and the new mirror isn't complete yet. The damaged one is kept, hidden beside it, and takes \(bytes(m.oldBytes)). Removing it makes room for the new mirror to finish, and \(job.name) runs now to finish it. " + gone
+        }
+        if m.roomBeside {
+            return "\(job.name) runs now and makes a new mirror of \(m.library) from scratch, which takes as long as its first run did. The damaged mirror is kept until the new one is complete, then deleted. If its drive is failing, move the job to another drive instead."
+        }
+        return "A new mirror of \(m.library) needs about \(bytes(m.neededBeside)) beside the damaged one, and its drive has \(bytes(m.free ?? 0)) free. Free up space on the drive and try again, or remove the damaged mirror first and make the new one in its place. " + gone + " If the drive is failing, move the job to another drive instead."
+    }
+
+    private func startOver(_ s: (job: BackupJob, mirror: MirrorSeal.Damaged), removingDamagedFirst: Bool) {
+        startingOver = nil
+        do {
+            try MirrorSeal.requestStartOver(s.mirror.dir, removingDamagedFirst: removingDamagedFirst)
+            model.runNow(s.job)
+        } catch {
+            startOverError = "Couldn't start \(s.mirror.library) over: \(error.localizedDescription)"
         }
     }
 
@@ -212,16 +237,23 @@ struct StorageView: View {
         }
     }
 
-    /// a mirror recorded as damaged: what was found, and the way out
+    /// a mirror recorded as damaged, or being started over: what was found, and the way out
     @ViewBuilder private func damagedRow(_ mirror: MirrorSeal.Damaged, job: BackupJob) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Label("\(mirror.library): \(mirror.detail)", systemImage: "exclamationmark.octagon.fill")
                 .font(.caption).foregroundStyle(Color.cryoCrit).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 6)
-            Button("Start This Mirror Over…") { startingOver = (job, mirror) }
-                .controlSize(.small)
-                .disabled(model.runningJobIDs.contains(job.id))
-                .help("Make a new mirror from scratch at the job's next run. The damaged one is kept until the new one is complete.")
+            if mirror.imageDamaged {
+                Button("Start This Mirror Over…") { startingOver = (job, mirror) }
+                    .controlSize(.small)
+                    .disabled(model.runningJobIDs.contains(job.id))
+                    .help("Make a new mirror from scratch at the job's next run. The damaged one is kept until the new one is complete, if the drive has room for both.")
+            } else {
+                Button("Remove Damaged Mirror…") { startingOver = (job, mirror) }
+                    .controlSize(.small)
+                    .disabled(model.runningJobIDs.contains(job.id))
+                    .help("Delete the damaged mirror kept beside the new one, so the new one has room to finish.")
+            }
         }
     }
 

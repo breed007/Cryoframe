@@ -755,8 +755,15 @@ public enum MirrorSeal {
     // way out is a new image. The damaged one isn't deleted: it is put aside, hidden in
     // the mirror's folder, and removed only once the new one is sealed, so a first run
     // that fails part way leaves the old copy, damaged as it is, where it can be found.
+    //
+    // That needs room for both, and on a drive the mirror fills more than half of, the
+    // new one filled the drive behind the old one, every time. So the room is checked
+    // before a start over begins (JobExecutor.startOverRefusal), and when there isn't
+    // enough the user can choose to have the damaged image removed first instead.
 
     static let startOverName = ".cryoframe-mirror-start-over"
+    /// what the request says when the damaged image is to be removed, not kept
+    static let removeFirstWord = "remove"
 
     /// where a mirror started over keeps its old image until the new one is complete
     public static func replaced(_ bundle: URL) -> URL {
@@ -764,36 +771,90 @@ public enum MirrorSeal {
             of: ".sparsebundle", with: ".replaced.sparsebundle"), isDirectory: true)
     }
 
-    /// Ask for the damaged mirror in `dir` to be started over at its job's next run.
-    public static func requestStartOver(_ dir: URL) throws {
-        try Data().write(to: dir.appendingPathComponent(startOverName), options: .atomic)
+    /// Ask for the damaged mirror in `dir` to be started over at its job's next run:
+    /// its image kept aside until the new one is complete, or removed first, when the
+    /// drive hasn't room for both. Removing it is also how a start over under way gets
+    /// the room to finish.
+    public static func requestStartOver(_ dir: URL, removingDamagedFirst: Bool = false) throws {
+        try Data((removingDamagedFirst ? removeFirstWord : "").utf8).write(to: dir.appendingPathComponent(startOverName), options: .atomic)
+    }
+
+    static func startOverRemovesFirst(_ dir: URL) -> Bool {
+        (try? Data(contentsOf: dir.appendingPathComponent(startOverName))).map {
+            String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == removeFirstWord
+        } ?? false
+    }
+
+    /// What starting the mirror whose image is `bundle` over has besides the drive's
+    /// free space; nil when it's neither damaged nor being started over.
+    public struct StartOverRoom: Sendable, Equatable {
+        /// the damaged image is aside, and the new one isn't complete
+        public var underWay: Bool
+        public var removingDamagedFirst: Bool
+        /// room the new mirror has on top of what's free: what a half-built new image
+        /// already holds (or gives back, when it's replaced), and the damaged image when
+        /// it's removed first
+        public var credit: UInt64
+        /// the damaged image's size, about what a new one needs
+        public var oldBytes: UInt64
+    }
+
+    /// `removingDamagedFirst`: what is to be done with the damaged image; nil: what was asked
+    public static func startOverRoom(_ bundle: URL, in dir: URL, removingDamagedFirst: Bool? = nil) -> StartOverRoom? {
+        let fm = FileManager.default
+        let aside = replaced(bundle)
+        // an old image left aside after the new one sealed isn't a start over under way
+        let underWay = fm.fileExists(atPath: aside.path) && !fm.fileExists(atPath: dir.appendingPathComponent(ArchiveManifest.sidecarName).path)
+        guard underWay || (damage(in: dir) != nil && fm.fileExists(atPath: bundle.path)) else { return nil }
+        let removing = removingDamagedFirst ?? (startOverRequested(dir) && startOverRemovesFirst(dir))
+        let current = fm.fileExists(atPath: bundle.path) ? JobExecutor.directorySize(bundle) : 0
+        let old = underWay ? JobExecutor.directorySize(aside) : current
+        return StartOverRoom(underWay: underWay, removingDamagedFirst: removing,
+                             credit: (underWay ? current : 0) + (removing ? old : 0), oldBytes: old)
     }
 
     public static func startOverRequested(_ dir: URL) -> Bool {
         FileManager.default.fileExists(atPath: dir.appendingPathComponent(startOverName).path)
     }
 
-    /// Put a damaged image aside and forget what was recorded of it, if that was
-    /// asked, so the run makes a new mirror from scratch. Only a damaged mirror is
-    /// started over: a request for any other is dropped. Refused while the image is
-    /// attached anywhere. A second start over while the first one's image is still
-    /// aside removes the unfinished new one instead, since the first never sealed.
+    /// Put a damaged image aside, or remove it if that was asked, and forget what was
+    /// recorded of it, so the run makes a new mirror from scratch. Only a damaged
+    /// mirror, or one being started over, is started over: a request for any other is
+    /// dropped. Refused while the image is attached anywhere.
+    ///
+    /// While a start over is under way (the old image aside), asking again removes the
+    /// unfinished new image, since it never sealed; asking to remove the damaged one
+    /// removes the old image, and the new one, unless it is damaged too, carries on.
     static func startOverIfAsked(_ bundle: URL, in dir: URL, runner: CommandRunner) throws {
         guard startOverRequested(dir) else { return }
         let fm = FileManager.default
-        guard damage(in: dir) != nil, fm.fileExists(atPath: bundle.path) else {
+        let aside = replaced(bundle)
+        let manifest = dir.appendingPathComponent(ArchiveManifest.sidecarName)
+        // an old image still aside after the new one sealed (removing it failed) is
+        // the one to go, not the newer image
+        if fm.fileExists(atPath: aside.path), fm.fileExists(atPath: manifest.path) { try fm.removeItem(at: aside) }
+        let underWay = fm.fileExists(atPath: aside.path)
+        let damaged = damage(in: dir) != nil
+        guard damaged || underWay else {
             try? fm.removeItem(at: dir.appendingPathComponent(startOverName))
             return
         }
-        try MirrorMounts.refuseIfOpen(bundle, runner: runner)
-        let aside = replaced(bundle)
-        if fm.fileExists(atPath: aside.path) { try fm.removeItem(at: bundle) } else { try fm.moveItem(at: bundle, to: aside) }
-        // the manifest first: a crash after this leaves no image and no manifest, a first run
-        try? fm.removeItem(at: dir.appendingPathComponent(ArchiveManifest.sidecarName))
-        BandTable.remove(in: dir)
-        clearOpen(dir)
-        clearDamaged(dir)
-        clearDecayed(dir)
+        let removeFirst = startOverRemovesFirst(dir)
+        let replacing = fm.fileExists(atPath: bundle.path) && (damaged || !removeFirst)
+        if replacing {
+            try MirrorMounts.refuseIfOpen(bundle, runner: runner)
+            // what was recorded of it first: a crash after this leaves the request and the
+            // damage marked, and the next run starts over again
+            try? fm.removeItem(at: manifest)
+            BandTable.remove(in: dir)
+        }
+        if removeFirst, underWay { try fm.removeItem(at: aside) }
+        if replacing {
+            if removeFirst || underWay { try fm.removeItem(at: bundle) } else { try fm.moveItem(at: bundle, to: aside) }
+            clearOpen(dir)
+            clearDamaged(dir)
+            clearDecayed(dir)
+        }
         try? fm.removeItem(at: dir.appendingPathComponent(startOverName))
     }
 
@@ -805,16 +866,50 @@ public enum MirrorSeal {
         public var dir: URL
         /// what a check says about it
         public var detail: String
+        /// the image in the mirror's place is recorded damaged
+        public var imageDamaged: Bool
+        /// it is being started over: the damaged image is aside, and the new one isn't complete
+        public var underWay: Bool
+        /// the damaged image's size, about what a new mirror needs
+        public var oldBytes: UInt64
+        /// what a half-built new image already holds
+        public var newBytes: UInt64
+        /// free on its drive; nil when the drive doesn't say
+        public var free: UInt64?
+
+        /// what a new mirror needs that the drive doesn't yet give it, the damaged one kept
+        public var neededBeside: UInt64 {
+            let need = oldBytes + oldBytes / 20
+            return need > newBytes ? need - newBytes : 0
+        }
+        /// a new mirror fits beside the damaged one, as far as can be told
+        public var roomBeside: Bool { free.map { $0 >= neededBeside } ?? true }
     }
 
-    /// the mirrors of `job` at `target` recorded as damaged
-    public static func damaged(job: BackupJob, target: Target) -> [Damaged] {
+    /// the mirrors of `job` at `target` recorded as damaged, or being started over
+    public static func damaged(job: BackupJob, target: Target, freeSpace: (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) }) -> [Damaged] {
         guard case .liveMirror = job.format else { return [] }
         return job.libraries.compactMap { lib in
-            guard let mirror = LibraryFolders.archives(job: job, library: lib, in: target.destinationDir).first,
-                  let why = damage(in: mirror.dir) else { return nil }
-            return Damaged(library: lib.displayName, dir: mirror.dir, detail: damagedDetail(why, in: mirror.dir))
+            // a start over under way has no manifest, so no archive, until the new one seals
+            guard let dir = LibraryFolders.archives(job: job, library: lib, in: target.destinationDir).first?.dir
+                    ?? LibraryFolders.holdings(job: job, library: lib, in: target.destinationDir).first?.folder,
+                  let bundle = image(in: dir), let room = startOverRoom(bundle, in: dir, removingDamagedFirst: false) else { return nil }
+            let detail = damage(in: dir).map { damagedDetail($0, in: dir) }
+                ?? "it is being started over, and the new mirror isn't complete yet. The damaged one is kept, hidden beside it, until it is."
+            return Damaged(library: lib.displayName, dir: dir, detail: detail, imageDamaged: damage(in: dir) != nil,
+                           underWay: room.underWay, oldBytes: room.oldBytes, newBytes: room.credit, free: freeSpace(dir))
         }
+    }
+
+    /// the mirror's image in `dir`, as named there or by the old image a start over put aside
+    static func image(in dir: URL) -> URL? {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        let suffix = ".replaced.sparsebundle"
+        if let shown = names.sorted().first(where: { !$0.hasPrefix(".") && $0.hasSuffix(".sparsebundle") }) {
+            return dir.appendingPathComponent(shown, isDirectory: true)
+        }
+        guard let aside = names.first(where: { $0.hasPrefix(".") && $0.hasSuffix(suffix) }) else { return nil }
+        return dir.appendingPathComponent(String(aside.dropFirst().dropLast(suffix.count)) + ".sparsebundle", isDirectory: true)
     }
 
     /// the old image of a mirror started over, once the new one is sealed
