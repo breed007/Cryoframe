@@ -89,6 +89,10 @@ private final class RefusesLocks: CommandRunner, @unchecked Sendable {
     let always: Bool
     init(always: Bool = false) { self.always = always }
     var refused: Int { lock.lock(); defer { lock.unlock() }; return refusals }
+    /// what a create that failed was given, seen as it ran (the build's cleanup has
+    /// removed the copy by the time the test hears of the failure)
+    private var failedCreate: String?
+    var lastFailedCreate: String? { lock.lock(); defer { lock.unlock() }; return failedCreate }
     var control: RunControl? { nil }
     var forTeardown: CommandRunner { inner }
 
@@ -102,7 +106,21 @@ private final class RefusesLocks: CommandRunner, @unchecked Sendable {
                                      stderr: "hdiutil: create failed - Operation not permitted\n")
             }
         }
-        return try inner.run(launchPath, args, stdin: stdin)
+        let result = try inner.run(launchPath, args, stdin: stdin)
+        if !result.ok, (launchPath as NSString).lastPathComponent == "hdiutil", args.first == "create" {
+            let fm = FileManager.default
+            let src = args.firstIndex(of: "-srcfolder").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+            let out = args.last.map { ($0 as NSString).deletingLastPathComponent }
+            let seen = """
+                args: \(args)
+                srcfolder exists: \(src.map { fm.fileExists(atPath: $0) } ?? false) \(src.flatMap { try? fm.contentsOfDirectory(atPath: $0) } ?? [])
+                output folder exists: \(out.map { fm.fileExists(atPath: $0) } ?? false)
+                TMPDIR: \(ProcessInfo.processInfo.environment["TMPDIR"] ?? "unset")
+                stderr: \(result.stderr)
+                """
+            lock.lock(); failedCreate = seen; lock.unlock()
+        }
+        return result
     }
 
     static func firstLocked(in root: URL) -> String? {
@@ -237,6 +255,7 @@ private struct FillsScratch: CommandRunner {
                 out exists: \(fm.fileExists(atPath: out.path)) \((try? fm.contentsOfDirectory(atPath: out.path)) ?? [])
                 copy exists: \(fm.fileExists(atPath: copy.path)) \((try? fm.contentsOfDirectory(atPath: copy.path)) ?? [])
                 mounts: \(mounts.split(separator: "\n").filter { $0.contains("/Volumes/") || $0.contains("cf-") })
+                when hdiutil ran: \(runner.lastFailedCreate ?? "no create failed through the runner")
                 """)
             throw error
         }
