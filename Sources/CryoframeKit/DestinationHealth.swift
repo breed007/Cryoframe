@@ -191,7 +191,7 @@ public enum RunFollowUp {
                               uploads: UploadLedger?, lastCheck: HealthRecord?, checks: HealthStore? = nil,
                               volumes: VolumeTable = SystemVolumeTable(),
                               freeSpace: (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) }) {
-        if let checks, let check = bandCheckRecord(record, latest: lastCheck) { checks.append(check) }
+        if let checks, let check = bandCheckRecord(record, latest: lastCheck, job: job) { checks.append(check) }
         let labels = job.destinationLabels
         let placed = DestinationResolver(volumes: volumes).resolve(job).job
         for t in placed.targets {
@@ -226,14 +226,17 @@ public enum RunFollowUp {
     /// do for any failed check. One that couldn't be made (a band that couldn't be
     /// read) isn't recorded, and clears nothing. One that passed is recorded only
     /// when it clears such a failure, that is, when every mirror the failure named was
-    /// checked again here and found sound (started over, most likely); a rotating
-    /// drive's damaged mirror stays failed while the other drive's runs pass.
-    public static func bandCheckRecord(_ record: RunRecord, latest: HealthRecord?) -> HealthRecord? {
-        guard let summary = record.bandCheck else { return nil }
-        func prefix(_ c: BandCheckReport) -> String { "\(c.library) → \(c.destination): " }
-        let checked = summary.copies.filter { $0.skipped == nil }
-        if summary.failed {
-            let failed = summary.copies.filter(\.failed)
+    /// checked again here and found sound (started over, most likely), or is no longer
+    /// one `job` writes (it was moved to another drive, or the drive was taken off it);
+    /// a rotating drive's damaged mirror stays failed while the other drive's runs pass.
+    public static func bandCheckRecord(_ record: RunRecord, latest: HealthRecord?, job: BackupJob? = nil) -> HealthRecord? {
+        guard record.bandCheck != nil || job != nil else { return nil }
+        let copies = record.bandCheck?.copies ?? []
+        func prefix(_ library: String, _ destination: String) -> String { "\(library) → \(destination): " }
+        func prefix(_ c: BandCheckReport) -> String { prefix(c.library, c.destination) }
+        let checked = copies.filter { $0.skipped == nil }
+        if record.bandCheck?.failed == true {
+            let failed = copies.filter(\.failed)
             let lines = failed.map { prefix($0) + MirrorSeal.decayReason($0.damaged) + "; start this mirror over" }
             return HealthRecord(jobID: record.jobID, jobName: record.jobName, checkedAt: record.finishedAt,
                                 archivesChecked: checked.count, failures: lines, kind: HealthRecord.bandCheckKind,
@@ -241,7 +244,14 @@ public enum RunFollowUp {
         }
         guard let latest, latest.kind == HealthRecord.bandCheckKind, !latest.passed else { return nil }
         let sound = checked.filter { $0.error == nil && $0.mismatches == 0 }.map(prefix)
-        guard latest.failures.allSatisfy({ line in sound.contains { line.hasPrefix($0) } }) else { return nil }
+        // the mirrors the job writes now, by the names a failure line gives them
+        let written: [String]? = job.map { job in
+            let names = Set(job.targets.map(\.displayName)).union(job.destinationLabels.values)
+            return job.libraries.flatMap { lib in names.map { prefix(lib.displayName, $0) } }
+        }
+        guard latest.failures.allSatisfy({ line in
+            sound.contains { line.hasPrefix($0) } || written.map { !$0.contains { line.hasPrefix($0) } } == true
+        }) else { return nil }
         return HealthRecord(jobID: record.jobID, jobName: record.jobName, checkedAt: record.finishedAt,
                             archivesChecked: checked.count, failures: [], kind: HealthRecord.bandCheckKind,
                             trigger: record.trigger)

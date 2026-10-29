@@ -343,6 +343,23 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(RunFollowUp.bandCheckRecord(clean("Drive A"), latest: cleared) == nil)
     }
 
+    // Moving the job to another drive, or dropping the damaged one, is the other way
+    // out: the failure of a mirror the job no longer writes doesn't stand.
+    @Test func aFailureOfAMirrorTheJobNoLongerWritesIsCleared() throws {
+        let bad = BandCheckReport(library: "Lib", destination: "Drive A", total: 10, checked: 10, mismatches: 1, damaged: ["3"])
+        let failed = try #require(RunFollowUp.bandCheckRecord(
+            RunRecord.make(job: job(), outcome: finished(), startedAt: t0, finishedAt: t0, trigger: "scheduled", bandChecks: [bad]), latest: nil))
+        let driveA = Target.localVolume(id: "a", name: "Drive A", dir: URL(fileURLWithPath: "/tmp/a"))
+        let driveB = Target.localVolume(id: "b", name: "Drive B", dir: URL(fileURLWithPath: "/tmp/b"))
+        var moved = job(); moved.targets = [driveB]
+        let onB = RunRecord.make(job: moved, outcome: finished(), startedAt: t0, finishedAt: t0.addingTimeInterval(day), trigger: "scheduled",
+                                 bandChecks: [BandCheckReport(library: "Lib", destination: "Drive B", total: 10, checked: 10, recent: 10, oldestVerified: t0)])
+        #expect(RunFollowUp.bandCheckRecord(onB, latest: failed, job: moved)?.passed == true)
+        // still one of the job's drives (a rotation): it stands
+        var both = job(); both.targets = [driveA, driveB]
+        #expect(RunFollowUp.bandCheckRecord(onB, latest: failed, job: both) == nil)
+    }
+
     @Test func aDestinationsRunsCarryTheirCoverage() {
         let older = DestinationRun(at: t0, good: true, bytes: 1, seconds: 1, freeAfter: nil, checkPassed: nil,
                                    bands: BandCoverage(total: 10, recent: 5, unverified: 5, oldest: t0))
