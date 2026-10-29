@@ -527,20 +527,20 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
             MountPoint.detach(mnt, runner: ProcessCommandRunner())
             try? FileManager.default.removeItem(at: base)
         }
-        let lib = mnt.appendingPathComponent("Projects")
+        let lib = mnt.appendingPathComponent("BandRun")
         try FileManager.default.createDirectory(at: lib, withIntermediateDirectories: true)
         try Data("x".utf8).write(to: lib.appendingPathComponent("main.swift"))
         let dest = base.appendingPathComponent("dest")
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
-        let projects = ContentType.genericFolder(id: "projects", displayName: "Projects", path: .absolute(lib.path))
-        let job = BackupJob(name: "Projects", libraries: [projects], target: .localVolume(id: "d", name: "Dest", dir: dest),
+        let projects = ContentType.genericFolder(id: "bandrun", displayName: "BandRun", path: .absolute(lib.path))
+        let job = BackupJob(name: "BandRun", libraries: [projects], target: .localVolume(id: "d", name: "Dest", dir: dest),
                             format: .liveMirror(sizeGB: 1), frequency: .manual, createdAt: Date(timeIntervalSince1970: 0))
         let exec = JobExecutor(helper: FakePrivilegedHelper(), detector: FakeProcessDetector(),
                                scratchBase: base.appendingPathComponent("scratch"), bandChecks: BandCheckPolicy())
         let control = RunControl()
         let outcome = try await exec.run(job, ownerUID: getuid(), now: Date(), control: control)
         let checks = control.bandChecks
-        #expect(checks.count == 1 && checks.first?.library == "Projects" && checks.first?.destination == "Dest", "\(checks)")
+        #expect(checks.count == 1 && checks.first?.library == "BandRun" && checks.first?.destination == "Dest", "\(checks)")
         #expect(checks.first.map { $0.total > 0 && !$0.failed } == true)
         let record = RunRecord.make(job: job, outcome: outcome, startedAt: Date(), finishedAt: Date(), trigger: "manual",
                                     bandChecks: checks)

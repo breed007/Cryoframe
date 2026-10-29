@@ -221,9 +221,25 @@ private struct FillsScratch: CommandRunner {
         let out = buildDir(base.appendingPathComponent("scratch"))
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let runner = RefusesLocks()
-        let built = try FilteredCopy.sealedArchive(SealedArchiveEngine(.dmg, runner: runner), source: ArchiveSource(name: "Projects", root: lib),
+        let built: (archive: ArchiveResult, notes: [String])
+        do {
+            built = try FilteredCopy.sealedArchive(SealedArchiveEngine(.dmg, runner: runner), source: ArchiveSource(name: "Projects", root: lib),
                                                    found: found, plan: .direct, buildDir: out,
                                                    copyDir: out, library: "Projects", runner: runner)
+        } catch {
+            // seen only on the macOS 27 CI runner ("create failed - No such file or
+            // directory"): say what was there, to find which side went missing
+            let fm = FileManager.default
+            let copy = out.appendingPathComponent(FilteredCopy.folderName)
+            let mounts = (try? ProcessCommandRunner().run("/sbin/mount", []).stdout) ?? ""
+            Issue.record("""
+                build failed: \(error)
+                out exists: \(fm.fileExists(atPath: out.path)) \((try? fm.contentsOfDirectory(atPath: out.path)) ?? [])
+                copy exists: \(fm.fileExists(atPath: copy.path)) \((try? fm.contentsOfDirectory(atPath: copy.path)) ?? [])
+                mounts: \(mounts.split(separator: "\n").filter { $0.contains("/Volumes/") || $0.contains("cf-") })
+                """)
+            throw error
+        }
         #expect(runner.refused == 1)
         #expect(built.notes.first?.contains("left the lock off 3 locked items in the disk image") == true, "\(built.notes)")
         #expect(!FileManager.default.fileExists(atPath: out.appendingPathComponent(FilteredCopy.folderName).path))
