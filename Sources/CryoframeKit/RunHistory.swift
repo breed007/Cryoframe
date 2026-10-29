@@ -144,9 +144,10 @@ public struct RunRecord: Codable, Sendable, Identifiable {
     /// build from a completed run. `bandChecks`: what its checks of its mirrors for
     /// decay found (RunControl.bandChecks).
     ///
-    /// A run that found decay, or couldn't check, failed: its copy went into a mirror
-    /// that can't be trusted, or might not be, so it isn't a good run, and it alerts as
-    /// a failure does. Its summary says what the check found.
+    /// A run that found decay failed: its copy went into a mirror that can't be
+    /// trusted, so it isn't a good run, and it alerts as a failure does. Its summary
+    /// says what the check found, or why it couldn't be made; a check that couldn't be
+    /// made leaves the run as it was.
     public static func make(job: BackupJob, outcome: JobOutcome, startedAt: Date, finishedAt: Date,
                             trigger: String, id: String = UUID().uuidString,
                             bandChecks: [BandCheckReport] = []) -> RunRecord {

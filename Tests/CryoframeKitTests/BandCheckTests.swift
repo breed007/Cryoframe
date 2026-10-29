@@ -186,25 +186,42 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(next.checked == 10 && next.unverified == 0)
     }
 
-    // A drive that can't give a band back is the failure the check is for.
-    @Test func aBandThatCantBeReadIsDamagedAndAMirrorThatCantBeListedFails() throws {
+    // A band that can't be read is a check that couldn't be made, not decay: an
+    // unplugged drive, a share that timed out and an offline cloud file all read that
+    // way. Only a band that reads back different is decay.
+    @Test func aBandThatCantBeReadIsNotDecayAndTheCheckStopsThere() throws {
+        let fm = FileManager.default
         let dir = tempDir("eio")
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let bundle = try fakeBundle(in: dir, bands: 3)
-        let r = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0, hash: { url, _ in
-            if url.lastPathComponent == "1" { throw POSIXError(.EIO) }
+        defer { try? fm.removeItem(at: dir) }
+        let bundle = try fakeBundle(in: dir, bands: 4)
+        _ = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0)
+        let recorded = try #require(try BandTable.read(in: dir))
+        var asked: [String] = []
+        let r = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0.addingTimeInterval(day), hash: { url, _ in
+            asked.append(url.lastPathComponent)
+            if url.lastPathComponent == "1" { throw POSIXError(.ETIMEDOUT) }
             return try Checksum.sha256(of: url)
         })
-        #expect(r.mismatches == 1 && r.damaged == ["1"] && r.failed)
-        let gone = BandCheck.run(bundle: dir.appendingPathComponent("Nope.sparsebundle"), in: dir, library: "Lib",
-                                 settings: settings(), now: t0)
-        #expect(gone.error != nil && gone.failed)
+        #expect(r.mismatches == 0 && r.damaged.isEmpty && !r.failed, "\(r)")
+        #expect(r.error?.hasPrefix("data band 1 couldn't be read") == true, "\(String(describing: r.error))")
+        #expect(asked == ["0", "1"])                    // the first band that can't be read ends the check
+        #expect(try BandTable.read(in: dir) == recorded) // and nothing it read counts toward coverage
+        #expect(BandCoverage([r]) == nil)
+
+        let unlisted = BandCheck.run(bundle: dir.appendingPathComponent("Nope.sparsebundle"), in: dir, library: "Lib",
+                                     settings: settings(), now: t0)
+        #expect(unlisted.error != nil && !unlisted.failed)
         // a table that can't be read is said, and checking starts over from a new one
         try Data("garbage".utf8).write(to: dir.appendingPathComponent(BandTable.fileName))
         let restarted = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0)
-        #expect(restarted.error?.contains("started over") == true)
-        let rewritten = try BandTable.read(in: dir)
-        #expect(rewritten?.entries.count == 3)
+        #expect(restarted.error?.contains("started over") == true && !restarted.failed)
+        #expect(try BandTable.read(in: dir)?.entries.count == 4)
+        // the drive went away part way through
+        let gone = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0.addingTimeInterval(2 * day), hash: { _, _ in
+            try fm.removeItem(at: bundle)
+            throw POSIXError(.ENOENT)
+        })
+        #expect(gone.error?.contains("went away") == true && !gone.failed, "\(String(describing: gone.error))")
     }
 
     @Test func aCloudFolderIsSkippedUnlessItsDownloadSettingIsOn() throws {
@@ -264,6 +281,25 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(ok.outcome == .completed && ok.summary.hasSuffix("; checked 100% of the mirror for decay; all of it within the last day"), "\(ok.summary)")
         let none = RunRecord.make(job: job(), outcome: finished(), startedAt: t0, finishedAt: t0, trigger: "manual")
         #expect(none.bandCheck == nil && none.summary == "1 library archived")
+    }
+
+    // A check that couldn't be made says so in the run's summary. It isn't decay: the
+    // run isn't failed, the alert isn't urgent, and nothing is marked or recorded.
+    @Test func aCheckThatCouldntBeMadeIsANoteNotAFailure() throws {
+        let unread = BandCheckReport(library: "Lib", destination: "Disk", total: 10, checked: 1,
+                                     error: "data band 1 couldn't be read (Operation timed out)")
+        let r = RunRecord.make(job: job(), outcome: finished(), startedAt: t0, finishedAt: t0, trigger: "scheduled", bandChecks: [unread])
+        #expect(r.outcome == .completed)
+        #expect(r.summary.hasSuffix("; the mirror couldn't be checked for decay (data band 1 couldn't be read (Operation timed out))"), "\(r.summary)")
+        #expect(AlertPolicy.payload(for: r, everyEvent: false) == nil)
+        #expect(AlertPolicy.payload(for: r, everyEvent: true)?.high == false)
+        #expect(ProtectionVerdict.standing(of: job(), latest: r, lastGood: t0, health: nil, now: t0) == .healthy)
+        #expect(RunFollowUp.bandCheckRecord(r, latest: nil) == nil)
+        // nor does it clear a failure of that mirror: it didn't check it
+        let bad = BandCheckReport(library: "Lib", destination: "Disk", total: 10, checked: 10, mismatches: 1, damaged: ["3"])
+        let failed = try #require(RunFollowUp.bandCheckRecord(
+            RunRecord.make(job: job(), outcome: finished(), startedAt: t0, finishedAt: t0, trigger: "scheduled", bandChecks: [bad]), latest: nil))
+        #expect(RunFollowUp.bandCheckRecord(r, latest: failed) == nil)
     }
 
     @Test func aFailedCheckIsRecordedAndOnlyASoundCheckOfThatMirrorClearsIt() throws {

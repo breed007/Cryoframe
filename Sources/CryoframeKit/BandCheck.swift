@@ -108,7 +108,7 @@ public struct BandCheckReport: Codable, Sendable, Equatable {
     public var checked: Int
     /// bands this run changed, read and recorded
     public var recorded: Int
-    /// unchanged bands whose contents no longer match, or that couldn't be read
+    /// unchanged bands whose contents no longer match: decay
     public var mismatches: Int
     /// the damaged bands, by name
     public var damaged: [String]
@@ -122,7 +122,8 @@ public struct BandCheckReport: Codable, Sendable, Equatable {
     public var stoppedEarly: Bool
     /// why the mirror wasn't checked (a cloud folder whose bands aren't downloaded)
     public var skipped: String?
-    /// why the check couldn't be made
+    /// why the check couldn't be made, or was cut off: a band that couldn't be read,
+    /// say. That isn't decay, and the run only says so.
     public var error: String?
 
     public init(library: String, destination: String = "", total: Int = 0, checked: Int = 0, recorded: Int = 0,
@@ -134,8 +135,8 @@ public struct BandCheckReport: Codable, Sendable, Equatable {
         self.skipped = skipped; self.error = error
     }
 
-    /// the check found something wrong, or couldn't be made
-    public var failed: Bool { mismatches > 0 || error != nil }
+    /// the check found decay. One that couldn't be made hasn't failed: it says so.
+    public var failed: Bool { mismatches > 0 }
 }
 
 /// The band checks of one run, as its record keeps them.
@@ -350,9 +351,12 @@ public enum BandCheck {
     /// since a band not read until later could rot unseen in between; any the cap
     /// leaves unread are recorded unread, and are first in line next time.
     ///
-    /// A band that can't be read is counted as damaged: a drive that can't give back
-    /// what it was given is the failure this check looks for. Stop ends the check where
-    /// it is, and what was read is kept.
+    /// Only an unchanged band that reads back other than it was recorded is decay. One
+    /// that can't be read isn't: an unplugged drive, a share that timed out and a cloud
+    /// file that couldn't be fetched all fail that way. The first such band ends the
+    /// check, which says why, and the table is left as it was, so nothing this run read
+    /// counts and the next run tries again. Stop ends the check where it is, and what
+    /// was read is kept.
     public static func run(bundle: URL, in dir: URL, library: String, settings: Settings, now: Date = Date(),
                            clock: () -> Date = Date.init, control: RunControl? = nil,
                            hash: (URL, RunControl?) throws -> String = { try Checksum.sha256(of: $0, control: $1) }) -> BandCheckReport {
@@ -376,24 +380,23 @@ public enum BandCheck {
 
         var damaged: [String] = []
         var stopped = false
-        func readBand(_ name: String) -> String?? {
+        var unread: (band: String, why: Error)?
+        func readBand(_ name: String) -> String? {
             if stopped || control?.isCancelled == true || clock() >= deadline { stopped = true; return nil }
             defer { control?.advance(by: work.table.entries[name]?.size ?? 0) }
-            do { return .some(try hash(bands.appendingPathComponent(name), control)) }
+            do { return try hash(bands.appendingPathComponent(name), control) }
             catch is CancelledError { stopped = true; return nil }
-            catch { return .some(nil) }          // couldn't be read
+            catch { unread = (name, error); stopped = true; return nil }
         }
         for name in work.rehash {
-            guard let result = readBand(name) else { break }
-            guard let sha = result else { damaged.append(name); continue }
+            guard let sha = readBand(name) else { break }
             work.table.entries[name]?.sha256 = sha
             work.table.entries[name]?.verifiedAt = now
             report.recorded += 1
         }
         for name in work.slice {
-            guard let result = readBand(name) else { break }
+            guard let sha = readBand(name) else { break }
             report.checked += 1
-            guard let sha = result else { damaged.append(name); continue }
             if let recorded = work.table.entries[name]?.sha256, recorded != sha {
                 damaged.append(name)            // the recorded hash is kept: it is what the band should hold
                 continue
@@ -401,9 +404,16 @@ public enum BandCheck {
             work.table.entries[name]?.sha256 = sha
             work.table.entries[name]?.verifiedAt = now
         }
-        report.stoppedEarly = stopped && clock() >= deadline
-        do { try work.table.write(in: dir) } catch {
-            report.error = "what was read couldn't be recorded beside the mirror: \(error.localizedDescription)"
+        report.stoppedEarly = stopped && unread == nil && clock() >= deadline
+        if let unread {
+            // the table stays as it was: what this run read counts for nothing
+            report.error = FileManager.default.fileExists(atPath: bands.path)
+                ? "data band \(unread.band) couldn't be read (\(unread.why.localizedDescription))"
+                : "the mirror's drive went away during the check"
+        } else {
+            do { try work.table.write(in: dir) } catch {
+                report.error = "what was read couldn't be recorded beside the mirror: \(error.localizedDescription)"
+            }
         }
         if unreadable, report.error == nil {
             // what was recorded is lost, and the file sits on the same drive: said, and

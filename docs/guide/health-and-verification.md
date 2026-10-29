@@ -92,6 +92,8 @@ The run's summary in History says how much it checked, for example "checked 3% o
 
 If a band no longer matches, the run fails and says which bands changed, you are alerted as you are for any failed backup, and the dashboard turns red. The mirror is marked damaged: health checks fail it, Restore warns before using it, and its job's runs are refused, because updating a damaged image would hide the problem rather than fix it. To recover, open Storage and choose **Start This Mirror Over** for that mirror. The next run makes a new mirror from the library. The damaged image is kept, hidden in the mirror's folder, until the new one is complete, and is then deleted. If the drive is failing, move the job to another drive instead.
 
+A band that can't be read at all isn't decay. That happens when a drive is unplugged during the check, a network share times out, or a file in a cloud folder can't be downloaded. The check stops at that band, the run's summary says the mirror couldn't be checked and why, and the next run tries again. Nothing is marked damaged, and the run isn't failed for it.
+
 A band whose date changed since it was recorded was written since then, for example by an older version of Cryoframe after a downgrade. It is recorded again, not reported. The check can't say which files a damaged band belonged to without opening the image.
 
 A plain-files copy has no checksums to compare: it was read back against the library when it was last updated. A health check confirms the copy is there and that its last update finished. A copy whose last update was stopped part way is skipped rather than counted either way, and the next backup finishes it.

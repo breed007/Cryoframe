@@ -221,9 +221,10 @@ public enum RunFollowUp {
 
     /// The check record a run's checks of its mirrors for decay call for, if any.
     ///
-    /// One that found decay, or couldn't check, is recorded as a failed check of kind
-    /// `bandcheck`: the dashboard, the job's check history and the restore timeline
-    /// then say so, as they do for any failed check. One that passed is recorded only
+    /// One that found decay is recorded as a failed check of kind `bandcheck`: the
+    /// dashboard, the job's check history and the restore timeline then say so, as they
+    /// do for any failed check. One that couldn't be made (a band that couldn't be
+    /// read) isn't recorded, and clears nothing. One that passed is recorded only
     /// when it clears such a failure, that is, when every mirror the failure named was
     /// checked again here and found sound (started over, most likely); a rotating
     /// drive's damaged mirror stays failed while the other drive's runs pass.
@@ -233,16 +234,13 @@ public enum RunFollowUp {
         let checked = summary.copies.filter { $0.skipped == nil }
         if summary.failed {
             let failed = summary.copies.filter(\.failed)
-            let lines = failed.map { c in
-                prefix(c) + (c.error.map { "couldn't be checked for decay: \($0)" }
-                             ?? MirrorSeal.decayReason(c.damaged) + "; start this mirror over")
-            }
+            let lines = failed.map { prefix($0) + MirrorSeal.decayReason($0.damaged) + "; start this mirror over" }
             return HealthRecord(jobID: record.jobID, jobName: record.jobName, checkedAt: record.finishedAt,
                                 archivesChecked: checked.count, failures: lines, kind: HealthRecord.bandCheckKind,
                                 trigger: record.trigger)
         }
         guard let latest, latest.kind == HealthRecord.bandCheckKind, !latest.passed else { return nil }
-        let sound = checked.map(prefix)
+        let sound = checked.filter { $0.error == nil && $0.mismatches == 0 }.map(prefix)
         guard latest.failures.allSatisfy({ line in sound.contains { line.hasPrefix($0) } }) else { return nil }
         return HealthRecord(jobID: record.jobID, jobName: record.jobName, checkedAt: record.finishedAt,
                             archivesChecked: checked.count, failures: [], kind: HealthRecord.bandCheckKind,
