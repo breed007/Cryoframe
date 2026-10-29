@@ -67,6 +67,16 @@ enum TransferConfig {
                     jobStore: store,
                     passphraseProvider: { KeychainArchiveKey.load(jobID: $0) },
                     healthRecords: { HealthStore.standard().all() },
-                    runHistory: { RunHistoryStore.standard().all() })
+                    runHistory: { RunHistoryStore.standard().all() },
+                    bandChecks: bandCheckPolicy())
+    }
+
+    /// how each run checks its mirrors for decay: Settings' time limit, and whether a
+    /// mirror in a cloud folder may be downloaded to be read
+    static func bandCheckPolicy() -> BandCheckPolicy {
+        let minutes = UserDefaults.standard.object(forKey: Prefs.bandCheckMinutes) == nil
+            ? Int(BandCheck.defaultTimeCap / 60) : UserDefaults.standard.integer(forKey: Prefs.bandCheckMinutes)
+        return BandCheckPolicy(timeCap: TimeInterval(max(minutes, 1) * 60),
+                               downloadCloud: UserDefaults.standard.bool(forKey: Prefs.verifyCloudArchives))
     }
 }

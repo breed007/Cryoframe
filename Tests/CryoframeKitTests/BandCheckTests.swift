@@ -354,6 +354,12 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         let third = try engine.archive(source, to: out)
         #expect(third.bandCheck?.damaged == [victim.name], "\(String(describing: third.bandCheck))")
         #expect(MirrorSeal.isDecayed(out) && MirrorSeal.damage(in: out) != nil)
+        // the damaged marker gone (1.7 clears it when fsck passes): decay still stands
+        let marker = out.appendingPathComponent(MirrorSeal.damagedMarkerName)
+        let saved = try Data(contentsOf: marker)
+        try fm.removeItem(at: marker)
+        #expect(MirrorSeal.damage(in: out) == MirrorSeal.decayReason([victim.name]))
+        try saved.write(to: marker)
         let check = try ChecksumVerifier().reverify(archiveDir: out)
         #expect(!check.passed && check.details.contains("changed on its drive"), "\(check.details)")
         #expect {

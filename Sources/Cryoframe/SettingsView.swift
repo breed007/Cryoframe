@@ -113,6 +113,7 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.healthScope) private var healthScope = "latest"
     @AppStorage(Prefs.healthDepth) private var healthDepth = "checksum"
     @AppStorage(Prefs.verifyCloudArchives) private var verifyCloudArchives = false
+    @AppStorage(Prefs.bandCheckMinutes) private var bandCheckMinutes = Int(BandCheck.defaultTimeCap / 60)
     @AppStorage(Prefs.remoteAlertType) private var remoteAlertType = "off"
     @AppStorage(Prefs.remoteAlertURL) private var remoteAlertURL = ""
     @AppStorage(Prefs.remoteAlertEvents) private var remoteAlertEvents = "failure"
@@ -192,10 +193,16 @@ private struct GeneralSettings: View {
                     Text("Restore drill (opens each archive)").tag("drill")
                 }
                 Toggle("Download cloud archives to check them", isOn: $verifyCloudArchives)
+                Picker("Check a mirror for decay for up to", selection: $bandCheckMinutes) {
+                    Text("5 minutes a run").tag(5)
+                    Text("10 minutes a run").tag(10)
+                    Text("20 minutes a run").tag(20)
+                    Text("30 minutes a run").tag(30)
+                }
             } header: {
                 Text("Archive health")
             } footer: {
-                Text("Periodically re-checks existing archives to catch corruption before a restore needs them. Checksum re-hashes the bytes (fast). A restore drill goes further — it reassembles, mounts or extracts, and reopens each archive (a database integrity check), proving the restore path itself works, not just that the bytes match. \"Latest version only\" keeps the I/O down on large versioned jobs. By default a cloud archive that's been offloaded (not kept locally) is skipped rather than re-downloaded for a check; turn on \"Download cloud archives\" to pull and verify them anyway. You can also run either check from a job's ⋯ menu.")
+                Text("Periodically re-checks existing archives to catch corruption before a restore needs them. Checksum re-hashes the bytes (fast). A restore drill goes further — it reassembles, mounts or extracts, and reopens each archive (a database integrity check), proving the restore path itself works, not just that the bytes match. \"Latest version only\" keeps the I/O down on large versioned jobs. By default a cloud archive that's been offloaded (not kept locally) is skipped rather than re-downloaded for a check; turn on \"Download cloud archives\" to pull and verify them anyway. You can also run either check from a job's ⋯ menu. Every run of a live mirror also reads part of the mirror again to catch decay, data its drive changed on its own, so that the whole mirror is read about once a month; the last setting caps how long each run spends on it.")
             }
             Section("Defaults for new jobs") {
                 Picker("Format", selection: $format) {

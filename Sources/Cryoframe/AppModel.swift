@@ -991,7 +991,8 @@ final class AppModel: ObservableObject {
                     onStage: { s in Task { @MainActor in self.jobStage[id] = s } },
                     onLibrary: { lib in Task { @MainActor in self.jobLibrary[id] = lib; self.log("  ▸ \(lib)") } },
                     onProgress: { p in Task { @MainActor in self.jobProgress[id] = p } })
-                record = RunRecord.make(job: current, outcome: outcome, startedAt: startedAt, finishedAt: Date(), trigger: "manual")
+                record = RunRecord.make(job: current, outcome: outcome, startedAt: startedAt, finishedAt: Date(), trigger: "manual",
+                                        bandChecks: control.bandChecks)
             } catch {
                 record = RunRecord.failure(job: current, error: error.localizedDescription,
                                            startedAt: startedAt, finishedAt: Date(), trigger: "manual")
@@ -1000,7 +1001,7 @@ final class AppModel: ObservableObject {
             // each destination's trend, and a cloud run's versions for the upload check
             await Task.detached {
                 RunFollowUp.record(record, job: current, health: .standard(), uploads: .standard(),
-                                   lastCheck: HealthStore.standard().latest(forJob: current.id))
+                                   lastCheck: HealthStore.standard().latest(forJob: current.id), checks: .standard())
             }.value
             lease.release()
             jobs = store.load().jobs

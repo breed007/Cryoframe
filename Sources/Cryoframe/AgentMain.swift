@@ -111,7 +111,8 @@ enum AgentMain {
                     do {
                         let outcome = try await executor.run(resolved, ownerUID: getuid(), now: Date(), control: control)
                         record = RunRecord.make(job: current, outcome: outcome,
-                                                startedAt: started, finishedAt: Date(), trigger: "scheduled")
+                                                startedAt: started, finishedAt: Date(), trigger: "scheduled",
+                                                bandChecks: control.bandChecks)
                     } catch {
                         record = RunRecord.failure(job: current, error: error.localizedDescription,
                                                    startedAt: started, finishedAt: Date(), trigger: "scheduled")
@@ -119,7 +120,7 @@ enum AgentMain {
                     historyStore.append(record)
                     // each destination's trend, and a cloud run's versions for the upload check
                     RunFollowUp.record(record, job: current, health: .standard(), uploads: .standard(),
-                                       lastCheck: HealthStore.standard().latest(forJob: current.id))
+                                       lastCheck: HealthStore.standard().latest(forJob: current.id), checks: .standard())
                     lease.release()                                 // the run is over once it's recorded
                     await RemoteAlert.deliver(for: record)          // nobody is watching the screen
                     limit.signal()

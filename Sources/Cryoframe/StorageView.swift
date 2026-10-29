@@ -19,6 +19,11 @@ struct StorageView: View {
     @State private var checking: Set<DestinationKey> = []
     /// a plain-files copy's Removed items to empty, and from before when (nil: all)
     @State private var emptying: (folder: URL, before: Date?, label: String)?
+    /// mirrors recorded as damaged, by destination (see MirrorSeal.damaged)
+    @State private var damaged: [DestinationKey: [MirrorSeal.Damaged]] = [:]
+    /// the damaged mirror to start over, once confirmed
+    @State private var startingOver: (job: BackupJob, mirror: MirrorSeal.Damaged)?
+    @State private var startOverError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,17 +66,46 @@ struct StorageView: View {
         } message: {
             Text("What was deleted from the library \(emptying?.label ?? "") is deleted from the backup too. This can't be undone.")
         }
+        .alert("Start this mirror over?", isPresented: Binding(get: { startingOver != nil }, set: { if !$0 { startingOver = nil } })) {
+            Button("Start Over") {
+                if let s = startingOver {
+                    startingOver = nil
+                    do {
+                        try MirrorSeal.requestStartOver(s.mirror.dir)
+                        model.runNow(s.job)
+                    } catch {
+                        startOverError = "Couldn't start \(s.mirror.library) over: \(error.localizedDescription)"
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { startingOver = nil }
+        } message: {
+            Text("\(startingOver?.job.name ?? "The job") runs now and makes a new mirror of \(startingOver?.mirror.library ?? "the library") from scratch, which takes as long as its first run did. The damaged mirror is kept until the new one is complete, then deleted. If its drive is failing, move the job to another drive instead.")
+        }
+        .alert("Start Over", isPresented: Binding(get: { startOverError != nil }, set: { if !$0 { startOverError = nil } })) {
+            Button("OK", role: .cancel) { startOverError = nil }
+        } message: {
+            Text(startOverError ?? "")
+        }
     }
 
     private func load() async {
         let jobs = model.jobs
-        let (report, rings) = await Task.detached {
+        let (report, rings, hurt) = await Task.detached {
             let keys = DestinationKey.all(jobs)
             UploadLedger.standard().prune(keeping: keys)
-            return (StorageReporter.report(jobs), DestinationHealthStore.standard().load(keeping: keys))
+            var hurt: [DestinationKey: [MirrorSeal.Damaged]] = [:]
+            for job in jobs {
+                for t in job.targets {
+                    let found = MirrorSeal.damaged(job: job, target: t)
+                    if !found.isEmpty { hurt[DestinationKey(jobID: job.id, targetID: t.id)] = found }
+                }
+            }
+            return (StorageReporter.report(jobs), DestinationHealthStore.standard().load(keeping: keys), hurt)
         }.value
         rows = report
         trends = rings.compactMapValues { DestinationTrend($0) }
+        damaged = hurt
         loading = false
         // then each cloud folder's uploads, which may take a few seconds a file
         for job in jobs {
@@ -128,6 +162,9 @@ struct StorageView: View {
             }
             let key = DestinationKey(jobID: s.jobID, targetID: s.targetID)
             if let trend = trends[key] { trendRow(trend) }
+            if let job = model.jobs.first(where: { $0.id == s.jobID }) {
+                ForEach(damaged[key] ?? []) { mirror in damagedRow(mirror, job: job) }
+            }
             if let job = model.jobs.first(where: { $0.id == s.jobID }),
                let target = job.targets.first(where: { $0.id == s.targetID }), target.kind == .cloudSync {
                 uploadRow(job: job, target: target, key: key)
@@ -167,6 +204,24 @@ struct StorageView: View {
         if trend.slowerThanUsual {
             Text("The last run was slower than usual: over twice the time of the runs before it.")
                 .font(.caption2).foregroundStyle(.secondary)
+        }
+        if let bands = trend.bands {
+            Text(bands.line(at: Date()) + (trend.bandsAt.map { ", as of \($0.formatted(date: .abbreviated, time: .omitted))" } ?? ""))
+                .font(.caption2).foregroundStyle(.secondary)
+                .help("Each run reads part of the mirror again and compares it with what was written, so the whole mirror is checked about once a month.")
+        }
+    }
+
+    /// a mirror recorded as damaged: what was found, and the way out
+    @ViewBuilder private func damagedRow(_ mirror: MirrorSeal.Damaged, job: BackupJob) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Label("\(mirror.library): \(mirror.detail)", systemImage: "exclamationmark.octagon.fill")
+                .font(.caption).foregroundStyle(Color.cryoCrit).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 6)
+            Button("Start This Mirror Over…") { startingOver = (job, mirror) }
+                .controlSize(.small)
+                .disabled(model.runningJobIDs.contains(job.id))
+                .help("Make a new mirror from scratch at the job's next run. The damaged one is kept until the new one is complete.")
         }
     }
 

@@ -107,7 +107,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         defer { runner.control?.endStep() }
 
         // "Start this mirror over", asked for a damaged mirror: its image is put aside
-        // and this run makes a new one (see MirrorSeal.startOver)
+        // and this run makes a new one (see MirrorSeal.startOverIfAsked)
         try MirrorSeal.startOverIfAsked(bundle, in: destinationDir, runner: runner.forTeardown)
 
         // An image found damaged after an earlier run may not even mount. Unless a
@@ -118,6 +118,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             if MirrorSeal.isDecayed(destinationDir) {
                 throw MirrorCopyError.imageDecayed(image: bundle.path, why: why)
             }
+            // (damage(in:) reads decay too, so a damaged marker 1.7 cleared doesn't let one by)
             if MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty,
                MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown, control: runner.control) == .sound {
                 MirrorSeal.clearDamaged(destinationDir)
@@ -687,9 +688,13 @@ public enum MirrorSeal {
 
     static let damagedMarkerName = ".cryoframe-mirror-damaged"
 
-    /// why the image in `dir` was found damaged, or nil if it wasn't
+    /// why the image in `dir` was found damaged, or nil if it wasn't. Decay counts
+    /// even without the damaged marker beside it, which 1.7 clears when fsck passes.
     public static func damage(in dir: URL) -> String? {
-        guard let data = try? Data(contentsOf: dir.appendingPathComponent(damagedMarkerName)) else { return nil }
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent(damagedMarkerName)) else {
+            guard let bands = try? Data(contentsOf: dir.appendingPathComponent(decayedMarkerName)) else { return nil }
+            return decayReason(String(decoding: bands, as: UTF8.self).split(separator: "\n").map(String.init))
+        }
         let why = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         return why.isEmpty ? "reason not recorded" : why
     }
@@ -790,6 +795,26 @@ public enum MirrorSeal {
         clearDamaged(dir)
         clearDecayed(dir)
         try? fm.removeItem(at: dir.appendingPathComponent(startOverName))
+    }
+
+    /// a mirror of a job's found damaged, as Storage offers to start it over
+    public struct Damaged: Sendable, Equatable, Identifiable {
+        public var id: String { dir.path }
+        public var library: String
+        /// the mirror's folder, where Start This Mirror Over is asked for
+        public var dir: URL
+        /// what a check says about it
+        public var detail: String
+    }
+
+    /// the mirrors of `job` at `target` recorded as damaged
+    public static func damaged(job: BackupJob, target: Target) -> [Damaged] {
+        guard case .liveMirror = job.format else { return [] }
+        return job.libraries.compactMap { lib in
+            guard let mirror = LibraryFolders.archives(job: job, library: lib, in: target.destinationDir).first,
+                  let why = damage(in: mirror.dir) else { return nil }
+            return Damaged(library: lib.displayName, dir: mirror.dir, detail: damagedDetail(why, in: mirror.dir))
+        }
     }
 
     /// the old image of a mirror started over, once the new one is sealed

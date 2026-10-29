@@ -78,6 +78,20 @@ A cloud-sync client may replace a local archive with a placeholder to save space
 
 A sealed archive is verified byte for byte against its checksums, so a single flipped bit is caught.
 
-A live mirror is verified structurally: its files and their sizes are compared to the manifest. This catches dropped or truncated files, which are the common mirror failures, but not an in-place bit flip inside an otherwise intact file. Full-hashing a mirror on every check would mean re-reading the entire library each time, which would undo the reason a mirror is fast. If you need byte-for-byte assurance, use a sealed format.
+A live mirror is verified structurally: its files and their sizes are compared to the manifest. This catches dropped or truncated files, which are the common mirror failures. A change inside an otherwise intact file is left to the mirror's own check for decay, below, because hashing the whole mirror at every check would mean reading the entire drive each time.
+
+### Live mirrors: the check for decay
+
+A drive can change data it was given without anyone writing to it. That is decay, sometimes called bit rot, and it usually means the drive is failing. Nothing reports it until the damaged file is opened, and on an encrypted mirror the changed data reads as garbage without any error.
+
+So every run of a live mirror also checks part of the mirror for decay. A mirror's disk image is stored on the drive as many small pieces called bands. Cryoframe records a fingerprint of each band after each run. At the next run it reads some of the bands this run didn't write and compares them with their fingerprints, oldest checked first. Each run reads its share of the mirror, so that the whole mirror is read about once every 30 days, and never less than 512 MB. Each run spends at most 10 minutes on it; you can change that in Settings ▸ General ▸ Archive health. A run that is cut short or missed loses nothing, since the next one carries on where it stopped. A drive that takes turns in a rotation keeps its own record, and picks up where it left off when it comes back.
+
+The check reads the bands as they are on the drive, so an encrypted mirror is checked without its passphrase, and nothing is attached. A mirror in a cloud folder is checked only when "Download cloud archives to check them" is on, since reading it would download it.
+
+The run's summary in History says how much it checked, for example "checked 3% of the mirror for decay; all of it within the last 29 days". The Storage window shows how much of each drive's mirror has been checked: "Whole mirror checked for decay within the last 29 days", or, during the first month, "61% of the mirror checked for decay so far".
+
+If a band no longer matches, the run fails and says which bands changed, you are alerted as you are for any failed backup, and the dashboard turns red. The mirror is marked damaged: health checks fail it, Restore warns before using it, and its job's runs are refused, because updating a damaged image would hide the problem rather than fix it. To recover, open Storage and choose **Start This Mirror Over** for that mirror. The next run makes a new mirror from the library. The damaged image is kept, hidden in the mirror's folder, until the new one is complete, and is then deleted. If the drive is failing, move the job to another drive instead.
+
+A band whose date changed since it was recorded was written since then, for example by an older version of Cryoframe after a downgrade. It is recorded again, not reported. The check can't say which files a damaged band belonged to without opening the image.
 
 A plain-files copy has no checksums to compare: it was read back against the library when it was last updated. A health check confirms the copy is there and that its last update finished. A copy whose last update was stopped part way is skipped rather than counted either way, and the next backup finishes it.
