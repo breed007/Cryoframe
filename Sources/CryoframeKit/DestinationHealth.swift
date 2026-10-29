@@ -35,10 +35,14 @@ public struct DestinationRun: Codable, Sendable, Equatable {
     public var freeAfter: UInt64?
     /// whether the job's latest finished check had passed when the run ended; nil: none yet
     public var checkPassed: Bool?
+    /// how much of its mirrors there had been checked for decay after the run (see
+    /// BandCheck); nil when none was checked, and before 1.8
+    public var bands: BandCoverage?
 
-    public init(at: Date, good: Bool, bytes: UInt64, seconds: Double, freeAfter: UInt64?, checkPassed: Bool?) {
+    public init(at: Date, good: Bool, bytes: UInt64, seconds: Double, freeAfter: UInt64?, checkPassed: Bool?,
+                bands: BandCoverage? = nil) {
         self.at = at; self.good = good; self.bytes = bytes; self.seconds = seconds
-        self.freeAfter = freeAfter; self.checkPassed = checkPassed
+        self.freeAfter = freeAfter; self.checkPassed = checkPassed; self.bands = bands
     }
 }
 
@@ -51,6 +55,12 @@ public struct DestinationTrend: Sendable, Equatable {
     /// the newest run took over twice as long as the median of the ten good runs
     /// before it. Information only: a slow run is still a good one.
     public let slowerThanUsual: Bool
+    /// the newest run's account of how much of the mirror has been checked for decay.
+    /// A rotating drive has a ring of its own, so one back from its turn away shows
+    /// where its own check had got to.
+    public let bands: BandCoverage?
+    /// when the run that said so finished
+    public let bandsAt: Date?
 
     public static let window = 30
 
@@ -62,6 +72,9 @@ public struct DestinationTrend: Sendable, Equatable {
         good = recent.filter(\.good).count
         failed = recent.count - good
         slowerThanUsual = Self.slower(newestFirst)
+        let checked = newestFirst.first { $0.bands != nil }
+        bands = checked?.bands
+        bandsAt = checked?.at
     }
 
     /// "Last 30 runs: 29 good, 1 failed"
@@ -173,10 +186,12 @@ public final class DestinationHealthStore: @unchecked Sendable {
 /// versions not yet known to be uploaded (see UploadLedger). The app and the agent
 /// both call it after recording a run.
 public enum RunFollowUp {
+    /// `checks`: where a failed check of a mirror for decay is recorded (see bandCheckRecord)
     public static func record(_ record: RunRecord, job: BackupJob, health: DestinationHealthStore,
-                              uploads: UploadLedger?, lastCheck: HealthRecord?,
+                              uploads: UploadLedger?, lastCheck: HealthRecord?, checks: HealthStore? = nil,
                               volumes: VolumeTable = SystemVolumeTable(),
                               freeSpace: (URL) -> UInt64? = { JobExecutor.freeSpace(for: $0) }) {
+        if let checks, let check = bandCheckRecord(record, latest: lastCheck) { checks.append(check) }
         let labels = job.destinationLabels
         let placed = DestinationResolver(volumes: volumes).resolve(job).job
         for t in placed.targets {
@@ -185,12 +200,13 @@ public enum RunFollowUp {
             let name = labels[t.id] ?? t.displayName
             let outcomes = record.libraries.filter { $0.destination == name }
             guard !outcomes.isEmpty else { continue }
-            let good = outcomes.allSatisfy { $0.status == "verified" || $0.status == "archived" }
+            let checks = record.bandCheck?.copies.filter { $0.destination == name } ?? []
+            let good = outcomes.allSatisfy { $0.status == "verified" || $0.status == "archived" } && !checks.contains(where: \.failed)
             var isDir: ObjCBool = false
             let here = FileManager.default.fileExists(atPath: t.destinationDir.path, isDirectory: &isDir) && isDir.boolValue
             let run = DestinationRun(at: record.finishedAt, good: good, bytes: outcomes.reduce(0) { $0 + $1.bytes },
                                      seconds: record.duration, freeAfter: here ? freeSpace(t.destinationDir) : nil,
-                                     checkPassed: lastCheck?.passed)
+                                     checkPassed: lastCheck?.passed, bands: BandCoverage(checks))
             health.append(run, for: DestinationKey(jobID: job.id, targetID: t.id), plainFiles: job.format.isPlainFiles)
 
             if let uploads, t.kind == .cloudSync, here, outcomes.contains(where: { $0.parts > 0 }) {
@@ -201,5 +217,35 @@ public enum RunFollowUp {
                                for: DestinationKey(jobID: job.id, targetID: t.id))
             }
         }
+    }
+
+    /// The check record a run's checks of its mirrors for decay call for, if any.
+    ///
+    /// One that found decay, or couldn't check, is recorded as a failed check of kind
+    /// `bandcheck`: the dashboard, the job's check history and the restore timeline
+    /// then say so, as they do for any failed check. One that passed is recorded only
+    /// when it clears such a failure, that is, when every mirror the failure named was
+    /// checked again here and found sound (started over, most likely); a rotating
+    /// drive's damaged mirror stays failed while the other drive's runs pass.
+    public static func bandCheckRecord(_ record: RunRecord, latest: HealthRecord?) -> HealthRecord? {
+        guard let summary = record.bandCheck else { return nil }
+        func prefix(_ c: BandCheckReport) -> String { "\(c.library) → \(c.destination): " }
+        let checked = summary.copies.filter { $0.skipped == nil }
+        if summary.failed {
+            let failed = summary.copies.filter(\.failed)
+            let lines = failed.map { c in
+                prefix(c) + (c.error.map { "couldn't be checked for decay: \($0)" }
+                             ?? MirrorSeal.decayReason(c.damaged) + "; start this mirror over")
+            }
+            return HealthRecord(jobID: record.jobID, jobName: record.jobName, checkedAt: record.finishedAt,
+                                archivesChecked: checked.count, failures: lines, kind: HealthRecord.bandCheckKind,
+                                trigger: record.trigger)
+        }
+        guard let latest, latest.kind == HealthRecord.bandCheckKind, !latest.passed else { return nil }
+        let sound = checked.map(prefix)
+        guard latest.failures.allSatisfy({ line in sound.contains { line.hasPrefix($0) } }) else { return nil }
+        return HealthRecord(jobID: record.jobID, jobName: record.jobName, checkedAt: record.finishedAt,
+                            archivesChecked: checked.count, failures: [], kind: HealthRecord.bandCheckKind,
+                            trigger: record.trigger)
     }
 }

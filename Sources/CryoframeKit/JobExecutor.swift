@@ -67,7 +67,8 @@ public struct JobExecutor: Sendable {
                 passphraseProvider: @escaping @Sendable (String) -> String? = { _ in nil },
                 healthRecords: @escaping @Sendable () -> [HealthRecord] = { [] },
                 runHistory: @escaping @Sendable () -> [RunRecord] = { [] },
-                volumes: VolumeTable = SystemVolumeTable()) {
+                volumes: VolumeTable = SystemVolumeTable(),
+                bandChecks: BandCheckPolicy? = nil) {
         self.helper = helper; self.detector = detector; self.probe = probe; self.locator = locator
         self.volumes = volumes
         self.scratchBase = scratchBase; self.chunkSize = chunkSize
@@ -75,7 +76,11 @@ public struct JobExecutor: Sendable {
         self.diskImageKeepsLocks = diskImageKeepsLocks ?? FilteredCopy.diskImageKeepsLocks
         self.pendingStore = pendingStore; self.jobStore = jobStore; self.dataVolume = dataVolume
         self.passphraseProvider = passphraseProvider; self.healthRecords = healthRecords; self.runHistory = runHistory
+        self.bandChecks = bandChecks
     }
+
+    /// how the mirrors a run writes are checked for decay (see BandCheck); nil: not
+    let bandChecks: BandCheckPolicy?
 
     /// resolves the AES-256 passphrase for an encrypted job (jobID → passphrase),
     /// e.g. from the Keychain. Returns nil for plaintext jobs.
@@ -1434,8 +1439,12 @@ public struct JobExecutor: Sendable {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         // the mirror engine writes its own manifest: it has to re-seal the image after
         // a run that stops part-way, too (see MirrorSeal)
-        let archive = try EngineFactory.engine(for: job.format, target: target, runner: runner,
-                                               passphrase: passphrase).archive(source, to: dest)
+        let archive = try EngineFactory.engine(for: job.format, target: target, runner: runner, passphrase: passphrase,
+                                               bandCheck: bandChecks?.settings(for: job, target: target)).archive(source, to: dest)
+        if var check = archive.bandCheck {
+            check.library = library.displayName; check.destination = target.displayName
+            runner.control?.record(check)           // for the run's record (see RunRecord.make)
+        }
         if archive.format != .liveMirror {
             onStage(.checksumming)
             try ArchiveManifest.write(try ArchiveManifest.build(for: archive, encrypted: passphrase != nil), toDir: dest)

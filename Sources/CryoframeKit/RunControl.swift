@@ -129,6 +129,12 @@ public final class RunControl: @unchecked Sendable {
     public init(quietLimit: TimeInterval = ToolWatchdog.defaultQuietLimit) { self.quietLimit = quietLimit }
 
     public var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+
+    /// what the run's checks of its mirrors for decay found (see BandCheck), in the
+    /// order they were made; the run's record keeps them
+    public var bandChecks: [BandCheckReport] { lock.lock(); defer { lock.unlock() }; return checks }
+    private var checks: [BandCheckReport] = []
+    func record(_ check: BandCheckReport) { lock.lock(); checks.append(check); lock.unlock() }
     public var isPaused: Bool { lock.lock(); defer { lock.unlock() }; return paused }
 
     /// the step the run is on, if it has said (see RunStep)

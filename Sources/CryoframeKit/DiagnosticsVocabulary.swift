@@ -105,6 +105,7 @@ backup's
 backups
 badge
 band
+bandcheck
 bands
 battery
 bcdefghijklmnopqrstuvwxyz
@@ -250,6 +251,8 @@ day
 days
 db
 dd
+decay
+decayed
 decmpfs
 deferring
 delete
@@ -357,9 +360,11 @@ extract
 fa
 fail
 failed
+failing
 fails
 fake
 false
+far
 fast
 fat
 fcpbundle
@@ -558,6 +563,7 @@ limits
 link
 links
 list
+listed
 listlocalsnapshots
 lists
 live
@@ -624,6 +630,7 @@ minute
 minutes
 mirror
 mirror's
+mirrors
 mismatch
 missing
 mm
@@ -801,6 +808,7 @@ readable
 reader
 reading
 readonly
+reads
 ready
 reason
 reassembled
@@ -942,6 +950,7 @@ standard
 standing
 stands
 start
+started
 starter
 starting
 startup
@@ -1122,6 +1131,7 @@ whose
 why
 window
 with
+within
 without
 won't
 words

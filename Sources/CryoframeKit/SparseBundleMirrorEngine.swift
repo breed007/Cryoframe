@@ -70,20 +70,22 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     let runner: CommandRunner
     let passphrase: String?       // AES-256 encryption when set
     let mountBase: URL            // where the image is attached while a run updates it (see MirrorMounts)
+    /// the check for decay made once the image is sealed (see BandCheck); nil: none
+    let bandCheck: BandCheck.Settings?
 
     public init(sizing: MirrorSizing = .fromDestination, bandSectors: Int = 16384,
                 runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil,
-                mountBase: URL = MirrorMounts.defaultBase) {
+                mountBase: URL = MirrorMounts.defaultBase, bandCheck: BandCheck.Settings? = nil) {
         self.sizing = sizing; self.bandSectors = bandSectors; self.runner = runner; self.passphrase = passphrase
-        self.mountBase = mountBase
+        self.mountBase = mountBase; self.bandCheck = bandCheck
     }
 
     /// a fixed-size image, as tests use
     public init(sizeGB: Int, bandSectors: Int = 16384,
                 runner: CommandRunner = ProcessCommandRunner(), passphrase: String? = nil,
-                mountBase: URL = MirrorMounts.defaultBase) {
+                mountBase: URL = MirrorMounts.defaultBase, bandCheck: BandCheck.Settings? = nil) {
         self.init(sizing: .fixed(gb: sizeGB), bandSectors: bandSectors, runner: runner,
-                  passphrase: passphrase, mountBase: mountBase)
+                  passphrase: passphrase, mountBase: mountBase, bandCheck: bandCheck)
     }
 
     public func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
@@ -104,10 +106,18 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         runner.control?.endStep()
         defer { runner.control?.endStep() }
 
+        // "Start this mirror over", asked for a damaged mirror: its image is put aside
+        // and this run makes a new one (see MirrorSeal.startOver)
+        try MirrorSeal.startOverIfAsked(bundle, in: destinationDir, runner: runner.forTeardown)
+
         // An image found damaged after an earlier run may not even mount. Unless a
         // check now finds it sound (someone repaired it), say so plainly rather than
-        // fail on whatever hdiutil makes of it.
+        // fail on whatever hdiutil makes of it. Decay is never cleared that way: the
+        // file system inside can check out with a band's data changed under it.
         if let why = MirrorSeal.damage(in: destinationDir), fm.fileExists(atPath: bundle.path) {
+            if MirrorSeal.isDecayed(destinationDir) {
+                throw MirrorCopyError.imageDecayed(image: bundle.path, why: why)
+            }
             if MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty,
                MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown, control: runner.control) == .sound {
                 MirrorSeal.clearDamaged(destinationDir)
@@ -185,7 +195,22 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             throw MirrorCopyError.topFolderNotRestored(why)
         }
         try MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted)
-        return result
+        MirrorSeal.removeReplaced(bundle)       // a mirror started over is complete again
+        guard let bandCheck else { return result }
+        var checked = result
+        checked.bandCheck = checkBands(bundle, in: destinationDir, name: source.name, settings: bandCheck)
+        return checked
+    }
+
+    /// Check the sealed image's bands for decay (see BandCheck). Decay found marks the
+    /// mirror damaged, so the health check, Restore and the next run all say so.
+    private func checkBands(_ bundle: URL, in dir: URL, name: String, settings: BandCheck.Settings) -> BandCheckReport {
+        let report = BandCheck.run(bundle: bundle, in: dir, library: name, settings: settings, control: runner.control)
+        if report.mismatches > 0 {
+            MirrorSeal.markDamaged(dir, why: MirrorSeal.decayReason(report.damaged))
+            MirrorSeal.markDecayed(dir, bands: report.damaged)
+        }
+        return report
     }
 
     /// After the swap, prove what reached the drive: the image's file system is sound
@@ -600,6 +625,7 @@ public enum MirrorSeal {
         try ArchiveManifest.write(manifest, toDir: dir)
         clearOpen(dir)
         clearDamaged(dir)           // only a run whose image checked out gets this far
+        clearDecayed(dir)           // and a decayed image never runs (see startOverIfAsked)
     }
 
     // MARK: the bands a sealed mirror had
@@ -679,6 +705,97 @@ public enum MirrorSeal {
     /// what a check says about a mirror recorded as damaged
     public static func damagedDetail(_ why: String) -> String {
         "the mirror's disk image was found damaged after a run whose drive filled (\(why)); the backup in it can't be trusted and may not open. The job's next run says how to start the mirror afresh."
+    }
+
+    /// what a check says about the mirror in `dir`, recorded as damaged for `why`
+    public static func damagedDetail(_ why: String, in dir: URL) -> String {
+        isDecayed(dir) ? decayedDetail(why) : damagedDetail(why)
+    }
+
+    /// what a check says about a mirror whose bands decayed
+    public static func decayedDetail(_ why: String) -> String {
+        "part of the mirror's disk image changed on its drive after it was written (\(why)), which is what a failing drive does; the backup in it can't be trusted. Start this mirror over from Storage."
+    }
+
+    // MARK: decay (see BandCheck)
+    //
+    // Decay is recorded with the damaged marker, which 1.7 also reads, and with a mark
+    // of its own that says which kind of damage it is: fsck can pass an image whose
+    // band data changed under it, so a decayed mirror is never cleared by a check.
+
+    static let decayedMarkerName = ".cryoframe-mirror-decayed"
+
+    /// the bands found decayed, "1a, 2f" (at most a few named)
+    static func decayReason(_ bands: [String]) -> String {
+        let named = bands.prefix(5).joined(separator: ", ") + (bands.count > 5 ? " and \(bands.count - 5) more" : "")
+        return bands.count == 1 ? "data band \(named) no longer reads back as it was written"
+                                : "\(bands.count) data bands (\(named)) no longer read back as they were written"
+    }
+
+    public static func isDecayed(_ dir: URL) -> Bool {
+        FileManager.default.fileExists(atPath: dir.appendingPathComponent(decayedMarkerName).path)
+    }
+
+    static func markDecayed(_ dir: URL, bands: [String]) {
+        try? Data((bands.joined(separator: "\n") + "\n").utf8).write(to: dir.appendingPathComponent(decayedMarkerName), options: .atomic)
+    }
+
+    static func clearDecayed(_ dir: URL) {
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(decayedMarkerName))
+    }
+
+    // MARK: start this mirror over
+    //
+    // A damaged mirror can't be repaired in place, and its job's runs are refused. The
+    // way out is a new image. The damaged one isn't deleted: it is put aside, hidden in
+    // the mirror's folder, and removed only once the new one is sealed, so a first run
+    // that fails part way leaves the old copy, damaged as it is, where it can be found.
+
+    static let startOverName = ".cryoframe-mirror-start-over"
+
+    /// where a mirror started over keeps its old image until the new one is complete
+    public static func replaced(_ bundle: URL) -> URL {
+        bundle.deletingLastPathComponent().appendingPathComponent("." + bundle.lastPathComponent.replacingOccurrences(
+            of: ".sparsebundle", with: ".replaced.sparsebundle"), isDirectory: true)
+    }
+
+    /// Ask for the damaged mirror in `dir` to be started over at its job's next run.
+    public static func requestStartOver(_ dir: URL) throws {
+        try Data().write(to: dir.appendingPathComponent(startOverName), options: .atomic)
+    }
+
+    public static func startOverRequested(_ dir: URL) -> Bool {
+        FileManager.default.fileExists(atPath: dir.appendingPathComponent(startOverName).path)
+    }
+
+    /// Put a damaged image aside and forget what was recorded of it, if that was
+    /// asked, so the run makes a new mirror from scratch. Only a damaged mirror is
+    /// started over: a request for any other is dropped. Refused while the image is
+    /// attached anywhere. A second start over while the first one's image is still
+    /// aside removes the unfinished new one instead, since the first never sealed.
+    static func startOverIfAsked(_ bundle: URL, in dir: URL, runner: CommandRunner) throws {
+        guard startOverRequested(dir) else { return }
+        let fm = FileManager.default
+        guard damage(in: dir) != nil, fm.fileExists(atPath: bundle.path) else {
+            try? fm.removeItem(at: dir.appendingPathComponent(startOverName))
+            return
+        }
+        try MirrorMounts.refuseIfOpen(bundle, runner: runner)
+        let aside = replaced(bundle)
+        if fm.fileExists(atPath: aside.path) { try fm.removeItem(at: bundle) } else { try fm.moveItem(at: bundle, to: aside) }
+        // the manifest first: a crash after this leaves no image and no manifest, a first run
+        try? fm.removeItem(at: dir.appendingPathComponent(ArchiveManifest.sidecarName))
+        BandTable.remove(in: dir)
+        clearOpen(dir)
+        clearDamaged(dir)
+        clearDecayed(dir)
+        try? fm.removeItem(at: dir.appendingPathComponent(startOverName))
+    }
+
+    /// the old image of a mirror started over, once the new one is sealed
+    static func removeReplaced(_ bundle: URL) {
+        let aside = replaced(bundle)
+        if FileManager.default.fileExists(atPath: aside.path) { try? FileManager.default.removeItem(at: aside) }
     }
 
     static func clearOpen(_ dir: URL) {

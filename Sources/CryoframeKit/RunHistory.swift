@@ -126,6 +126,9 @@ public struct RunRecord: Codable, Sendable, Identifiable {
     /// folder it writes to (see LibraryIdentity): the folder, not the run, says whose
     /// backups it holds. nil in a record 1.5 made, or rewrote after a return to it.
     public var identityFolders: Bool?
+    /// what the run's checks of its mirrors for decay found (see BandCheck); nil for a
+    /// run that checked none, and in records before 1.8
+    public var bandCheck: BandCheckSummary?
 
     public var duration: TimeInterval { max(0, finishedAt.timeIntervalSince(startedAt)) }
 
@@ -138,11 +141,23 @@ public struct RunRecord: Codable, Sendable, Identifiable {
         self.libraries = libraries; self.bytes = bytes; self.warning = warning
     }
 
-    /// build from a completed run.
+    /// build from a completed run. `bandChecks`: what its checks of its mirrors for
+    /// decay found (RunControl.bandChecks).
+    ///
+    /// A run that found decay, or couldn't check, failed: its copy went into a mirror
+    /// that can't be trusted, or might not be, so it isn't a good run, and it alerts as
+    /// a failure does. Its summary says what the check found.
     public static func make(job: BackupJob, outcome: JobOutcome, startedAt: Date, finishedAt: Date,
-                            trigger: String, id: String = UUID().uuidString) -> RunRecord {
+                            trigger: String, id: String = UUID().uuidString,
+                            bandChecks: [BandCheckReport] = []) -> RunRecord {
         var r = made(job: job, outcome: outcome, startedAt: startedAt, finishedAt: finishedAt, trigger: trigger, id: id)
         r.identityFolders = true
+        if case .finished = outcome, !bandChecks.isEmpty {
+            let summary = BandCheckSummary(copies: bandChecks)
+            r.bandCheck = summary
+            r.summary += "; " + summary.line(at: finishedAt)
+            if summary.failed { r.outcome = .failed }
+        }
         return r
     }
 

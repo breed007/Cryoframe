@@ -1007,6 +1007,8 @@ public enum MirrorCopyError: Error, Equatable {
     case stagingStuck(String)
     /// an earlier run found the image damaged, and it still isn't sound
     case imageRecordedDamaged(image: String, why: String)
+    /// an earlier run found some of the image's bands changed on the drive (see BandCheck)
+    case imageDecayed(image: String, why: String)
     /// the new copy, read back from the image, didn't match the library
     case readBackMismatch(count: Int, examples: [String])
     /// after the swap, the image didn't hold the new copy
@@ -1036,7 +1038,9 @@ extension MirrorCopyError: LocalizedError {
             let list = examples.joined(separator: "; ")
             return "the new copy of the mirror didn't read back the same as the library (\(count) item\(count == 1 ? "" : "s"): \(list)). Data was lost on its way to the drive, so it wasn't put in place: nothing was updated and the previous copy is intact. Run again; if this repeats, check the drive."
         case .imageRecordedDamaged(let image, let why):
-            return "the mirror's disk image (\(image)) was found damaged after an earlier run whose drive filled (\(why)), and it still is. Its backup can't be trusted and may not open. To start this mirror afresh, move that image out of the way (keep it until the new mirror is complete) and run again."
+            return "the mirror's disk image (\(image)) was found damaged after an earlier run whose drive filled (\(why)), and it still is. Its backup can't be trusted and may not open. To start this mirror afresh, choose Start This Mirror Over in Storage: the damaged image is kept until the new mirror is complete."
+        case .imageDecayed(let image, let why):
+            return "part of the mirror's disk image (\(image)) changed on its drive after it was written (\(why)). That is what a failing drive does, and the backup in it can't be trusted, so it isn't updated. Choose Start This Mirror Over in Storage to make a new one, on another drive if this one is failing; the damaged image is kept until the new mirror is complete."
         case .updateNotConfirmed(let count, let examples):
             return "the mirror's update didn't reach the drive intact: checked afterwards, its copy differs from the library (\(count) item\(count == 1 ? "" : "s"): \(examples.joined(separator: "; "))). The mirror's disk image checked out and holds a complete copy, most likely the previous one. Run again; if this repeats, check the drive."
         case .couldNotConfirm(let why):

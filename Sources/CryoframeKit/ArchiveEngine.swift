@@ -52,6 +52,8 @@ public enum SplitPolicy: Sendable, Equatable {
 public struct ArchiveResult: Sendable, Equatable {
     public let artifacts: [URL]    // one file, or split volumes
     public let format: ArchiveFormat
+    /// a live mirror's check for decay, made once it was sealed (see BandCheck)
+    public var bandCheck: BandCheckReport?
     public init(artifacts: [URL], format: ArchiveFormat) {
         self.artifacts = artifacts; self.format = format
     }

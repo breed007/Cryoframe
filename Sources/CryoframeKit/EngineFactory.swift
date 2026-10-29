@@ -51,7 +51,7 @@ public enum EngineFactory {
     /// and live mirror. Sealed zip can't be strongly encrypted, so it ignores it.
     public static func engine(for choice: FormatChoice, target: Target,
                               runner: CommandRunner = ProcessCommandRunner(),
-                              passphrase: String? = nil) throws -> ArchiveEngine {
+                              passphrase: String? = nil, bandCheck: BandCheck.Settings? = nil) throws -> ArchiveEngine {
         switch choice {
         case .sealedDMG:
             return SealedArchiveEngine(.dmg, split: target.constraints.splitPolicy, runner: runner, passphrase: passphrase)
@@ -61,7 +61,8 @@ public enum EngineFactory {
             guard target.constraints.supportsIncremental else {
                 throw TargetError.incrementalUnsupported(target.displayName)
             }
-            return SparseBundleMirrorEngine(sizing: .fromDestination, runner: runner, passphrase: passphrase)
+            return SparseBundleMirrorEngine(sizing: .fromDestination, runner: runner, passphrase: passphrase,
+                                            bandCheck: bandCheck)
         case .plainFiles:
             return PlainCopyEngine(target: target, runner: runner)
         }

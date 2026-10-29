@@ -62,6 +62,13 @@ public struct ProtectionVerdict: Sendable, Equatable {
         let healthy = standings.filter { $0.standing == .healthy }.count
         let neverRan = standings.filter { $0.standing == .neverRan }
 
+        let decayed = standings.filter { $0.standing == .decayFound }
+        if let d = decayed.first {
+            return .init(level: .critical,
+                         title: decayed.count == 1 ? "1 mirror is damaged" : "\(decayed.count) mirrors are damaged",
+                         subtitle: "\(d.job.name) \(d.standing.reason(now: now)). \(Self.healthyOf(healthy, jobs.count)).",
+                         glyph: "xmark.octagon.fill")
+        }
         let failed = standings.filter { $0.standing == .failed }
         if let f = failed.first {
             return .init(level: .critical,
@@ -140,6 +147,9 @@ public struct ProtectionVerdict: Sendable, Equatable {
         case paused
         case partial
         case checkFailed
+        /// a check of its mirror found part of it changed on the drive (see BandCheck),
+        /// and it hasn't been started over since
+        case decayFound
         /// the latest run was stopped before it finished
         case stopped
         /// runs only when asked, and its newest good copy is over a month old
@@ -158,7 +168,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
             switch self {
             case .healthy: return .protected
             case .neverRan: return .idle
-            case .failed: return .critical
+            case .failed, .decayFound: return .critical
             case .overdue(_, _, let critical, _): return critical ? .critical : .attention
             case .noRecordOfGoodRun(_, let critical): return critical ? .critical : .attention
             case .paused, .partial, .checkFailed, .stopped, .notBackedUpLately, .noGoodRunYet, .driveAway: return .attention
@@ -199,6 +209,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
                 return last == nil ? "hasn't had a copy on \(name) since it joined the rotation \(age) ago; connect it for its turn"
                                    : "hasn't had a copy on \(name) in \(age); connect it for its turn"
             case .checkFailed: return "failed an archive check"
+            case .decayFound: return "has a mirror its drive damaged after it was written; start it over from Storage"
             case .stopped: return "was stopped before it finished"
             case .notBackedUpLately(let lastGood):
                 return "hasn't been backed up in \(ProtectionVerdict.age(from: lastGood, to: now)); it runs only when you press Run now"
@@ -235,6 +246,10 @@ public struct ProtectionVerdict: Sendable, Equatable {
     public static func standing(of job: BackupJob, latest: RunRecord?, lastGood: Date?,
                                 health: HealthRecord?, now: Date, unrecordedRun: Date? = nil,
                                 awayTooLong: [RotationRules.AwayTooLong] = []) -> Standing {
+        // decay first: the runs that follow it fail, and "didn't finish" doesn't say why
+        if latest?.bandCheck?.mismatches ?? 0 > 0 || (health?.kind == HealthRecord.bandCheckKind && health?.passed == false) {
+            return .decayFound
+        }
         if latest?.outcome == .failed { return .failed }
         if !job.enabled { return .paused }
         if lastGood == nil, let ran = unrecordedRun {

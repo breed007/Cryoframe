@@ -176,6 +176,11 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
     public var isDrill: Bool { kind == "drill" }
     public var isRehearsal: Bool { kind == "rehearsal" }
 
+    /// a run's check of its mirrors for decay (see BandCheck). Only a failed one is
+    /// recorded, and the passing check that follows it, so these don't push the
+    /// scheduled checks out of the history.
+    public static let bandCheckKind = "bandcheck"
+
     /// what this check actually did, for anywhere it's reported. A rehearsal is not
     /// a drill and not a checksum pass, and calling it either would misdescribe what
     /// was proven.
@@ -183,6 +188,7 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
         switch kind {
         case "drill":     return "Restore-drilled"
         case "rehearsal": return "Recovery-rehearsed"
+        case "bandcheck": return "Mirror checked for decay"
         default:          return "Archives verified"
         }
     }
@@ -190,6 +196,7 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
         switch kind {
         case "drill":     return "restore drill"
         case "rehearsal": return "recovery rehearsal"
+        case "bandcheck": return "decay check"
         default:          return "archive"
         }
     }
@@ -197,6 +204,7 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
         switch kind {
         case "drill":     return "Reassembled, opened, and reopened each archive"
         case "rehearsal": return "Looked at the destination the way a recovery would, and opened what it found"
+        case "bandcheck": return "Read part of the mirror's disk image again and compared it with what was written"
         default:          return "Re-verified against checksums"
         }
     }
