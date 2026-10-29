@@ -202,9 +202,13 @@ public final class RunControl: @unchecked Sendable {
 
     /// tools whose process tree must never be SIGSTOPped — they crash when frozen.
     /// `diskutil image` (and the diskimagesiod serving it) was never measured
-    /// paused, so a step it runs isn't paused either, as when hdiutil ran it.
-    static func unsuspendable(_ comm: String) -> Bool {
-        ["hdiutil", "diskimages-helper", "diskutil", "diskimagesiod"].contains { comm.contains($0) }
+    /// paused, so a step it runs isn't paused either, as when hdiutil ran it. Only
+    /// where Cryoframe runs `diskutil image` at all (see DiskImageTool.sizing): on an
+    /// older macOS, a diskutil step pauses as it did before 1.8.
+    static func unsuspendable(_ comm: String,
+                              diskutilImage: Bool = DiskImageTool.sizing == .diskutil || DiskImageTool.attaching == .diskutil) -> Bool {
+        let tools = ["hdiutil", "diskimages-helper"] + (diskutilImage ? ["diskutil", "diskimagesiod"] : [])
+        return tools.contains { comm.contains($0) }
     }
 
     /// `root` and every descendant with its executable path, read fresh via `ps`

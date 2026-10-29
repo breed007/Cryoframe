@@ -74,5 +74,6 @@ to work for it:
 - The release scripts and the recovery notes' Terminal instructions stay on hdiutil.
 
 `diskutil image create` silently replaces an existing image, so creates go through
-`DiskImageTool.refuseExisting` first. `diskutil image info` on an encrypted image
-with no passphrase waits forever for one; always pass `--stdinpassphrase`.
+`DiskImageTool.refuseExisting` first. `diskutil image info` and `diskutil image
+resize` on an encrypted image with no passphrase wait forever for one, as hdiutil
+`resize -limits` does; always pass `--stdinpassphrase` (or `-stdinpass`).

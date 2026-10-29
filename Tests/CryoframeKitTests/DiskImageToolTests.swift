@@ -80,8 +80,12 @@ import Foundation
         }
         #expect(!DiskImageTool.offersDiskutilImage(runner: short))
         // never a disk-image step paused part way, whichever tool runs it
-        #expect(RunControl.unsuspendable("/usr/sbin/diskutil") && RunControl.unsuspendable("/usr/libexec/diskimagesiod"))
+        #expect(RunControl.unsuspendable("/usr/sbin/diskutil", diskutilImage: true))
+        #expect(RunControl.unsuspendable("/usr/libexec/diskimagesiod", diskutilImage: true))
         #expect(RunControl.unsuspendable("/usr/bin/hdiutil") && !RunControl.unsuspendable("/usr/bin/rsync"))
+        // where hdiutil does every disk-image step, a diskutil step pauses as before 1.8
+        #expect(!RunControl.unsuspendable("/usr/sbin/diskutil", diskutilImage: false))
+        #expect(RunControl.unsuspendable("/usr/bin/hdiutil", diskutilImage: false))
     }
 
     /// Attach and eject through diskutil, behind a switch that is off in 1.8
@@ -208,6 +212,29 @@ import Foundation
         }
         // the wrong passphrase says nothing either way, and isn't taken for "not encrypted"
         #expect(DiskImageTool.isEncrypted(sealed, passphrase: "wrong", runner: ProcessCommandRunner(), tool: .diskutil) == nil)
+    }
+
+    /// On a Mac where `diskutil image` is used: an encrypted image whose header is
+    /// damaged (its first 8 bytes zeroed) reads as not encrypted through diskutil too,
+    /// with the right passphrase or a wrong one, so the key check calls it damaged
+    /// rather than taking it for a wrong passphrase.
+    @Test(.enabled(if: DiskImageTool.diskutilImageMeasured)) func aDamagedHeaderReadsAsNotEncryptedThroughDiskutil() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("cf-dit-\(UUID().uuidString)")
+        let root = base.appendingPathComponent("root")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try Data("notes".utf8).write(to: root.appendingPathComponent("a.txt"))
+        let image = base.appendingPathComponent("e.dmg")
+        let made = try TestDiskImages.run(DiskImageTool.folderImage(root: root, output: image, encrypted: true).args,
+                                          stdin: Data("right".utf8))
+        try #require(made.ok, "\(made.stderr)")
+        #expect(DiskImageTool.isEncrypted(image, passphrase: "right", runner: ProcessCommandRunner(), tool: .diskutil) == true)
+        let fh = try FileHandle(forWritingTo: image)
+        try fh.write(contentsOf: Data(count: 8))
+        try fh.close()
+        for pass in ["right", "wrong"] {
+            #expect(DiskImageTool.isEncrypted(image, passphrase: pass, runner: ProcessCommandRunner(), tool: .diskutil) == false, "\(pass)")
+        }
     }
 
     @Test func encryptionIsRead() {

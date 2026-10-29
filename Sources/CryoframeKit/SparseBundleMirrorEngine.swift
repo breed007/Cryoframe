@@ -572,7 +572,7 @@ extension MirrorSpaceError: LocalizedError {
         case .notEnoughRoomBesideReserve(let needed, let free, let reserve):
             return "not enough space for the mirror on its drive: this run needs about \(JobExecutor.human(needed)) more and \(JobExecutor.human(free)) is free, but a mirror always leaves \(JobExecutor.human(reserve)) of its drive free, because a disk image whose drive fills up loses data. Nothing was changed; free up space on the drive or choose a bigger one."
         case .couldNotResize(let why):
-            return "couldn't resize the mirror's disk image to fit the room on its drive (\(why.isEmpty ? "hdiutil gave no reason" : why)). The mirror is unchanged; run again."
+            return "couldn't resize the mirror's disk image to fit the room on its drive (\(why.isEmpty ? "the disk-image tool gave no reason" : why)). The mirror is unchanged; run again."
         }
     }
 }
