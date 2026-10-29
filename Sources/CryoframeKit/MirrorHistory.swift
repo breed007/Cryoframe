@@ -285,7 +285,10 @@ public enum MirrorHistory {
         let partial = history.appendingPathComponent(stamp + partialSuffix, isDirectory: true)
         // what of this run's write wasn't the library growing since the newest entry of
         // this image: after a start over the first one's whole copy is growth
-        let rewrote = library.map { rewrote(written: written, library: $0, before: sharing(entries(in: dir)).first?.library) }
+        let before: UInt64? = Self.sharing(Self.entries(in: dir)).first?.library
+        let rewroteBytes: UInt64? = library.map { (size: UInt64) -> UInt64 in
+            Self.rewrote(written: written, library: size, before: before)
+        }
         try? fm.removeItem(at: partial)
         try fm.createDirectory(at: partial, withIntermediateDirectories: false)
         do {
@@ -296,13 +299,13 @@ public enum MirrorHistory {
             if fm.fileExists(atPath: bands.path) {
                 try fm.copyItem(at: bands, to: partial.appendingPathComponent(BandTable.fileName))
             }
-            try record(written: written, rewrote: rewrote, library: library, in: partial)
+            try record(written: written, rewrote: rewroteBytes, library: library, in: partial)
             try fm.moveItem(at: partial, to: entry)
         } catch {
             try? fm.removeItem(at: partial)
             throw error
         }
-        return Entry(dir: entry, date: date, written: written, rewrote: rewrote, library: library)
+        return Entry(dir: entry, date: date, written: written, rewrote: rewroteBytes, library: library)
     }
 
     /// clonefile(2) of a whole folder: its blocks are shared, not copied
