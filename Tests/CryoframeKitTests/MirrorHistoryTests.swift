@@ -474,7 +474,9 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
     // history was removed still says what went.
     @Test func historyMakesRoomForWhatARunWritesOver() throws {
         let scratch = tempDir("over"), base = tempDir("base-over")
-        let drive = try scratchDrive("450m", in: scratch)
+        // padded down to what each step needs, so its size only has to be enough: at
+        // 450 MB, macOS 15's APFS left too little before any padding
+        let drive = try scratchDrive("600m", in: scratch)
         let src = tempDir("lib-over").appendingPathComponent("Lib")
         defer {
             MountPoint.detach(drive, runner: ProcessCommandRunner())
