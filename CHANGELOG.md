@@ -2,6 +2,14 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.8.0] — Unreleased
+
+### Changed
+- macOS 27 begins retiring the disk-image tool Cryoframe has always used. On macOS 27, a live mirror's disk image is now resized, and an encrypted backup's passphrase check reads the image, with the tool macOS offers in its place, which testing on macOS 27 showed gives the same results. Everything else Cryoframe does with disk images, and everything on older versions of macOS, works as before. The recovery notes beside each backup still give Terminal commands that work on every version of macOS.
+
+### Fixed
+- A restore drill of a Photos or Messages library kept as plain files opened the copy's database in a way that could write to it. The drill now only reads it, so checking a backup never changes it.
+
 ## [1.7.0] — 2026-10-03
 
 1.7 adds a way to keep a backup as ordinary files that any computer can open, and makes a live mirror say what it is doing after its copy. That second part started with the first real use of 1.6.0: a mirror to an SD card that sat at "99%" for up to an hour. The run was working the whole time; it just showed nothing. Testing for this release also found a way a 1.6.0 mirror could fail every run. Problems in 1.6.0 are listed first.

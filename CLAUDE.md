@@ -55,3 +55,24 @@ of anything else.
   after `xcodegen generate`.
 - Tests use swift-testing (`@Test`, `#expect`) in `Tests/CryoframeKitTests`.
 - Match the surrounding code's comment density, naming, and idiom.
+
+## Disk-image tools
+
+Every disk-image command is built and read in `DiskImageTool`; a test fails on
+`"/usr/bin/hdiutil"` anywhere else in `Sources`. hdiutil is deprecated on macOS 27,
+and `diskutil image` doesn't cover every verb, so each verb uses the tool measured
+to work for it:
+
+- `diskutil image` on macOS 27 (probed once per process), hdiutil elsewhere:
+  resize, the size limits, and the encryption check.
+- hdiutil, behind `DiskImageTool.attachesWithDiskutil` (off): attach and detach.
+  A `diskutil image` attach is served by diskimagesiod, not diskimages-helper, and
+  attach records, the tool watchdog, Pause and the attach gate were measured against
+  the latter. Re-measure them before turning it on.
+- hdiutil only: sparse bundle create (no band size in diskutil), compact, `info
+  -plist` (the list of what's attached), `create -srcfolder` (no size), and unmount.
+- The release scripts and the recovery notes' Terminal instructions stay on hdiutil.
+
+`diskutil image create` silently replaces an existing image, so creates go through
+`DiskImageTool.refuseExisting` first. `diskutil image info` on an encrypted image
+with no passphrase waits forever for one; always pass `--stdinpassphrase`.
