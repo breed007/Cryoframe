@@ -172,12 +172,18 @@ public struct RunRecord: Codable, Sendable, Identifiable {
     }
 }
 
+/// The app and the scheduled agent each hold one on the same file, and both add to
+/// it: every change is made under SharedJSONFile's lock, which holds across processes.
+/// A lock held only within one process lost a record when a run finished in the app
+/// at the moment one finished in the agent.
 public final class RunHistoryStore: @unchecked Sendable {
-    private let url: URL
-    private let lock = NSLock()
+    private let file: SharedJSONFile<[RunRecord]>
     private let cap: Int
 
-    public init(url: URL, cap: Int = 200) { self.url = url; self.cap = cap }
+    public init(url: URL, cap: Int = 200) {
+        file = SharedJSONFile(url: url, lockName: url.deletingPathExtension().lastPathComponent + ".lock", empty: { [] })
+        self.cap = cap
+    }
 
     public static func standard() -> RunHistoryStore {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -186,16 +192,14 @@ public final class RunHistoryStore: @unchecked Sendable {
     }
 
     /// newest first.
-    public func all() -> [RunRecord] {
-        lock.lock(); defer { lock.unlock() }
-        return decode()
-    }
+    public func all() -> [RunRecord] { file.read() }
 
     public func append(_ record: RunRecord) {
-        lock.lock(); defer { lock.unlock() }
-        var list = decode()
-        list.insert(record, at: 0)
-        write(trimmed(list))
+        file.update { list in
+            list.insert(record, at: 0)
+            list = trimmed(list)
+            return (true, ())
+        }
     }
 
     public func latest(forJob jobID: String) -> RunRecord? { all().first { $0.jobID == jobID } }
@@ -218,33 +222,33 @@ public final class RunHistoryStore: @unchecked Sendable {
     @discardableResult
     public func recordDeferral(job: BackupJob, reason: String, at now: Date,
                                trigger: String = "scheduled") -> (record: RunRecord, count: Int) {
-        lock.lock(); defer { lock.unlock() }
-        var list = decode()
-        if let i = list.firstIndex(where: { $0.jobID == job.id }), list[i].outcome == .deferred {
-            var r = list.remove(at: i)
-            let count = (r.deferrals ?? 1) + 1
-            r.finishedAt = now
-            r.summary = "\(reason) (\(count) times in a row since \(r.startedAt.formatted(date: .abbreviated, time: .shortened)))"
-            r.jobName = job.name
-            r.deferrals = count
+        file.update { list in
+            if let i = list.firstIndex(where: { $0.jobID == job.id }), list[i].outcome == .deferred {
+                var r = list.remove(at: i)
+                let count = (r.deferrals ?? 1) + 1
+                r.finishedAt = now
+                r.summary = "\(reason) (\(count) times in a row since \(r.startedAt.formatted(date: .abbreviated, time: .shortened)))"
+                r.jobName = job.name
+                r.deferrals = count
+                list.insert(r, at: 0)
+                list = trimmed(list)
+                return (true, (r, r.deferrals ?? 1))
+            }
+            var r = RunRecord.make(job: job, outcome: .deferred(reason), startedAt: now, finishedAt: now, trigger: trigger)
+            r.deferrals = 1
             list.insert(r, at: 0)
-            write(trimmed(list))
-            return (r, r.deferrals ?? 1)
+            list = trimmed(list)
+            return (true, (r, 1))
         }
-        var r = RunRecord.make(job: job, outcome: .deferred(reason), startedAt: now, finishedAt: now, trigger: trigger)
-        r.deferrals = 1
-        list.insert(r, at: 0)
-        write(trimmed(list))
-        return (r, 1)
     }
 
     /// Record whether the alert for a run of deferrals is still owed.
     public func setDeferralAlertPending(recordID: String, _ pending: Bool) {
-        lock.lock(); defer { lock.unlock() }
-        var list = decode()
-        guard let i = list.firstIndex(where: { $0.id == recordID }) else { return }
-        list[i].deferralAlertPending = pending ? true : nil
-        write(list)
+        file.update { list in
+            guard let i = list.firstIndex(where: { $0.id == recordID }) else { return (false, ()) }
+            list[i].deferralAlertPending = pending ? true : nil
+            return (true, ())
+        }
     }
 
     /// The newest `cap` records, and each job's newest good run however old: that is
@@ -280,13 +284,4 @@ public final class RunHistoryStore: @unchecked Sendable {
     /// than a rotation's drive may be away (14 days unless changed)
     static let evidenceDays = 31
 
-    private func decode() -> [RunRecord] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([RunRecord].self, from: data)) ?? []
-    }
-    private func write(_ list: [RunRecord]) {
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(list) { try? data.write(to: url, options: .atomic) }
-    }
 }

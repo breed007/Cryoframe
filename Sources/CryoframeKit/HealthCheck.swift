@@ -261,12 +261,17 @@ public struct HealthRecord: Codable, Sendable, Identifiable {
     }
 }
 
+/// The app and the scheduled agent each hold one on the same file, and both add to
+/// it: every change is made under SharedJSONFile's lock, which holds across processes
+/// (see RunHistoryStore).
 public final class HealthStore: @unchecked Sendable {
-    private let url: URL
-    private let lock = NSLock()
+    private let file: SharedJSONFile<[HealthRecord]>
     private let cap: Int
 
-    public init(url: URL, cap: Int = 200) { self.url = url; self.cap = cap }
+    public init(url: URL, cap: Int = 200) {
+        file = SharedJSONFile(url: url, lockName: url.deletingPathExtension().lastPathComponent + ".lock", empty: { [] })
+        self.cap = cap
+    }
 
     public static func standard() -> HealthStore {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -274,30 +279,17 @@ public final class HealthStore: @unchecked Sendable {
         return HealthStore(url: base.appendingPathComponent("archive-health.json"))
     }
 
-    public func all() -> [HealthRecord] {                  // newest first
-        lock.lock(); defer { lock.unlock() }
-        return decode()
-    }
+    public func all() -> [HealthRecord] { file.read() }    // newest first
 
     public func append(_ record: HealthRecord) {
-        lock.lock(); defer { lock.unlock() }
-        var list = decode()
-        list.insert(record, at: 0)
-        if list.count > cap { list = Array(list.prefix(cap)) }
-        write(list)
+        file.update { list in
+            list.insert(record, at: 0)
+            if list.count > cap { list = Array(list.prefix(cap)) }
+            return (true, ())
+        }
     }
 
     public func latest(forJob jobID: String) -> HealthRecord? { all().first { $0.jobID == jobID } }
-
-    private func decode() -> [HealthRecord] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([HealthRecord].self, from: data)) ?? []
-    }
-    private func write(_ list: [HealthRecord]) {
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(list) { try? data.write(to: url, options: .atomic) }
-    }
 }
 
 /// "Has this exact version been checked, and how thoroughly?" — what the restore
