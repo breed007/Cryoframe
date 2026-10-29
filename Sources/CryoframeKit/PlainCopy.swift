@@ -181,7 +181,16 @@ struct PlainCopyPlanner {
     private func walk(_ sourceDir: String, rel: String, copyAt copyDir: String?, into plan: inout PlainCopyPlan,
                       seen: inout Int) throws {
         func join(_ name: String) -> String { rel.isEmpty ? name : rel + "/" + name }
-        let names = PlainCopy.list(sourceDir).sorted { Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8)) }
+        // A folder that can't be read isn't an empty one: taken as empty, everything the
+        // copy holds of it would go to Removed items (Full Disk Access lost, a mode
+        // changed by mistake, a failing drive). The run stops before anything changes.
+        func unreadable(_ code: Int32) -> PlainCopyError {
+            .unreadable(rel.isEmpty ? (sourceDir as NSString).lastPathComponent : rel, String(cString: strerror(code)))
+        }
+        let names: [String]
+        do {
+            names = try PlainCopy.contents(sourceDir).sorted { Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8)) }
+        } catch let e as POSIXError { throw unreadable(e.code.rawValue) }
         let nameSet = Set(names)
         var copyNames = copyDir.map(PlainCopy.list) ?? []
         if !profile.keepsMacDetails {
@@ -202,7 +211,11 @@ struct PlainCopyPlanner {
             if seen % 512 == 0, control?.isCancelled == true { throw CancelledError() }
             control?.advance()
             var st = stat()
-            guard lstat(sourceDir + "/" + name, &st) == 0 else { continue }
+            guard lstat(sourceDir + "/" + name, &st) == 0 else {
+                // gone since the folder was listed: deleted, so not kept
+                if errno == ENOENT { continue }
+                throw unreadable(errno)
+            }
             let id = profile.identity(of: name)
             allIdentities.insert(id)
             if leftOutByLibrary.contains(join(name)) { plan.excluded.append((join(name), .leftOutByLibrary)); continue }
@@ -365,6 +378,9 @@ public enum PlainCopyError: Error, Equatable {
     case couldNotMove(String, String)
     /// what an earlier run left beside the copy couldn't be removed
     case stagingStuck(String)
+    /// a folder of the library (its path in the library, or the library's own name)
+    /// couldn't be read, and why
+    case unreadable(String, String)
 }
 
 extension PlainCopyError: LocalizedError {
@@ -380,6 +396,8 @@ extension PlainCopyError: LocalizedError {
             return "couldn't move “\(item)” in the copy: \(why)"
         case .stagingStuck(let path):
             return "an unfinished copy an earlier run left at \(path) couldn't be removed; remove it and run again"
+        case .unreadable(let item, let why):
+            return "couldn't read “\(item)” in the library (\(why)), so nothing in the copy was changed. If the library is in a protected place, such as Messages, check that Cryoframe still has Full Disk Access in System Settings, then run again."
         }
     }
 }
@@ -853,17 +871,25 @@ public struct PlainCopy {
 
     /// the names in a folder, as the drive lists them: Foundation's listings leave out
     /// "._" files on a drive that isn't a Mac's, and those matter here
-    static func list(_ path: String) -> [String] {
-        guard let dir = opendir(path) else { return [] }
+    static func list(_ path: String) -> [String] { (try? contents(path)) ?? [] }
+
+    /// what a folder holds; throws when it can't be read, all of it (readdir stops
+    /// early on an I/O error, and says so only in errno)
+    static func contents(_ path: String) throws -> [String] {
+        guard let dir = opendir(path) else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { closedir(dir) }
         var out: [String] = []
-        while let entry = readdir(dir) {
+        while true {
+            errno = 0
+            guard let entry = readdir(dir) else {
+                if errno != 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                return out
+            }
             let name = withUnsafePointer(to: entry.pointee.d_name) {
                 $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
             }
             if name != "." && name != ".." { out.append(name) }
         }
-        return out
     }
 
     /// mark the copy as changing, on the drive before anything else is written
