@@ -27,7 +27,9 @@ Some versions carry a badge:
 - **No badge** means nothing has checked that version yet. It is not a sign of trouble; it just means Cryoframe will not claim more than it knows. See [Health and verification](health-and-verification.md) to check them.
 - **Kept** means the version is from before its job changed how it keeps backups. Nothing deletes it; see [Versions, retention, and storage](versions-retention-storage.md#kept-versions).
 
-A live mirror or a plain-files copy has no timeline. It keeps one copy, brought up to date by each run, so there is a single state to restore: the current one. Cryoframe says so rather than showing a history that does not exist. If you want a history for that library, keep dated versions with a Keep rule; see [Versions, retention, and storage](versions-retention-storage.md).
+A plain-files copy, or a live mirror without history, has no timeline. It keeps one copy, brought up to date by each run, so there is a single state to restore: the current one. Cryoframe says so rather than showing a history that does not exist. If you want a history for that library, keep dated versions with a Keep rule; see [Versions, retention, and storage](versions-retention-storage.md).
+
+A live mirror with history shows a timeline: the current mirror first, then each earlier copy as "Mirror as of" the date and time it was made. Restore one the same way as any version. If decay was found in the mirror, Restore warns before using one of its earlier copies too, because they share the same data on the drive. See [Mirror history](versions-retention-storage.md#mirror-history).
 
 Select a version and the bar at the bottom names exactly what will happen when you restore it.
 

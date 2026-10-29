@@ -8,7 +8,19 @@ A job that keeps dated versions keeps a history. Each run is its own dated versi
 
 Every run of a job that keeps dated versions (as disk images or zip files) writes a new version into a dated folder under the destination, named by the date and time of the run. The Restore window lists each version with its date, so you pick the point in time you want.
 
-A job that keeps one up-to-date copy (a live mirror or plain files) works differently. Each run updates that copy in place, so there are no versions to choose from. If you want a history, keep dated versions.
+A job that keeps one up-to-date copy (a live mirror or plain files) works differently. Each run updates that copy in place. A live mirror on an APFS drive keeps a short history of its own (see [Mirror history](#mirror-history)); plain files keep none. For a long history, or one on another drive, keep dated versions.
+
+## Mirror history
+
+A live mirror keeps the copy from each of the last 7 nights, unless you change it. In the job editor, under Keep, Keep history offers Off, 7, 14 or 30 nights. It applies to mirror jobs made before 1.8 too. If a job runs more than once a night, only the last copy of each night is kept.
+
+Each copy is an APFS clone of the mirror's disk image, kept in a folder named "Mirror history" beside it. A clone shares everything that hasn't changed since, so a night's copy takes about what changed in the library that night. A library rewritten every night, such as one whole large database file, costs its full size each night.
+
+History only protects against deletes and bad updates. The copies are on the same drive as the mirror and share its data, so they don't help if the drive fails, is lost, or decays. If decay is found in the mirror, Cryoframe says that its history may hold the same damage.
+
+When the drive runs short of room, the mirror comes first: the oldest copies are deleted until the run fits, and the run's history says what went. History is never deleted because a setting was lost, for instance after going back to an earlier version of Cryoframe; new copies just stop being made.
+
+History needs an APFS drive connected to this Mac whose volume can make clones. It isn't kept on exFAT, FAT32 or Mac OS Extended drives, on network drives, or in iCloud Drive, Dropbox and other cloud folders, which would upload a whole copy for every night. The job editor says which destinations can't keep it, and why. See [Formats and destinations](formats-and-destinations.md).
 
 ## Retention
 
@@ -47,6 +59,8 @@ The measure is whether there's room for another run of that job, compared agains
 ## Storage
 
 The Storage button at the top of the window shows, for each job, how much space its archives use and how full the destination volume is. Expand a job to see the per-version breakdown, so you can tell which versions are large and whether your retention policy is keeping more than you expected. Only dated versions count as archives there; a plain-files job reads "a current copy and Removed items".
+
+A live mirror with history has a row of its own, "*library* · Mirror history", with how many earlier copies it holds and about how much room they take. That size is an estimate, from what each run wrote: a clone shares its data, so what one holds alone can't be measured without deleting it. Its Delete… menu deletes one earlier copy, after you confirm. Cryoframe 1.7 doesn't know about history, so if you go back to it, its Storage window counts each copy at the mirror's full size.
 
 This is the place to look before a disk fills. If a job is using more than you want, tighten its retention policy, and the next run prunes down to the new limit.
 

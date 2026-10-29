@@ -24,6 +24,9 @@ struct StorageView: View {
     /// the damaged mirror to start over, once confirmed
     @State private var startingOver: (job: BackupJob, mirror: MirrorSeal.Damaged)?
     @State private var startOverError: String?
+    /// an entry of a mirror's history to delete, once confirmed (see MirrorHistory)
+    @State private var deletingHistory: (entry: MirrorHistory.Entry, mirror: URL, jobID: String, label: String)?
+    @State private var historyError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,6 +80,31 @@ struct StorageView: View {
             Button("Cancel", role: .cancel) { startingOver = nil }
         } message: {
             Text(startOverMessage)
+        }
+        .alert("Delete this earlier copy?", isPresented: Binding(get: { deletingHistory != nil }, set: { if !$0 { deletingHistory = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let d = deletingHistory {
+                    deletingHistory = nil
+                    Task {
+                        let failed = await Task.detached { () -> String? in
+                            // holding the job's lock: a run saves and removes history itself
+                            do { try RunLocks.standard().withLock(jobID: d.jobID, trigger: .cleanup) { _ in try MirrorHistory.remove(d.entry, in: d.mirror) }; return nil }
+                            catch is RunLockError { return "a backup or check of the job is running. Try again once it's done" }
+                            catch { return error.localizedDescription }
+                        }.value
+                        if let failed { historyError = "Couldn't delete the \(d.label.lowercased()): \(failed)" }
+                        await load()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { deletingHistory = nil }
+        } message: {
+            Text("The \(deletingHistory?.label.lowercased() ?? "earlier copy") is deleted from the drive, and can't be restored afterward. The current mirror and the other earlier copies stay.")
+        }
+        .alert("Mirror History", isPresented: Binding(get: { historyError != nil }, set: { if !$0 { historyError = nil } })) {
+            Button("OK", role: .cancel) { historyError = nil }
+        } message: {
+            Text(historyError ?? "")
         }
         .alert("Start Over", isPresented: Binding(get: { startOverError != nil }, set: { if !$0 { startOverError = nil } })) {
             Button("OK", role: .cancel) { startOverError = nil }
@@ -170,7 +198,12 @@ struct StorageView: View {
                 DisclosureGroup("\(s.targetName) · \(s.contentsSummary)") {
                     ForEach(s.archives) { a in
                         HStack {
-                            Text(a.version.map { "\(a.library) · \($0.formatted(date: .abbreviated, time: .shortened))" } ?? a.library)
+                            if let history = a.history {
+                                Text("\(a.library) · \(history.count) earlier cop\(history.count == 1 ? "y" : "ies")")
+                                    .help("Earlier copies of the mirror share the data that hasn't changed since, so they take about what later runs wrote. They help after a deletion or a bad update, not if the drive fails: they're on the same drive.")
+                            } else {
+                                Text(a.version.map { "\(a.library) · \($0.formatted(date: .abbreviated, time: .shortened))" } ?? a.library)
+                            }
                             if a.kept {
                                 Text("Kept").font(.caption2.weight(.semibold)).padding(.horizontal, 5)
                                     .background(Capsule().fill(Color.secondary.opacity(0.15)))
@@ -178,7 +211,10 @@ struct StorageView: View {
                             }
                             Spacer()
                             if let removed = a.removedItems { emptyMenu(removed) }
-                            Text(size(a.bytes)).monospacedDigit()
+                            if let history = a.history, let mirror = a.historyOf {
+                                historyMenu(history, mirror: mirror, jobID: s.jobID, running: model.runningJobIDs.contains(s.jobID))
+                            }
+                            Text(a.history == nil ? size(a.bytes) : "about \(size(a.bytes))").monospacedDigit()
                         }
                         .font(.caption2).foregroundStyle(.secondary)
                     }
@@ -214,6 +250,22 @@ struct StorageView: View {
         }
         .menuStyle(.borderlessButton).fixedSize()
         .help("Removed items are what was deleted from the library, kept beside its copy until you delete them here.")
+    }
+
+    /// Delete one earlier copy of a mirror (see MirrorHistory), each with about what it
+    /// alone holds. Not while the job runs: a run saves and removes history itself.
+    private func historyMenu(_ entries: [MirrorHistory.Entry], mirror: URL, jobID: String, running: Bool) -> some View {
+        Menu("Delete…") {
+            ForEach(entries) { e in
+                let label = "Mirror as of \(e.date.formatted(date: .abbreviated, time: .shortened))"
+                Button("\(label) · about \(size(MirrorHistory.aboutBytes(of: e, among: entries)))") {
+                    deletingHistory = (e, mirror, jobID, label)
+                }
+            }
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .disabled(running)
+        .help(running ? "The job is running. Delete an earlier copy once it's done." : "Delete one earlier copy of the mirror to free its space.")
     }
 
     /// "Last 30 runs: 29 good, 1 failed", a bar per run, and a gray note when the

@@ -44,6 +44,9 @@ struct JobEditor: View {
     /// out when the format or the destinations change: it asks each drive whether it
     /// is encrypted
     @State private var plainNotice: String?
+    /// where history can't be kept, and whether that's every chosen destination (see
+    /// JobDraftState.historyIssues); asked of the drives off the main thread
+    @State private var historyIssues: (issues: [String], allUnavailable: Bool) = ([], false)
 
     init(model: AppModel, isPresented: Binding<Bool>, editing: BackupJob? = nil,
          initialFolder: URL? = nil, initialLibraryID: String? = nil) {
@@ -430,6 +433,21 @@ struct JobEditor: View {
                          : "Plain files are chosen when a job is made. For plain files, make a new job.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                if !draft.isPlainFiles {
+                    Picker("Keep history", selection: historyNights) {
+                        ForEach(MirrorHistory.choices, id: \.self) { n in
+                            Text(n == 0 ? "Off" : "\(n) nights").tag(n)
+                        }
+                    }
+                    .disabled(historyIssues.allUnavailable)
+                    ForEach(historyIssues.issues, id: \.self) { issue in
+                        Label(issue, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if draft.historyNights > 0, !historyIssues.allUnavailable {
+                        Text("You can go back to the copy from each of the last \(draft.historyNights) nights. The copies share whatever hasn't changed, so each takes about what changed that night. They're on the same drive, so they don't protect against the drive failing.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if draft.isPlainFiles {
                     ForEach(draft.state.plainFilesIssues(), id: \.self) { issue in
                         Label(issue, systemImage: "xmark.octagon").font(.caption).foregroundStyle(.cryoWarn)
@@ -466,6 +484,8 @@ struct JobEditor: View {
                  ? "Each backup is saved as a dated version you can go back to. Versions beyond what you keep are deleted after a backup; the one last proven to restore never is."
                  : draft.isPlainFiles
                  ? "Each backup brings one copy up to date as ordinary files and folders that any computer can open, with no history to go back to."
+                 : draft.historyNights > 0 && !historyIssues.allUnavailable
+                 ? "Each backup brings one copy up to date, fast, and keeps copies from recent nights to go back to."
                  : "Each backup brings one copy up to date, fast, with no history to go back to.")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -473,6 +493,9 @@ struct JobEditor: View {
             // it asks each drive whether it is encrypted: off the main thread
             let state = draft.state
             plainNotice = state.isPlainFiles ? await Task.detached { state.plainFilesNotice() }.value : nil
+            // and what each drive is, for history
+            let found = await Task.detached { state.historyIssues() }.value
+            historyIssues = (found.issues, found.allUnavailable)
         }
     }
 
@@ -485,6 +508,12 @@ struct JobEditor: View {
     private var copyAs: Binding<String> {
         Binding(get: { draft.isPlainFiles ? "plain" : "mirror" },
                 set: { draft.formatKind = $0; if $0 == "plain" { draft.encrypt = false } })
+    }
+
+    /// the nights of history, shown as Off where no chosen destination can keep it
+    private var historyNights: Binding<Int> {
+        Binding(get: { historyIssues.allUnavailable ? 0 : draft.historyNights },
+                set: { draft.historyNights = $0 })
     }
 
     /// what the plain-files notice depends on

@@ -211,9 +211,10 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
     // 1.7 lists a destination with RestoreDiscovery.scan and LibraryFolders.archives,
     // sweeps only dated version folders (JobExecutor.prunePlan), deletes a job by its
     // library folders (JobRemoval.plan), and measures a mirror's folder whole
-    // (StorageReporter). None of those is changed for history (git diff v1.7.0 shows
-    // only additions behind new arguments): run here as 1.7 runs them, over a mirror
-    // folder with history.
+    // (StorageReporter). LibraryFolders, prunePlan and JobRemoval are as they were in
+    // v1.7.0, and scan changes only behind its new history argument, so they run here
+    // as 1.7 runs them, over a mirror folder with history. StorageReporter now
+    // measures the mirror without it; 1.7's measure, the folder whole, is run directly.
     @Test func whatOneSevenDoesWithAFolderOfHistory() throws {
         let dest = tempDir("compat")
         defer { try? FileManager.default.removeItem(at: dest) }

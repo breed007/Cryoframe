@@ -169,7 +169,7 @@ final class RestoreModel: ObservableObject {
 
     func scan(_ folder: URL) {
         sourceFolder = folder
-        archives = RestoreDiscovery.scan(folder, removedItems: true)
+        archives = RestoreDiscovery.scan(folder, removedItems: true, history: true)
         results = []
     }
 
@@ -364,6 +364,8 @@ struct RestoreView: View {
         let mirror = r.isSingleCurrent(lib)
         // a plain-files copy is one current copy too, but not a mirror (see mirrorPane)
         let plain = mirror && vers.first?.format == .plainFiles
+        // a live mirror with history: the mirror, then its earlier copies (see MirrorHistory)
+        let earlier = vers.filter(\.mirrorHistory).count
         let isActive = lib == activeLibrary
         return Button {
             selectedLibrary = lib
@@ -376,9 +378,11 @@ struct RestoreView: View {
                     .foregroundStyle(.cryoAccent)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(lib).font(.callout.weight(.semibold)).lineLimit(1)
-                    Text(plain ? "Plain files" : mirror ? "Live mirror" : "\(vers.count) version\(vers.count == 1 ? "" : "s")")
+                    Text(plain ? "Plain files" : mirror || earlier > 0 ? "Live mirror" : "\(vers.count) version\(vers.count == 1 ? "" : "s")")
                         .font(.caption2).foregroundStyle(.secondary)
-                    Text(plain ? "current copy" : mirror ? "current · no history" : (vers.first?.version).map { "newest " + relative($0) } ?? "")
+                    Text(plain ? "current copy" : mirror ? "current · no history"
+                         : earlier > 0 ? "current · \(earlier) earlier cop\(earlier == 1 ? "y" : "ies")"
+                         : (vers.first?.version).map { "newest " + relative($0) } ?? "")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(mirror ? Color.secondary.opacity(0.7) : Color.cryoAccent)
                         .lineLimit(1)
@@ -392,7 +396,7 @@ struct RestoreView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isActive ? [.isSelected] : [])
-        .accessibilityLabel("\(lib), \(plain ? "plain files, current copy" : mirror ? "live mirror" : "\(vers.count) versions")")
+        .accessibilityLabel("\(lib), \(plain ? "plain files, current copy" : mirror ? "live mirror" : earlier > 0 ? "live mirror and \(earlier) earlier copies" : "\(vers.count) versions")")
     }
 
     // MARK: - timeline
@@ -421,7 +425,7 @@ struct RestoreView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(lib).font(.system(size: 16, weight: .bold))
-                    Text("\(vers.count) version\(vers.count == 1 ? "" : "s") · \(fmt)\(enc ? " · encrypted" : "")")
+                    Text(Self.countLine(vers) + " · \(fmt)\(enc ? " · encrypted" : "")")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -499,14 +503,14 @@ struct RestoreView: View {
         return HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
-                    Text(relative(v.version)).font(.system(size: 14, weight: .semibold))
-                    if let d = v.version {
+                    Text(Self.title(v)).font(.system(size: 14, weight: .semibold))
+                    if let d = v.version, !v.mirrorHistory {
                         Text(d.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 HStack(spacing: 6) {
                     if isLatest { pill("Latest", accent: true) }
-                    pill(formatLabel(v.format), accent: false)
+                    pill(v.mirrorHistory ? "Mirror history" : formatLabel(v.format), accent: false)
                     // made before the job changed kind: kept as it is, never pruned
                     // or read as the job's current backup
                     if LibraryFolders.isKept(v) {
@@ -534,7 +538,7 @@ struct RestoreView: View {
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder(isSel ? Color.cryoAccent : Color.cryoLine, lineWidth: isSel ? 2 : 1))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(relative(v.version)) version, \(sizeStr(v.bytes))\(isSel ? ", selected" : "")")
+        .accessibilityLabel("\(Self.title(v)), \(sizeStr(v.bytes))\(isSel ? ", selected" : "")")
     }
 
     private func mirrorPane(_ lib: String) -> some View {
@@ -631,8 +635,14 @@ struct RestoreView: View {
             }
         } else if let v = activeVersion {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Restore \(activeLibrary ?? "") from \(relative(v.version))\(v.version.map { " · " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")")
+                Text(v.mirrorHistory ? "Restore \(activeLibrary ?? "") from the \(Self.title(v).lowercased())"
+                     : "Restore \(activeLibrary ?? "") from \(relative(v.version))\(v.version.map { " · " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")")
                     .font(.callout)
+                // (a mirror without history says it in its own pane)
+                if let warning = Self.mirrorWarning(v), !r.isSingleCurrent(activeLibrary ?? "") {
+                    Label(warning, systemImage: "exclamationmark.octagon.fill")
+                        .font(.caption2).foregroundStyle(Color.cryoCrit).lineLimit(4)
+                }
                 if let w = r.roomWarning, w.key == r.roomKey(for: v, inPlace: effectiveMode == .inPlace), let warning = w.text {
                     Label(warning, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2).foregroundStyle(.cryoWarn).lineLimit(3)
@@ -773,6 +783,33 @@ struct RestoreView: View {
         if panel.runModal() == .OK, let url = panel.url { then(url) }
     }
 
+    /// what a version is called: "Mirror as of Oct 3, 2026 at 2:00 AM" for an earlier
+    /// copy of a live mirror, the day for anything else
+    static func title(_ v: RestorableArchive) -> String {
+        if v.mirrorHistory, let d = v.version { return "Mirror as of \(d.formatted(date: .abbreviated, time: .shortened))" }
+        if v.format == .liveMirror, v.version == nil { return "Current mirror" }
+        return relativeDay(v.version)
+    }
+
+    /// "3 versions", or for a live mirror with history "the current mirror and 4 earlier copies"
+    static func countLine(_ vers: [RestorableArchive]) -> String {
+        let earlier = vers.filter(\.mirrorHistory).count
+        guard earlier > 0 else { return "\(vers.count) version\(vers.count == 1 ? "" : "s")" }
+        return "the current mirror and \(earlier) earlier cop\(earlier == 1 ? "y" : "ies")"
+    }
+
+    /// Said before a restore uses a damaged mirror, or an earlier copy of one: its
+    /// history shares the mirror's blocks on the drive, so decay found in the mirror
+    /// may be in its earlier copies too (see MirrorHistory).
+    static func mirrorWarning(_ v: RestorableArchive) -> String? {
+        guard v.format == .liveMirror, let why = MirrorSeal.damage(in: v.libraryFolder) else { return nil }
+        if v.mirrorHistory {
+            guard MirrorSeal.isDecayed(v.libraryFolder) else { return nil }
+            return "The current mirror was found decayed (\(why)). This earlier copy shares the same parts of the drive, so it may hold the same damage."
+        }
+        return "This mirror is damaged: \(MirrorSeal.damagedDetail(why, in: v.dir)) What a restore gets from it may be incomplete or corrupt."
+    }
+
     private func formatLabel(_ f: ArchiveFormat) -> String {
         switch f { case .sealedDMG: "Sealed DMG"; case .sealedZip: "Sealed zip"; case .liveMirror: "Live mirror"; case .plainFiles: "Plain files" }
     }
@@ -793,7 +830,9 @@ struct RestoreView: View {
     }
 
     /// a relative day label for a version: Today / Yesterday / weekday / "Jul 18".
-    private func relative(_ d: Date?) -> String {
+    private func relative(_ d: Date?) -> String { Self.relativeDay(d) }
+
+    static func relativeDay(_ d: Date?) -> String {
         guard let d else { return "Current" }
         let cal = Calendar.current
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: Date())).day ?? 0

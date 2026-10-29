@@ -275,6 +275,9 @@ private struct JobRow: View {
     let job: BackupJob
     let onEdit: (BackupJob) -> Void
     let onDelete: (BackupJob) -> Void
+    /// "7 nights of history" for a mirror whose drive can keep it (see MirrorHistory);
+    /// asked of the drives off the main thread
+    @State private var historyNote: String?
 
     private var isRunning: Bool { model.isRunning(job.id) }
     private var isQueued: Bool { model.isQueued(job.id) }
@@ -297,8 +300,16 @@ private struct JobRow: View {
                     statusBadge
                 }
                 HStack(spacing: 5) {
-                    Text("\(librarySummary) → \(destinationSummary)  ·  \(job.format.label)")
+                    Text("\(librarySummary) → \(destinationSummary)  ·  \(job.format.label)\(historyNote.map { " · " + $0 } ?? "")")
                         .font(.caption).foregroundStyle(.secondary)
+                        .task(id: job) {
+                            let job = self.job
+                            historyNote = await Task.detached { () -> String? in
+                                guard case .liveMirror = job.format, job.historyNights > 0,
+                                      job.targets.contains(where: { MirrorHistory.unavailable(at: $0.destinationDir, target: $0) == nil }) else { return nil }
+                                return "\(job.historyNights) nights of history"
+                            }.value
+                        }
                     if job.encrypted {
                         Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.secondary)
                             .help("Encrypted with AES-256")
