@@ -150,6 +150,9 @@ public struct ProtectionVerdict: Sendable, Equatable {
         /// a check of its mirror found part of it changed on the drive (see BandCheck),
         /// and it hasn't been started over since
         case decayFound
+        /// part of a mirror hasn't read back from its drive in several checks in a row
+        /// (see BandCheck.missesBeforeWarning), so it can't be checked for decay
+        case bandsUnreadable
         /// the latest run was stopped before it finished
         case stopped
         /// runs only when asked, and its newest good copy is over a month old
@@ -171,7 +174,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
             case .failed, .decayFound: return .critical
             case .overdue(_, _, let critical, _): return critical ? .critical : .attention
             case .noRecordOfGoodRun(_, let critical): return critical ? .critical : .attention
-            case .paused, .partial, .checkFailed, .stopped, .notBackedUpLately, .noGoodRunYet, .driveAway: return .attention
+            case .paused, .partial, .checkFailed, .bandsUnreadable, .stopped, .notBackedUpLately, .noGoodRunYet, .driveAway: return .attention
             }
         }
 
@@ -182,7 +185,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
             case .noRecordOfGoodRun: return 1
             case .partial: return 1
             case .driveAway: return 1
-            case .checkFailed: return 2
+            case .checkFailed, .bandsUnreadable: return 2
             case .stopped: return 3
             case .noGoodRunYet: return 4
             case .paused: return 5
@@ -210,6 +213,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
                                    : "hasn't had a copy on \(name) in \(age); connect it for its turn"
             case .checkFailed: return "failed an archive check"
             case .decayFound: return "has a mirror its drive damaged after it was written; start it over from Storage"
+            case .bandsUnreadable: return "has part of a mirror its drive hasn't read back in \(BandCheck.missesBeforeWarning) checks in a row; the drive may be failing"
             case .stopped: return "was stopped before it finished"
             case .notBackedUpLately(let lastGood):
                 return "hasn't been backed up in \(ProtectionVerdict.age(from: lastGood, to: now)); it runs only when you press Run now"
@@ -267,6 +271,7 @@ public struct ProtectionVerdict: Sendable, Equatable {
         }
         if latest?.outcome == .partial { return .partial }
         if let away = awayTooLong.first { return .driveAway(name: away.name, since: away.since, lastCopy: away.lastCopy) }
+        if latest?.bandCheck?.copies.contains(where: { !($0.unreadable ?? []).isEmpty }) == true { return .bandsUnreadable }
         if let health, !health.passed { return .checkFailed }
         if latest?.outcome == .cancelled { return .stopped }
         guard latest != nil else { return .neverRan }

@@ -186,16 +186,16 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(next.checked == 10 && next.unverified == 0)
     }
 
-    // A band that can't be read is a check that couldn't be made, not decay: an
-    // unplugged drive, a share that timed out and an offline cloud file all read that
-    // way. Only a band that reads back different is decay.
-    @Test func aBandThatCantBeReadIsNotDecayAndTheCheckStopsThere() throws {
+    // A band that can't be read isn't decay. It is skipped and counted, and the check
+    // goes on past it, so one bad sector can't stop it at the same place every run.
+    // Three in a row that had read before end the check (an unplugged drive, a share
+    // that timed out, an offline cloud file): that is a check that couldn't be made.
+    @Test func aBandThatCantBeReadIsSkippedAndCountedNotDecay() throws {
         let fm = FileManager.default
         let dir = tempDir("eio")
         defer { try? fm.removeItem(at: dir) }
-        let bundle = try fakeBundle(in: dir, bands: 4)
+        let bundle = try fakeBundle(in: dir, bands: 6)
         _ = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0)
-        let recorded = try #require(try BandTable.read(in: dir))
         var asked: [String] = []
         let r = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0.addingTimeInterval(day), hash: { url, _ in
             asked.append(url.lastPathComponent)
@@ -203,10 +203,29 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
             return try Checksum.sha256(of: url)
         })
         #expect(r.mismatches == 0 && r.damaged.isEmpty && !r.failed, "\(r)")
-        #expect(r.error?.hasPrefix("data band 1 couldn't be read") == true, "\(String(describing: r.error))")
-        #expect(asked == ["0", "1"])                    // the first band that can't be read ends the check
-        #expect(try BandTable.read(in: dir) == recorded) // and nothing it read counts toward coverage
-        #expect(BandCoverage([r]) == nil)
+        #expect(r.error == nil && r.unread == ["1"] && (r.unreadable ?? []).isEmpty, "\(r)")
+        #expect(asked == ["0", "1", "2", "3", "4", "5"], "the check went on past the band")
+        #expect(r.checked == 5)
+        let table = try #require(try BandTable.read(in: dir))
+        #expect(table.entries["1"]?.misses == 1 && table.entries["2"]?.misses == 0)
+        #expect(table.entries["1"]?.verifiedAt == t0, "a band that didn't read isn't counted as read")
+        #expect(BandCoverage([r]) != nil)
+        let line = BandCheckSummary(copies: [r]).line(at: t0.addingTimeInterval(day))
+        #expect(line.contains("data band 1 couldn't be read"), "\(line)")
+        // it reads again: its count starts over
+        _ = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0.addingTimeInterval(2 * day))
+        #expect(try BandTable.read(in: dir)?.entries["1"]?.misses == 0)
+
+        // three that read before, in a row: the drive isn't reading, and the check ends
+        asked = []
+        let stuck = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0.addingTimeInterval(3 * day), hash: { url, _ in
+            asked.append(url.lastPathComponent)
+            if url.lastPathComponent != "0" { throw POSIXError(.ETIMEDOUT) }
+            return try Checksum.sha256(of: url)
+        })
+        #expect(asked == ["0", "1", "2", "3"], "\(asked)")
+        #expect(stuck.error?.hasPrefix("data bands 1, 2 and 3 couldn't be read") == true && !stuck.failed, "\(String(describing: stuck.error))")
+        #expect(BandCoverage([stuck]) == nil)
 
         let unlisted = BandCheck.run(bundle: dir.appendingPathComponent("Nope.sparsebundle"), in: dir, library: "Lib",
                                      settings: settings(), now: t0)
@@ -215,13 +234,52 @@ private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         try Data("garbage".utf8).write(to: dir.appendingPathComponent(BandTable.fileName))
         let restarted = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0)
         #expect(restarted.error?.contains("started over") == true && !restarted.failed)
-        #expect(try BandTable.read(in: dir)?.entries.count == 4)
-        // the drive went away part way through
-        let gone = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0.addingTimeInterval(2 * day), hash: { _, _ in
+        #expect(try BandTable.read(in: dir)?.entries.count == 6)
+        // the drive went away part way through: nothing is recorded
+        let before = try BandTable.read(in: dir)
+        let gone = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0.addingTimeInterval(4 * day), hash: { _, _ in
             try fm.removeItem(at: bundle)
             throw POSIXError(.ENOENT)
         })
         #expect(gone.error?.contains("went away") == true && !gone.failed, "\(String(describing: gone.error))")
+        #expect(try BandTable.read(in: dir) == before)
+    }
+
+    // A band that never reads (a bad sector) is tried each run, ahead of the rest, which
+    // are checked past it. Three checks in a row without it reading is a warning.
+    @Test func aBandThatNeverReadsIsAWarningAfterThreeChecks() throws {
+        let dir = tempDir("never")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundle = try fakeBundle(in: dir, bands: 200)
+        _ = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(interval: 60 * day), now: t0)
+        var reports: [BandCheckReport] = []
+        var seen = Set<String>()
+        for n in 1...3 {
+            var asked: [String] = []
+            let r = BandCheck.run(bundle: bundle, in: dir, library: "Lib", settings: settings(), now: t0.addingTimeInterval(Double(n) * day),
+                                  hash: { url, _ in
+                asked.append(url.lastPathComponent)
+                if url.lastPathComponent == "0" { throw POSIXError(.EIO) }
+                return try Checksum.sha256(of: url)
+            })
+            #expect(asked.first == "0", "the band that didn't read is tried again first: \(asked.prefix(3))")
+            seen.formUnion(asked)
+            reports.append(r)
+        }
+        #expect(seen.count > 64 * 2, "the check moved on past the band: \(seen.count) bands read")
+        #expect((reports[1].unreadable ?? []).isEmpty, "two checks isn't yet a warning")
+        #expect(reports[2].unreadable == ["0"], "\(reports[2])")
+        #expect(!reports[2].failed)
+        let job = BackupJob(id: "j", name: "Photos", libraries: [.genericFolder(id: "l", displayName: "Lib", path: .home("Lib"))],
+                            target: .localVolume(id: "t", name: "Disk", dir: URL(fileURLWithPath: "/tmp/x")),
+                            format: .liveMirror(sizeGB: 1), frequency: .daily(hour: 1, minute: 0), createdAt: t0)
+        let done = JobOutcome.finished(results: [.completed(library: "Lib", destination: "Disk", parts: 1, bytes: 10, verified: nil)], warning: nil)
+        let at = t0.addingTimeInterval(3 * day)
+        let record = RunRecord.make(job: job, outcome: done, startedAt: at, finishedAt: at, trigger: "scheduled", bandChecks: [reports[2]])
+        #expect(record.summary.contains("data band 0 hasn't read back in 3 checks in a row"), "\(record.summary)")
+        let standing = ProtectionVerdict.standing(of: job, latest: record, lastGood: at, health: nil, now: at)
+        #expect(standing == .bandsUnreadable && standing.level == .attention, "\(standing)")
+        #expect(RunFollowUp.bandCheckRecord(record, latest: nil) == nil, "a warning, not decay")
     }
 
     // Pause holds the check between bands, and the time paused isn't taken from its cap.

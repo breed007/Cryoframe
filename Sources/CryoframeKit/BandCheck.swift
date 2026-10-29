@@ -33,9 +33,11 @@ public struct BandTable: Sendable, Equatable {
         public var sha256: String?
         /// when it was last read and recorded or matched; nil: not read yet
         public var verifiedAt: Date?
+        /// the checks in a row it couldn't be read in; 0 once it reads again
+        public var misses: Int
 
-        public init(size: UInt64, mtime: Int64, sha256: String? = nil, verifiedAt: Date? = nil) {
-            self.size = size; self.mtime = mtime; self.sha256 = sha256; self.verifiedAt = verifiedAt
+        public init(size: UInt64, mtime: Int64, sha256: String? = nil, verifiedAt: Date? = nil, misses: Int = 0) {
+            self.size = size; self.mtime = mtime; self.sha256 = sha256; self.verifiedAt = verifiedAt; self.misses = misses
         }
     }
 
@@ -58,13 +60,16 @@ public struct BandTable: Sendable, Equatable {
         var entries: [String: Entry] = [:]
         for line in lines {
             let f = line.split(separator: "\t", omittingEmptySubsequences: false)
-            guard f.count == 5, !f[0].isEmpty, let size = UInt64(f[1]), let mtime = Int64(f[2]) else {
+            guard f.count == 5 || f.count == 6, !f[0].isEmpty, let size = UInt64(f[1]), let mtime = Int64(f[2]) else {
                 throw BandTableError.unreadable(url.path)
             }
+            // a sixth field, the checks in a row it couldn't be read in, only when there were some
+            let misses = f.count == 6 ? Int(f[5]) : 0
+            guard let misses, misses >= 0 else { throw BandTableError.unreadable(url.path) }
             let sha = f[3] == "-" ? nil : String(f[3])
             let at = f[4] == "-" ? nil : Int64(f[4]).map { Date(timeIntervalSince1970: TimeInterval($0)) }
             guard sha == nil || sha?.count == 64, f[4] == "-" || at != nil else { throw BandTableError.unreadable(url.path) }
-            entries[String(f[0])] = Entry(size: size, mtime: mtime, sha256: sha, verifiedAt: at)
+            entries[String(f[0])] = Entry(size: size, mtime: mtime, sha256: sha, verifiedAt: at, misses: misses)
         }
         return BandTable(entries: entries)
     }
@@ -75,7 +80,8 @@ public struct BandTable: Sendable, Equatable {
         for name in BandCheck.ordered(Array(entries.keys)) {
             guard let e = entries[name] else { continue }
             let at = e.verifiedAt.map { String(Int64($0.timeIntervalSince1970.rounded(.down))) } ?? "-"
-            text += [name, String(e.size), String(e.mtime), e.sha256 ?? "-", at].joined(separator: "\t") + "\n"
+            text += ([name, String(e.size), String(e.mtime), e.sha256 ?? "-", at] + (e.misses > 0 ? [String(e.misses)] : []))
+                .joined(separator: "\t") + "\n"
         }
         try Data(text.utf8).write(to: dir.appendingPathComponent(Self.fileName), options: .atomic)
     }
@@ -128,6 +134,10 @@ public struct BandCheckReport: Codable, Sendable, Equatable {
     /// the entries of the mirror's history when decay was found: they share the
     /// mirror's blocks on the drive, so they may hold the same decay (see MirrorHistory)
     public var history: Int?
+    /// bands that couldn't be read this time: skipped, and tried again next time
+    public var unread: [String]?
+    /// bands that haven't read in `BandCheck.missesBeforeWarning` checks in a row
+    public var unreadable: [String]?
 
     public init(library: String, destination: String = "", total: Int = 0, checked: Int = 0, recorded: Int = 0,
                 mismatches: Int = 0, damaged: [String] = [], recent: Int = 0, unverified: Int = 0,
@@ -165,6 +175,15 @@ public struct BandCheckSummary: Codable, Sendable, Equatable {
                 + (damaged.contains { ($0.history ?? 0) > 0 }
                    ? "; its history shares the same parts of the drive, so its earlier copies may hold the same damage" : "")
         }
+        let unreadable = copies.flatMap { $0.unreadable ?? [] }
+        if !unreadable.isEmpty {
+            let named = BandCheck.named(unreadable), checks = BandCheck.missesBeforeWarning
+            let line = unreadable.count == 1
+                ? "\(named) hasn't read back in \(checks) checks in a row, so it can't be checked for decay; the drive may be failing"
+                : "\(named) haven't read back in \(checks) checks in a row, so they can't be checked for decay; the drive may be failing"
+            let libraries = copies.filter { !($0.unreadable ?? []).isEmpty }.map(\.library).joined(separator: ", ")
+            return line + (copies.count > 1 ? " (\(libraries))" : "")
+        }
         if let broken = copies.first(where: { $0.error != nil }), let why = broken.error {
             return "the mirror couldn't be checked for decay (\(why))"
         }
@@ -174,9 +193,12 @@ public struct BandCheckSummary: Codable, Sendable, Equatable {
         }
         let total = self.total
         let head = "checked \(BandCheck.percent(checked, of: total)) of the mirror for decay"
+        let unread = made.flatMap { $0.unread ?? [] }
         return head + "; " + BandCheck.coverage(recent: made.reduce(0) { $0 + $1.recent },
                                                 unverified: made.reduce(0) { $0 + $1.unverified },
                                                 total: total, oldest: oldestVerified, now: now)
+            + (unread.isEmpty ? "" : unread.count == 1 ? "; \(BandCheck.named(unread)) couldn't be read, and is tried again next time"
+                                                         : "; \(BandCheck.named(unread)) couldn't be read, and are tried again next time")
     }
 }
 
@@ -247,6 +269,8 @@ public enum BandCheck {
     /// the fewest unchanged bands a run reads (512 MB of 8 MB bands)
     public static let floor = 64
     public static let defaultTimeCap: TimeInterval = 600
+    /// the checks in a row a band may fail to read before that is a warning
+    public static let missesBeforeWarning = 3
     /// a job that runs only when asked is taken to run daily
     public static let manualInterval: TimeInterval = 86_400
 
@@ -282,7 +306,8 @@ public enum BandCheck {
         public var table: BandTable
         /// bands to read and record, in band order
         public var rehash: [String]
-        /// unchanged bands to read again, oldest-read first
+        /// unchanged bands to read again: those that couldn't be read last time, then
+        /// the slice, oldest-read first
         public var slice: [String]
         /// bands the table had that the image no longer has (compact removed them)
         public var dropped: [String]
@@ -312,8 +337,12 @@ public enum BandCheck {
             }
         }
         let dropped = table.map { t in ordered(t.entries.keys.filter { next.entries[$0] == nil }) } ?? []
-        let slice = oldestFirst(candidates, in: next).prefix(max(sliceSize, 0))
-        return Plan(table: next, rehash: ordered(rehash), slice: Array(slice), dropped: dropped)
+        // A band that couldn't be read is tried again at every check, ahead of the slice
+        // and besides it, until it reads: so it can't hold the slice at the same place,
+        // and a band that never reads is seen to (see run).
+        let retry = ordered(candidates.filter { (next.entries[$0]?.misses ?? 0) > 0 })
+        let slice = oldestFirst(candidates.filter { (next.entries[$0]?.misses ?? 0) == 0 }, in: next).prefix(max(sliceSize, 0))
+        return Plan(table: next, rehash: ordered(rehash), slice: retry + slice, dropped: dropped)
     }
 
     /// never-read bands first, then by when each was last read; band order among equals.
@@ -329,6 +358,20 @@ public enum BandCheck {
     }
 
     private static func number(_ name: String) -> Int { Int(name, radix: 16) ?? Int.max }
+
+    /// "data band 1a", "data bands 1a, 2f and 30" (at most five named)
+    static func named(_ bands: [String]) -> String {
+        let all = ordered(bands)
+        guard all.count > 1 else { return "data band \(all.first ?? "")" }
+        let shown = Array(all.prefix(5)), more = all.count - shown.count
+        let listed = shown.joined(separator: ", ")
+        let head = shown.dropLast().joined(separator: ", "), last = shown.last ?? ""
+        return more > 0 ? "data bands \(listed) and \(more) more" : "data bands \(head) and \(last)"
+    }
+
+    /// bands that read before and then didn't, one after another, that end a check:
+    /// the drive isn't reading (unplugged, a share timed out, a cloud file offline)
+    static let failuresBeforeStop = 3
 
     /// the bands of `bundle` as they are on the drive. Throws when they can't be listed.
     public static func stats(of bundle: URL) throws -> [BandStat] {
@@ -357,11 +400,15 @@ public enum BandCheck {
     /// leaves unread are recorded unread, and are first in line next time.
     ///
     /// Only an unchanged band that reads back other than it was recorded is decay. One
-    /// that can't be read isn't: an unplugged drive, a share that timed out and a cloud
-    /// file that couldn't be fetched all fail that way. The first such band ends the
-    /// check, which says why, and the table is left as it was, so nothing this run read
-    /// counts and the next run tries again. Stop ends the check where it is, and what
-    /// was read is kept.
+    /// that can't be read isn't: it is skipped, its miss is counted in the table, and
+    /// the check goes on. It is tried again at every check until it reads, and one that
+    /// hasn't in `missesBeforeWarning` checks in a row is a warning (a bad sector, most
+    /// likely). Stopping at the first one, as the check did, left a band that never
+    /// reads holding it at the same place every run, with nothing said beyond a note.
+    /// Three bands in a row that hadn't failed before end the check, which says why:
+    /// an unplugged drive, a share that timed out and a cloud file that couldn't be
+    /// fetched all fail that way. A drive that went away leaves the table as it was.
+    /// Stop ends the check where it is, and what was read is kept.
     public static func run(bundle: URL, in dir: URL, library: String, settings: Settings, now: Date = Date(),
                            clock: () -> Date = Date.init, control: RunControl? = nil,
                            hash: (URL, RunControl?) throws -> String = { try Checksum.sha256(of: $0, control: $1) }) -> BandCheckReport {
@@ -386,47 +433,80 @@ public enum BandCheck {
 
         var damaged: [String] = []
         var stopped = false
-        var unread: (band: String, why: Error)?
-        func readBand(_ name: String) -> String? {
+        var gone = false
+        var unread: [String] = []
+        // bands in a row that read before and didn't now, and the last one's error
+        var failing: [String] = []
+        var lastError: Error?
+        enum Read { case read(String), skipped, stop }
+        func readBand(_ name: String) -> Read {
             // Pause holds the check here, between bands, and gives it back the time
             if let control, control.isPaused {
                 let held = clock()
                 control.waitWhilePaused()
                 deadline = deadline.addingTimeInterval(clock().timeIntervalSince(held))
             }
-            if stopped || control?.isCancelled == true || clock() >= deadline { stopped = true; return nil }
+            if stopped || control?.isCancelled == true || clock() >= deadline { stopped = true; return .stop }
             defer { control?.advance(by: work.table.entries[name]?.size ?? 0) }
-            do { return try hash(bands.appendingPathComponent(name), control) }
-            catch is CancelledError { stopped = true; return nil }
-            catch { unread = (name, error); stopped = true; return nil }
-        }
-        for name in work.rehash {
-            guard let sha = readBand(name) else { break }
-            work.table.entries[name]?.sha256 = sha
-            work.table.entries[name]?.verifiedAt = now
-            report.recorded += 1
-        }
-        for name in work.slice {
-            guard let sha = readBand(name) else { break }
-            report.checked += 1
-            if let recorded = work.table.entries[name]?.sha256, recorded != sha {
-                damaged.append(name)            // the recorded hash is kept: it is what the band should hold
-                continue
+            do {
+                let sha = try hash(bands.appendingPathComponent(name), control)
+                work.table.entries[name]?.misses = 0
+                failing = []
+                return .read(sha)
             }
-            work.table.entries[name]?.sha256 = sha
-            work.table.entries[name]?.verifiedAt = now
+            catch is CancelledError { stopped = true; return .stop }
+            catch {
+                guard FileManager.default.fileExists(atPath: bands.path) else { gone = true; stopped = true; return .stop }
+                let before = work.table.entries[name]?.misses ?? 0
+                work.table.entries[name]?.misses = before + 1
+                unread.append(name)
+                lastError = error
+                if before == 0 { failing.append(name) }
+                if failing.count >= failuresBeforeStop { stopped = true; return .stop }
+                return .skipped
+            }
         }
-        report.stoppedEarly = stopped && unread == nil && clock() >= deadline
-        if let unread {
-            // the table stays as it was: what this run read counts for nothing
-            report.error = FileManager.default.fileExists(atPath: bands.path)
-                ? "data band \(unread.band) couldn't be read (\(unread.why.localizedDescription))"
-                : "the mirror's drive went away during the check"
+        recording: for name in work.rehash {
+            switch readBand(name) {
+            case .stop: break recording
+            case .skipped: continue
+            case .read(let sha):
+                work.table.entries[name]?.sha256 = sha
+                work.table.entries[name]?.verifiedAt = now
+                report.recorded += 1
+            }
+        }
+        checking: for name in work.slice where !stopped {
+            switch readBand(name) {
+            case .stop: break checking
+            case .skipped: continue
+            case .read(let sha):
+                report.checked += 1
+                if let recorded = work.table.entries[name]?.sha256, recorded != sha {
+                    damaged.append(name)            // the recorded hash is kept: it is what the band should hold
+                    continue
+                }
+                work.table.entries[name]?.sha256 = sha
+                work.table.entries[name]?.verifiedAt = now
+            }
+        }
+        let notReading = failing.count >= failuresBeforeStop
+        report.stoppedEarly = stopped && !gone && !notReading && clock() >= deadline
+        if gone {
+            // nothing can be recorded on a drive that isn't there
+            report.error = "the mirror's drive went away during the check"
         } else {
+            if notReading {
+                let why = lastError?.localizedDescription ?? ""
+                report.error = "\(named(failing)) couldn't be read (\(why))"
+            }
             do { try work.table.write(in: dir) } catch {
-                report.error = "what was read couldn't be recorded beside the mirror: \(error.localizedDescription)"
+                report.error = report.error ?? "what was read couldn't be recorded beside the mirror: \(error.localizedDescription)"
             }
         }
+        if !unread.isEmpty { report.unread = ordered(unread) }
+        let neverRead = work.table.entries.filter { $0.value.misses >= missesBeforeWarning }.map(\.key)
+        if !neverRead.isEmpty { report.unreadable = ordered(neverRead) }
         if unreadable, report.error == nil {
             // what was recorded is lost, and the file sits on the same drive: said, and
             // checking starts over from the table just written
