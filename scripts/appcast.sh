@@ -5,6 +5,8 @@
 #
 # Run after make-dmg.sh, before pushing the appcast + cutting the gh release:
 #   ./scripts/appcast.sh 1.0.0 dist/Cryoframe-1.0.0.dmg "Release notes one-liner"
+# To fetch and check Sparkle's tools only, signing nothing:
+#   ./scripts/appcast.sh --fetch-tools
 #
 # The private key lives in your login keychain (created once with Sparkle's
 # generate_keys). The matching public key is embedded in the app (project.yml).
@@ -12,17 +14,58 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:?usage: appcast.sh <version> <dmg> [notes]}"
-DMG="${2:?usage: appcast.sh <version> <dmg> [notes]}"
-NOTES="${3:-Cryoframe $VERSION}"
-SPARKLE_VER="2.9.3"
-TOOLS="/tmp/sparkle-tools-$SPARKLE_VER/bin"
+if [ "${1:-}" != "--fetch-tools" ]; then
+  VERSION="${1:?usage: appcast.sh <version> <dmg> [notes]}"
+  DMG="${2:?usage: appcast.sh <version> <dmg> [notes]}"
+  NOTES="${3:-Cryoframe $VERSION}"
+fi
 
-if [ ! -x "$TOOLS/sign_update" ]; then
+SPARKLE_VER="2.9.3"
+# SHA-256 of Sparkle-$SPARKLE_VER.tar.xz, as GitHub lists it for the release asset.
+# Change the two together.
+SPARKLE_SHA256="74a07da821f92b79310009954c0e15f350173374a3abe39095b4fc5096916be6"
+# sign_update reads the update-signing key from the login keychain, so it is kept,
+# and run, only where no one else can write: never /tmp, where any local user can
+# create the folder first and have their own program run with that key.
+CACHE="${CRYOFRAME_RELEASE_CACHE:-$HOME/Library/Caches/Cryoframe-release}"
+SPARKLE_DIR="$CACHE/sparkle-$SPARKLE_VER"
+TOOLS="$SPARKLE_DIR/bin"
+
+# true when the path is owned by you and neither group nor others can write to it
+private_to_me() {
+  local owner mode
+  read -r owner mode < <(stat -f '%u %Lp' "$1")
+  [ "$owner" = "$(id -u)" ] && [ $(( 8#$mode & 8#022 )) -eq 0 ]
+}
+
+FETCH_WORK=""
+fetch_sparkle() {
   echo "== fetching Sparkle $SPARKLE_VER tools =="
-  mkdir -p "$TOOLS/.."
-  curl -sL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VER/Sparkle-$SPARKLE_VER.tar.xz" \
-    | tar -xJ -C "$TOOLS/.."
+  mkdir -p "$CACHE" && chmod 700 "$CACHE"
+  private_to_me "$CACHE" || { echo "$CACHE isn't private to you; refusing to keep the signing tool there"; exit 1; }
+  FETCH_WORK=$(mktemp -d "$CACHE/fetch.XXXXXX")
+  trap 'rm -rf "$FETCH_WORK"' EXIT
+  curl -fsSL -o "$FETCH_WORK/sparkle.tar.xz" \
+    "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VER/Sparkle-$SPARKLE_VER.tar.xz"
+  local got
+  got=$(shasum -a 256 "$FETCH_WORK/sparkle.tar.xz" | awk '{print $1}')
+  if [ "$got" != "$SPARKLE_SHA256" ]; then
+    echo "the Sparkle $SPARKLE_VER download has SHA-256 $got, not $SPARKLE_SHA256; refusing it"
+    exit 1
+  fi
+  mkdir "$FETCH_WORK/tools"
+  tar -xJf "$FETCH_WORK/sparkle.tar.xz" -C "$FETCH_WORK/tools"
+  rm -rf "$SPARKLE_DIR"
+  mv "$FETCH_WORK/tools" "$SPARKLE_DIR"
+}
+
+[ -x "$TOOLS/sign_update" ] || fetch_sparkle
+for p in "$CACHE" "$SPARKLE_DIR" "$TOOLS" "$TOOLS/sign_update"; do
+  private_to_me "$p" || { echo "$p isn't private to you (owner or permissions); refusing to run the signing tool from it"; exit 1; }
+done
+if [ "${1:-}" = "--fetch-tools" ]; then
+  echo "== Sparkle $SPARKLE_VER tools checked, in $TOOLS =="
+  exit 0
 fi
 
 [ -f "$DMG" ] || { echo "no DMG at $DMG"; exit 1; }
