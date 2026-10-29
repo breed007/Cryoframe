@@ -481,6 +481,7 @@ if
 ifs
 ignore
 image
+image's
 imagekey
 images
 immutable
@@ -696,7 +697,6 @@ ntfy
 null
 numbered
 numbers
-nwritten
 octagon
 of
 off
@@ -860,6 +860,7 @@ resuming
 retention
 review
 rewrites
+rewrote
 right
 rlptgo
 ro
@@ -1150,6 +1151,7 @@ writes
 writing
 written
 wrong
+wrote
 xmark
 ya
 year

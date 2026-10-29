@@ -39,6 +39,12 @@ public enum MirrorSizing: Sendable, Equatable {
     /// more than it already holds (`held`, its bands on the drive) plus what the drive
     /// can still back (`free` less `reserve`), and never below hdiutil's `minimum`.
     ///
+    /// `shared`: the mirror has history, whose clones share the image's blocks. Then
+    /// writing over a block takes new room on the drive too, so what the drive must back
+    /// is what the image holds inside (`minimum`, which follows it: measured, 72 MB in
+    /// use, 204 MB of bands), not its bands, which can be far more after a run freed
+    /// space inside. Capped by the bands, the image could take more than the drive had.
+    ///
     /// An image that claims more space than its drive can back is not merely at risk
     /// of a failed run. When the drive fills while the image is being written, the
     /// band writes are lost and the file system inside is damaged: measured on a
@@ -47,9 +53,10 @@ public enum MirrorSizing: Sendable, Equatable {
     /// not mount at all. Held to what the drive can back, the image fills first, as an
     /// ordinary full disk, and the run fails cleanly with the previous copy whole.
     public static func targetBytes(ceiling: UInt64, held: UInt64, free: UInt64?, reserve: UInt64,
-                                   minimum: UInt64) -> UInt64 {
+                                   minimum: UInt64, shared: Bool = false) -> UInt64 {
         var target = ceiling
-        if let free { target = min(target, held + (free > reserve ? free - reserve : 0)) }
+        let backed = shared ? min(held, minimum) : held
+        if let free { target = min(target, backed + (free > reserve ? free - reserve : 0)) }
         return max(target, minimum)
     }
 
@@ -94,6 +101,18 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     }
 
     public func archive(_ source: ArchiveSource, to destinationDir: URL) throws -> ArchiveResult {
+        let watch = RunWatch()
+        do {
+            return try archive(source, to: destinationDir, watch: watch)
+        } catch {
+            // History removed to make room is gone whatever the run came to, so a run
+            // that then failed says so too, on its record (see JobExecutor.direct)
+            if let note = MirrorHistory.roomNote(watch.historyRemoved) { runner.control?.record(note: note) }
+            throw error
+        }
+    }
+
+    private func archive(_ source: ArchiveSource, to destinationDir: URL, watch: RunWatch) throws -> ArchiveResult {
         let fm = FileManager.default
         guard fm.fileExists(atPath: source.root.path) else {
             throw ArchiveError.sourceMissing(source.root.path)
@@ -148,7 +167,6 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         let wasSealed = fm.fileExists(atPath: destinationDir.appendingPathComponent(ArchiveManifest.sidecarName).path)
         let markedHere = try MirrorSeal.markOpen(destinationDir)
         var touched = false
-        let watch = RunWatch()
         var failure: Error?
         do {
             try update(source, in: destinationDir, bundle: bundle, stdin: stdin, touched: &touched, watch: watch)
@@ -156,24 +174,30 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             failure = error
         }
         watch.drive?.stop()
+        // with history sharing the image's blocks, the run's own writes take room too:
+        // another writer isn't the only way the drive fills, so the run doesn't say it is
+        let shared = fm.fileExists(atPath: bundle.path) && !MirrorHistory.entries(in: destinationDir).isEmpty
+        func dipped(_ swapped: Bool) -> MirrorCopyError {
+            shared ? .driveFilledBesideHistory(swapped: swapped) : .driveFilledByAnother(swapped: swapped)
+        }
 
         // The drive came close to full while the image was attached: some write may
         // have been lost, which rsync can't see and the file system inside may not
         // show. The run never counts as a success then, whatever else happened.
         if touched, let drive = watch.drive, drive.dipped {
             guard MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty else {
-                throw MirrorCopyError.driveFilledByAnother(swapped: watch.swapped)   // still attached: stays marked
+                throw dipped(watch.swapped)   // still attached: stays marked
             }
             switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown, control: runner.control) {
             case .damaged(let why):
                 MirrorSeal.markDamaged(destinationDir, why: why)  // so restore, health and the next run say so
                 throw MirrorCopyError.imageDamaged(why)          // stays marked; not compacted, not sealed
             case .unknown:
-                throw MirrorCopyError.driveFilledByAnother(swapped: watch.swapped)   // unchecked: stays marked
+                throw dipped(watch.swapped)   // unchecked: stays marked
             case .sound:
                 compact(bundle, stdin: stdin)
                 if wasSealed || watch.swapped { try? MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted) }
-                throw MirrorCopyError.driveFilledByAnother(swapped: watch.swapped)
+                throw dipped(watch.swapped)
             }
         }
 
@@ -187,6 +211,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                 // describe the image as it now is.
                 if wasSealed { try? MirrorSeal.seal(result, in: destinationDir, encrypted: encrypted) }
             }
+            if shared, case MirrorCopyError.driveFilled = error { throw MirrorCopyError.imageFilledBesideHistory }
             throw error
         }
         compact(bundle, stdin: stdin)
@@ -211,7 +236,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         }
         // decay found isn't kept as history: the mirror can't be trusted
         if let nights = history, (sealed.bandCheck?.mismatches ?? 0) == 0 {
-            sealed.notes += saveHistory(bundle, in: destinationDir, written: watch.written, nights: nights)
+            sealed.notes += saveHistory(bundle, in: destinationDir, written: watch.written, library: source.sizeHint, nights: nights)
         }
         return sealed
     }
@@ -220,7 +245,8 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// job no longer keeps (see MirrorHistory). Holding the image's lock, with nothing
     /// of it attached, so no attach changes it while it is cloned. A run whose history
     /// couldn't be saved still backed up: it says so, and doesn't fail.
-    private func saveHistory(_ bundle: URL, in dir: URL, written: UInt64, nights: Int) -> [String] {
+    /// `library`: its size, which the entry keeps (see MirrorHistory.writeEstimate).
+    private func saveHistory(_ bundle: URL, in dir: URL, written: UInt64, library: UInt64?, nights: Int) -> [String] {
         runner.control?.begin("Saving the mirror's history", stage: .finishing)
         guard let lock = ImageLock.acquire(bundle, wait: ImageLock.patience, control: runner.control) else {
             return ["the mirror's history wasn't saved this run: its disk image was in use"]
@@ -232,7 +258,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             return ["the mirror's history wasn't saved this run: its disk image was open elsewhere on this Mac, or that couldn't be told"]
         }
         do {
-            try MirrorHistory.save(bundle: bundle, in: dir, written: written, at: Date())
+            try MirrorHistory.save(bundle: bundle, in: dir, written: written, library: library, at: Date())
         } catch {
             return ["the mirror's history wasn't saved this run (\(error.localizedDescription))"]
         }
@@ -378,8 +404,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         // before making, growing or shrinking anything; the mirror's history goes,
         // oldest first, before the mirror is refused room
         if let needs = source.sizeHint {
-            try makingRoom(in: destinationDir, watch: watch) {
-                try Self.checkRoom(for: needs, image: bundle, imageBytes: .max, destination: destinationDir, reserve: reserve)
+            try makingRoom(in: destinationDir, bundle: bundle, library: needs, watch: watch) { writes, freed in
+                try Self.checkRoom(for: needs, image: bundle, imageBytes: .max, destination: destinationDir, reserve: reserve,
+                                   writes: writes, freed: freed)
             }
         }
         // what is free now, not what could be purged later (see JobExecutor.freeNow)
@@ -393,12 +420,14 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                                                    bandSectors: bandSectors, encrypted: encrypted,
                                                    sectors: max(imageBytes / 512, 1)), stdin: stdin)
         } else {
-            imageBytes = try fit(bundle, ceiling: ceiling, free: free, reserve: reserve, stdin: stdin,
+            let shared = !MirrorHistory.entries(in: destinationDir).isEmpty
+            imageBytes = try fit(bundle, ceiling: ceiling, free: free, reserve: reserve, shared: shared, stdin: stdin,
                                  touched: &touched) ?? ceiling
         }
         if let needs = source.sizeHint {
-            try makingRoom(in: destinationDir, watch: watch) {
-                try Self.checkRoom(for: needs, image: bundle, imageBytes: imageBytes, destination: destinationDir, reserve: reserve)
+            try makingRoom(in: destinationDir, bundle: bundle, library: needs, watch: watch) { writes, freed in
+                try Self.checkRoom(for: needs, image: bundle, imageBytes: imageBytes, destination: destinationDir, reserve: reserve,
+                                   writes: writes, freed: freed)
             }
         }
 
@@ -501,30 +530,44 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
 
     /// `check`, a room check, run again after each entry of the mirror's history is
     /// removed, oldest first, while it finds the drive short of room (see
-    /// MirrorHistory.makeRoom). The mirror always comes before its history; what went
-    /// is recorded in `watch` for the run to say. Out of history, the refusal stands.
-    private func makingRoom(in dir: URL, watch: RunWatch, _ check: () throws -> Void) throws {
-        let gone = MirrorHistory.makeRoom(MirrorHistory.entries(in: dir), fits: {
-            do { try check(); return true }
+    /// MirrorHistory.makeRoom). The mirror always comes before its history, but none
+    /// goes unless the run would fit with all of it gone; what went is recorded in
+    /// `watch` for the run to say. Out of history, the refusal stands.
+    ///
+    /// `check` is given about what the run will write into the image, of a library of
+    /// `library` bytes, when history shares its blocks (nil: nothing shares the image of
+    /// `bundle`), and room to count as already freed.
+    private func makingRoom(in dir: URL, bundle: URL, library: UInt64, watch: RunWatch,
+                            _ check: (_ writes: UInt64?, _ freed: UInt64) throws -> Void) throws {
+        func writes() -> UInt64? {
+            guard FileManager.default.fileExists(atPath: bundle.path) else { return nil }
+            return MirrorHistory.writeEstimate(MirrorHistory.entries(in: dir), library: library)
+        }
+        func fits(_ writes: UInt64?, _ freed: UInt64) -> Bool {
+            do { try check(writes, freed); return true }
             catch let e as MirrorSpaceError where e.isShortOfRoom { return false }
             catch { return true }       // not a lack of room: the check below says what
-        }, remove: { e in (try? MirrorHistory.remove(e, in: dir)) != nil })
+        }
+        let entries = MirrorHistory.entries(in: dir)
+        let gone = MirrorHistory.makeRoom(entries, fits: { fits(writes(), 0) },
+                                          fitsWithAllGone: { fits(nil, MirrorHistory.roomFreed(byRemoving: entries)) },
+                                          remove: { e in (try? MirrorHistory.remove(e, in: dir)) != nil })
         watch.historyRemoved += gone
-        try check()                     // the verdict, after whatever went
+        try check(writes(), 0)          // the verdict, after whatever went
     }
 
     /// Size the image to `MirrorSizing.targetBytes`: grow one made at an older fixed
     /// size or on a drive since replaced by a bigger one, and shrink one that claims
     /// more than its drive can now back. Returns the size afterwards, or nil if hdiutil
     /// wouldn't say.
-    private func fit(_ bundle: URL, ceiling: UInt64, free: UInt64?, reserve: UInt64, stdin: Data?,
+    private func fit(_ bundle: URL, ceiling: UInt64, free: UInt64?, reserve: UInt64, shared: Bool, stdin: Data?,
                      touched: inout Bool) throws -> UInt64? {
         let encrypted = passphrase != nil
         guard let limits = DiskImageTool.limits(of: bundle, encrypted: encrypted, stdin: stdin,
                                                 runner: runner) else { return nil }   // unknown: leave it as it is
         let minimum = limits.minimum
         let target = MirrorSizing.targetBytes(ceiling: ceiling, held: Checksum.byteSize(of: bundle),
-                                              free: free, reserve: reserve, minimum: minimum)
+                                              free: free, reserve: reserve, minimum: minimum, shared: shared)
         let now = limits.current
         // within 1% (partition overhead, the drive's free space moving a little): leave it
         guard now > target + target / 100 || now + now / 100 < target else { return now }
@@ -556,12 +599,16 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     ///
     /// `free` stands in for the destination's measured free space (now, and counting
     /// purgeable), so a test can fix the figures instead of depending on the machine.
+    /// `writes`: see roomVerdict. `freed`: room counted as free on top, to ask whether
+    /// the run would fit once that much is given back.
     static func checkRoom(for needs: UInt64, image: URL, imageBytes: UInt64, destination: URL,
-                          reserve: UInt64 = 0, free: (now: UInt64?, eventually: UInt64?)? = nil) throws {
+                          reserve: UInt64 = 0, writes: UInt64? = nil, freed: UInt64 = 0,
+                          free: (now: UInt64?, eventually: UInt64?)? = nil) throws {
+        let now = free.map(\.now) ?? JobExecutor.freeNow(for: destination)
+        let eventually = free.map(\.eventually) ?? JobExecutor.freeSpace(for: destination)
         if let refusal = roomVerdict(needs: needs, held: Checksum.byteSize(of: image), imageBytes: imageBytes,
-                                     freeNow: free.map(\.now) ?? JobExecutor.freeNow(for: destination),
-                                     freeEventually: free.map(\.eventually) ?? JobExecutor.freeSpace(for: destination),
-                                     reserve: reserve) {
+                                     freeNow: now.map { $0 + freed }, freeEventually: eventually.map { $0 + freed },
+                                     reserve: reserve, writes: writes) {
             throw refusal
         }
     }
@@ -573,10 +620,17 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     /// cap didn't: a library between the two passed the check and then ran out of room
     /// inside the image on every run, since nothing ever made macOS purge. A run in
     /// that gap is now refused up front and told why.
+    ///
+    /// `writes`: about what the run will write into the image, when history's clones
+    /// share its blocks (see MirrorHistory.writeEstimate). All of it takes new room on
+    /// the drive then, files written over as well as what the library grew by. Left
+    /// out, a mirror with history lost room on every run without the check seeing it,
+    /// until a run filled the drive.
     static func roomVerdict(needs: UInt64, held: UInt64, imageBytes: UInt64,
-                            freeNow: UInt64?, freeEventually: UInt64?, reserve: UInt64 = 0) -> MirrorSpaceError? {
+                            freeNow: UInt64?, freeEventually: UInt64?, reserve: UInt64 = 0,
+                            writes: UInt64? = nil) -> MirrorSpaceError? {
         let margin = min(needs / 20, 1 << 30)
-        let fromDrive = (needs > held ? needs - held : 0) + margin
+        let fromDrive = max(needs > held ? needs - held : 0, writes ?? 0) + margin
         if let eventually = freeEventually, eventually < fromDrive {
             return .notEnoughRoom(needed: fromDrive, free: eventually)
         }

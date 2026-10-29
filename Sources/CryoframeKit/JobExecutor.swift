@@ -1466,12 +1466,14 @@ public struct JobExecutor: Sendable {
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         // the nights of history the mirror keeps, where its drive can (see MirrorHistory)
         let history = job.historyNights > 0 && MirrorHistory.unavailable(at: dest, target: target) == nil ? job.historyNights : nil
+        let named = job.libraries.count > 1 || job.targets.count > 1 ? "\(library.displayName) on \(target.displayName): " : ""
+        // what the mirror said before it failed: history removed to make room, say
+        defer { for n in runner.control?.takeNotes() ?? [] where !notes.contains(named + n) { notes.append(named + n) } }
         // the mirror engine writes its own manifest: it has to re-seal the image after
         // a run that stops part-way, too (see MirrorSeal)
         let archive = try EngineFactory.engine(for: job.format, target: target, runner: runner, passphrase: passphrase,
                                                bandCheck: bandChecks?.settings(for: job, target: target),
                                                history: history).archive(source, to: dest)
-        let named = job.libraries.count > 1 || job.targets.count > 1 ? "\(library.displayName) on \(target.displayName): " : ""
         for n in archive.notes where !notes.contains(named + n) { notes.append(named + n) }
         if var check = archive.bandCheck {
             check.library = library.displayName; check.destination = target.displayName

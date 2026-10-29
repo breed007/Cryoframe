@@ -1004,6 +1004,11 @@ public enum MirrorCopyError: Error, Equatable {
     /// the drive came close to full while the image was being written: another program
     /// was writing to it too. `swapped`: the new copy had already gone in place.
     case driveFilledByAnother(swapped: Bool)
+    /// the same, for a mirror with history: its clones share the image's blocks, so the
+    /// run's own writes take new room, and it can't be told who filled the drive
+    case driveFilledBesideHistory(swapped: Bool)
+    /// the image filled during the run, for a mirror with history; the previous copy is intact
+    case imageFilledBesideHistory
     /// fsck_apfs found the file system inside the image damaged
     case imageDamaged(String)
     /// what a previous run left in the image couldn't be removed
@@ -1035,6 +1040,13 @@ extension MirrorCopyError: LocalizedError {
                 ? "The mirror holds the previous copy or the updated one, whichever the drive kept; its file system checked out."
                 : "Nothing was updated, and the mirror's file system checked out."
             return "the drive nearly filled while the mirror was being written, because something else was writing to it at the same time. A disk image loses writes when its drive fills, so this run doesn't count. \(copy) Make room on the drive and run again."
+        case .driveFilledBesideHistory(let swapped):
+            let copy = swapped
+                ? "The mirror holds the previous copy or the updated one, whichever the drive kept; its file system checked out."
+                : "Nothing was updated, and the mirror's file system checked out."
+            return "the drive nearly filled while the mirror was being written. The mirror's history shares its disk image's room on the drive, so all that a run writes takes new room, and something else may have been writing to the drive as well. A disk image loses writes when its drive fills, so this run doesn't count. \(copy) Make room on the drive, or remove some of the mirror's history in Storage, and run again."
+        case .imageFilledBesideHistory:
+            return "the mirror ran out of room during the run. The mirror's history shares its disk image's room on the drive, so all that a run writes takes new room, and this run wrote more than the drive had free. The previous copy is intact. Make room on the drive, or remove some of the mirror's history in Storage, and run again."
         case .imageDamaged(let why):
             return "the drive filled while the mirror was being written, and the mirror's disk image is damaged (\(why)). Don't rely on this copy: run a restore drill, and consider starting this mirror afresh on a drive with room to spare."
         case .readBackMismatch(let count, let examples):

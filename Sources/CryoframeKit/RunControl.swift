@@ -135,6 +135,18 @@ public final class RunControl: @unchecked Sendable {
     public var bandChecks: [BandCheckReport] { lock.lock(); defer { lock.unlock() }; return checks }
     private var checks: [BandCheckReport] = []
     func record(_ check: BandCheckReport) { lock.lock(); checks.append(check); lock.unlock() }
+
+    /// what a run's mirrors said that its record keeps even when the copy then failed
+    /// (see SparseBundleMirrorEngine.archive), until the run takes them for the record
+    public var notes: [String] { lock.lock(); defer { lock.unlock() }; return said }
+    private var said: [String] = []
+    func record(note: String) { lock.lock(); said.append(note); lock.unlock() }
+    func takeNotes() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        let taken = said
+        said = []
+        return taken
+    }
     public var isPaused: Bool { lock.lock(); defer { lock.unlock() }; return paused }
 
     /// the step the run is on, if it has said (see RunStep)

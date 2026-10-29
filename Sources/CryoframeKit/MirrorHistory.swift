@@ -49,9 +49,14 @@ public enum MirrorHistory {
         /// the bytes written into the mirror by the run that made it, and by the runs
         /// of any entries removed since the one before it; nil when not recorded
         public let written: UInt64?
+        /// of what its own run wrote, what wasn't the library growing: files changed and
+        /// written again (see writeEstimate); nil when not recorded
+        public let rewrote: UInt64?
+        /// the library's size when its run copied it; nil when not recorded
+        public let library: UInt64?
 
-        public init(dir: URL, date: Date, written: UInt64?) {
-            self.dir = dir; self.date = date; self.written = written
+        public init(dir: URL, date: Date, written: UInt64?, rewrote: UInt64? = nil, library: UInt64? = nil) {
+            self.dir = dir; self.date = date; self.written = written; self.rewrote = rewrote; self.library = library
         }
     }
 
@@ -67,7 +72,8 @@ public enum MirrorHistory {
             guard let date = VersionStamp.date(name) else { return nil }
             let entry = folder(in: dir).appendingPathComponent(name, isDirectory: true)
             guard FileManager.default.fileExists(atPath: entry.appendingPathComponent(ArchiveManifest.sidecarName).path) else { return nil }
-            return Entry(dir: entry, date: date, written: written(in: entry))
+            return Entry(dir: entry, date: date, written: recorded(writtenKey, in: entry), rewrote: recorded(rewroteKey, in: entry),
+                         library: recorded(libraryKey, in: entry))
         }.sorted { $0.date > $1.date }
     }
 
@@ -132,10 +138,14 @@ public enum MirrorHistory {
     }
 
     /// The entries removed, oldest first, to make room for the mirror: one at a time
-    /// until `fits` says the run fits, or none is left. The mirror always comes first.
-    /// `remove` says whether an entry went; one that wouldn't go ends it there, as the
-    /// next is newer and holds no more.
-    static func makeRoom(_ entries: [Entry], fits: () -> Bool, remove: (Entry) -> Bool) -> [Entry] {
+    /// until `fits` says the run fits, or none is left. The mirror always comes first,
+    /// but only when it would fit with every entry gone (`fitsWithAllGone`): removing
+    /// history for a run that can't fit anyway lost it all for nothing. `remove` says
+    /// whether an entry went; one that wouldn't go ends it there, as the next is newer
+    /// and holds no more.
+    static func makeRoom(_ entries: [Entry], fits: () -> Bool, fitsWithAllGone: () -> Bool = { true },
+                         remove: (Entry) -> Bool) -> [Entry] {
+        guard !entries.isEmpty, !fits(), fitsWithAllGone() else { return [] }
         var gone: [Entry] = []
         for e in entries.sorted(by: { $0.date < $1.date }) {
             if fits() { break }
@@ -144,6 +154,34 @@ public enum MirrorHistory {
         }
         return gone
     }
+
+    /// About what the next run of a mirror whose library is now `library` bytes will
+    /// write into its image: what the library grew by since the newest entry, and what
+    /// that entry's run wrote again of files that changed. nil when there is no history.
+    ///
+    /// With history, every block written into the image takes new room on the drive,
+    /// since a clone still holds the block it replaces (measured on macOS 27.0.1: +32 MB
+    /// for 32 MB written over), so the room check counts it all (see
+    /// SparseBundleMirrorEngine.roomVerdict). Without history, files written over reuse
+    /// the room the copies they replace gave back inside the image.
+    static func writeEstimate(_ entries: [Entry], library: UInt64) -> UInt64? {
+        guard let newest = entries.max(by: { $0.date < $1.date }) else { return nil }
+        let grown = newest.library.map { library > $0 ? library - $0 : 0 } ?? 0
+        return grown + (newest.rewrote ?? 0)
+    }
+
+    /// what of `written` wasn't the library growing from `before` to `library` bytes.
+    /// With no entry before it to say (the first, or the first since history was off),
+    /// it is all taken as growth: counting a first run's whole copy as written over
+    /// would have the next run remove all the history it has for room it doesn't need.
+    static func rewrote(written: UInt64, library: UInt64, before: UInt64?) -> UInt64 {
+        let base = before ?? 0
+        let grown = library > base ? library - base : 0
+        return written > grown ? written - grown : 0
+    }
+
+    /// about what removing all of `entries` would give back to the drive
+    static func roomFreed(byRemoving entries: [Entry]) -> UInt64 { aboutBytes(entries) }
 
     /// what a run says of the entries it removed to make room
     static func roomNote(_ gone: [Entry]) -> String? {
@@ -160,7 +198,7 @@ public enum MirrorHistory {
     /// once whole, so a crash never leaves an entry that looks complete. nil when an
     /// entry of that stamp is already there.
     @discardableResult
-    static func save(bundle: URL, in dir: URL, written: UInt64, at date: Date) throws -> Entry? {
+    static func save(bundle: URL, in dir: URL, written: UInt64, library: UInt64? = nil, at date: Date) throws -> Entry? {
         let fm = FileManager.default
         let history = folder(in: dir)
         try fm.createDirectory(at: history, withIntermediateDirectories: true)
@@ -168,6 +206,8 @@ public enum MirrorHistory {
         let entry = history.appendingPathComponent(stamp, isDirectory: true)
         guard !fm.fileExists(atPath: entry.path) else { return nil }
         let partial = history.appendingPathComponent(stamp + partialSuffix, isDirectory: true)
+        // what of this run's write wasn't the library growing since the newest entry
+        let rewrote = library.map { rewrote(written: written, library: $0, before: entries(in: dir).first?.library) }
         try? fm.removeItem(at: partial)
         try fm.createDirectory(at: partial, withIntermediateDirectories: false)
         do {
@@ -178,13 +218,13 @@ public enum MirrorHistory {
             if fm.fileExists(atPath: bands.path) {
                 try fm.copyItem(at: bands, to: partial.appendingPathComponent(BandTable.fileName))
             }
-            try record(written: written, in: partial)
+            try record(written: written, rewrote: rewrote, library: library, in: partial)
             try fm.moveItem(at: partial, to: entry)
         } catch {
             try? fm.removeItem(at: partial)
             throw error
         }
-        return Entry(dir: entry, date: date, written: written)
+        return Entry(dir: entry, date: date, written: written, rewrote: rewrote, library: library)
     }
 
     /// clonefile(2) of a whole folder: its blocks are shared, not copied
@@ -209,7 +249,7 @@ public enum MirrorHistory {
         let all = entries(in: dir)
         try FileManager.default.removeItem(at: entry.dir)
         if let newer = all.filter({ $0.date > entry.date }).min(by: { $0.date < $1.date }) {
-            try? record(written: (newer.written ?? 0) + (entry.written ?? 0), in: newer.dir)
+            try? record(written: (newer.written ?? 0) + (entry.written ?? 0), rewrote: newer.rewrote, library: newer.library, in: newer.dir)
         }
         rmdir(folder(in: dir).path)         // only once nothing is left in it
     }
@@ -228,15 +268,25 @@ public enum MirrorHistory {
 
     // MARK: an entry's record
 
-    static func written(in entry: URL) -> UInt64? {
+    private static let writtenKey = "written", rewroteKey = "rewrote", libraryKey = "library"
+
+    /// a figure of an entry's record: its first line names the record, each after it
+    /// is a name and a number, apart
+    private static func recorded(_ name: String, in entry: URL) -> UInt64? {
         guard let data = try? Data(contentsOf: entry.appendingPathComponent(infoName)) else { return nil }
         let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
-        guard lines.first == Substring(infoName), lines.count >= 2 else { return nil }
-        let f = lines[1].split(separator: "\t")
-        return f.count == 2 && f[0] == "written" ? UInt64(f[1]) : nil
+        guard lines.first == Substring(infoName) else { return nil }
+        for line in lines.dropFirst() {
+            let f = line.split(separator: "\t")
+            if f.count == 2, f[0] == Substring(name) { return UInt64(f[1]) }
+        }
+        return nil
     }
 
-    static func record(written: UInt64, in entry: URL) throws {
-        try Data((infoName + "\nwritten\t\(written)\n").utf8).write(to: entry.appendingPathComponent(infoName), options: .atomic)
+    static func record(written: UInt64, rewrote: UInt64? = nil, library: UInt64? = nil, in entry: URL) throws {
+        var lines = [infoName, writtenKey + "\t" + String(written)]
+        if let rewrote { lines.append(rewroteKey + "\t" + String(rewrote)) }
+        if let library { lines.append(libraryKey + "\t" + String(library)) }
+        try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: entry.appendingPathComponent(infoName), options: .atomic)
     }
 }
