@@ -232,7 +232,7 @@ enum AgentMain {
         for alert in overdue {
             guard let notice = NoticeContent.overdue(alert.payload, subject: alert.subject, policy: policy, now: now),
                   let claim = ledger.claim(alert.subject, now: now) else { continue }
-            if !(await LocalNotice.post(notice)) { ledger.release(claim) }
+            if await LocalNotice.post(notice) == false { ledger.release(claim) }
         }
     }
 

@@ -47,7 +47,7 @@ enum Notifier {
         guard let notice = NoticeContent.overdue(payload, subject: subject, policy: current(), now: now) else { return }
         Task {
             guard await LocalNotice.authorization().allowsPosting, let claim = ledger.claim(subject, now: now) else { return }
-            if !(await LocalNotice.post(notice)) { ledger.release(claim) }
+            if await LocalNotice.post(notice) == false { ledger.release(claim) }
         }
     }
 
@@ -94,10 +94,12 @@ enum LocalNotice {
         }
     }
 
-    /// whether macOS took the notice in time
+    /// Whether macOS took the notice; nil when it didn't answer in time. That may
+    /// still be shown later, so an overdue notice isn't handed back as owed for it:
+    /// handing it back had the next pass post it again.
     @discardableResult
-    static func post(_ notice: NoticeContent) async -> Bool {
-        await BoundedWait.value(within: bound, timedOut: false) { done in
+    static func post(_ notice: NoticeContent) async -> Bool? {
+        await BoundedWait.value(within: bound, timedOut: nil) { done in
             let content = UNMutableNotificationContent()
             content.title = notice.title
             content.body = notice.body

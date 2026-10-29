@@ -166,6 +166,27 @@ private func health(checked: Int, failures: [String] = [], skipped: Int = 0) -> 
         #expect(app.claim("j", now: now.addingTimeInterval(86_460)) != nil)
     }
 
+    // The first 1.8 ledger begins with the overdue notices 1.7 kept in its defaults,
+    // so a job overdue across the update isn't told twice. Once the ledger is there,
+    // the old key is never read again.
+    @Test func theLedgerBeginsWithWhat17Kept() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cf-ledger-\(UUID().uuidString)")
+        let suite = "cf-ledger-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { try? FileManager.default.removeItem(at: dir); defaults.removePersistentDomain(forName: suite) }
+        let url = dir.appendingPathComponent("overdue-notices.json")
+        defaults.set(["j": now.timeIntervalSince1970 - 3_600], forKey: AlertThrottle.overdueLocalKey)
+        let first = AlertThrottle.overdueLocal(at: url, carrying: defaults)
+        #expect(first.lastSent("j") == now.addingTimeInterval(-3_600))
+        #expect(first.claim("j", now: now) == nil, "told an hour ago")
+        first.clear("j")
+        #expect(AlertThrottle.overdueLocal(at: url, carrying: defaults).lastSent("j") == nil, "carried over once")
+        // nothing kept by 1.7: an empty ledger
+        let none = try #require(UserDefaults(suiteName: suite + "-none"))
+        defer { none.removePersistentDomain(forName: suite + "-none") }
+        #expect(AlertThrottle.overdueLocal(at: dir.appendingPathComponent("l.json"), carrying: none).lastSent("j") == nil)
+    }
+
     @Test func aReleaseDoesNotUndoALaterClaim() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cf-ledger-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }

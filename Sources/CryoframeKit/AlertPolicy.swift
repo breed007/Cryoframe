@@ -171,7 +171,7 @@ public struct AlertThrottle: @unchecked Sendable {
     /// overdue alerts sent to ntfy or a webhook, by the scheduled agent
     public static let overdueRemoteKey = "overdue.lastAlerted"
     /// overdue notices posted on this Mac, where 1.7 kept them; 1.8 keeps them in a
-    /// ledger file instead (see `overdueLocal`). Kept apart from the remote ones: the
+    /// ledger file instead, begun from this (see `overdueLocal`). Kept apart from the remote ones: the
     /// same subject in one place would let a notice on a screen nobody is looking at
     /// hold back the alert to the phone for a day.
     public static let overdueLocalKey = "overdue.lastNotified"
@@ -192,7 +192,23 @@ public struct AlertThrottle: @unchecked Sendable {
     public static func overdueLocal() -> AlertThrottle {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("app.cryoframe", isDirectory: true)
-        return AlertThrottle(ledgerAt: base.appendingPathComponent("overdue-notices.json"))
+        return overdueLocal(at: base.appendingPathComponent("overdue-notices.json"), carrying: .standard)
+    }
+
+    /// The ledger at `url`. When there is none yet, it begins with what 1.7 kept under
+    /// `overdueLocalKey` in `defaults`, so a job overdue across the update isn't told
+    /// again at the first look.
+    static func overdueLocal(at url: URL, carrying defaults: UserDefaults) -> AlertThrottle {
+        let throttle = AlertThrottle(ledgerAt: url)
+        if !FileManager.default.fileExists(atPath: url.path),
+           let old = defaults.dictionary(forKey: overdueLocalKey) as? [String: Double], !old.isEmpty {
+            throttle.ledger?.update { map in
+                guard map.isEmpty else { return (false, ()) }
+                map = old
+                return (true, ())
+            }
+        }
+        return throttle
     }
 
     private func sent() -> [String: Double] {
