@@ -262,6 +262,18 @@ public final class RestoreStaging {
 /// the library went to the Trash is finished at the next launch (see
 /// RestoreStaging.recover).
 public enum RestoreInPlace {
+    /// The built-in library that restoring `archive` in place replaces, told by the
+    /// identity of the folder it was found in; nil when it has none. Never by the
+    /// library's name: a folder chosen to be backed up can be called "Photos" or
+    /// "Mail", and taken by its name, its backup went in place of the Photos library.
+    /// A folder written before 1.6 has only a name, and Removed items are no version
+    /// of the library: both are restored beside it.
+    public static func liveLibrary(for archive: RestorableArchive, in registry: ContentTypeRegistry) -> ContentType? {
+        guard !archive.removedItems, let id = archive.libraryID,
+              ContentTypeRegistry.builtIns.contains(where: { $0.id == id }) else { return nil }
+        return registry.type(id: id)
+    }
+
     public enum Outcome: Sendable, Equatable {
         /// the copy is in the library's place; the library it replaced is in the
         /// Trash (at `trashed`, when the Trash said where)

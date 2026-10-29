@@ -153,6 +153,13 @@ public struct RestorableArchive: Sendable, Identifiable, Equatable {
         self.libraryKey = libraryKey; self.displayName = displayName ?? libraryName
     }
 
+    /// the library's id in its job (a built-in's, or a chosen folder's path), from
+    /// `libraryKey`; nil for a folder 1.5 wrote
+    public var libraryID: String? {
+        guard let key = libraryKey, let slash = key.firstIndex(of: "/") else { return nil }
+        return String(key[key.index(after: slash)...])
+    }
+
     /// the folder holding the library's archives (a version's parent, or a mirror's own)
     public var libraryFolder: URL {
         removedItems ? dir.deletingLastPathComponent().deletingLastPathComponent()

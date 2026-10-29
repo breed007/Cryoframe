@@ -36,16 +36,17 @@ final class RestoreModel: ObservableObject {
         var clashed: RestorableArchive? = nil
     }
 
-    /// the live location of a library by display name, if Cryoframe knows it — gates
-    /// the restore-in-place option.
-    func liveLocation(forLibraryNamed name: String) -> (type: ContentType, url: URL)? {
+    /// the live built-in library a version replaces in place, told by its identity
+    /// (see RestoreInPlace.liveLibrary), and where it is — gates the restore-in-place
+    /// option.
+    func liveLocation(of a: RestorableArchive) -> (type: ContentType, url: URL)? {
         let reg = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
-        guard let type = reg.types.first(where: { $0.displayName == name }),
+        guard let type = RestoreInPlace.liveLibrary(for: a, in: reg),
               let url = ContentLocator().liveRoots(of: type).first else { return nil }
         return (type, url)
     }
 
-    func canRestoreInPlace(_ a: RestorableArchive) -> Bool { liveLocation(forLibraryNamed: a.displayName) != nil }
+    func canRestoreInPlace(_ a: RestorableArchive) -> Bool { liveLocation(of: a) != nil }
 
     // MARK: - timeline grouping
 
@@ -59,7 +60,7 @@ final class RestoreModel: ObservableObject {
 
     /// validate, then ask for confirmation (the actual replace runs in confirmInPlace).
     func requestInPlace(_ a: RestorableArchive) {
-        guard let (type, _) = liveLocation(forLibraryNamed: a.displayName) else { return }
+        guard let (type, _) = liveLocation(of: a) else { return }
         if a.encrypted, passphrase.isEmpty { errorMessage = "Enter the archive's passphrase first."; return }
         if let proc = type.owningProcess, WorkspaceProcessDetector().isRunning(proc) {
             errorMessage = "Quit \(proc.displayName) before replacing its library in place."; return
@@ -68,7 +69,7 @@ final class RestoreModel: ObservableObject {
     }
 
     func confirmInPlace() {
-        guard let a = pendingInPlace, let (_, liveURL) = liveLocation(forLibraryNamed: a.displayName) else { pendingInPlace = nil; return }
+        guard let a = pendingInPlace, let (_, liveURL) = liveLocation(of: a) else { pendingInPlace = nil; return }
         pendingInPlace = nil
         let pass = a.encrypted ? passphrase : nil
         running = true; stage = "\(a.bundleName): replacing in place…"; results = []
@@ -187,7 +188,7 @@ final class RestoreModel: ObservableObject {
     func checkRoom(for a: RestorableArchive, inPlace: Bool) async {
         let key = roomKey(for: a, inPlace: inPlace)
         guard roomWarning?.key != key else { return }
-        let dest = inPlace ? liveLocation(forLibraryNamed: a.displayName)?.url.deletingLastPathComponent() : destFolder
+        let dest = inPlace ? liveLocation(of: a)?.url.deletingLastPathComponent() : destFolder
         guard let dest, let floor = RestoreRoom.floor(for: a) else { roomWarning = (key, nil); return }
         let text = await Task.detached { () -> String? in
             guard let refusal = RestoreRoom.refusal(bytes: floor, free: JobExecutor.freeSpace(for: dest),
@@ -285,7 +286,8 @@ struct RestoreView: View {
             Button("Cancel", role: .cancel) { r.pendingInPlace = nil }
             Button("Replace", role: .destructive) { r.confirmInPlace() }
         } message: {
-            Text("Your current “\(r.pendingInPlace?.bundleName ?? "library")” will be moved to the Trash and replaced with this version. You can recover it from the Trash if needed.")
+            let live = r.pendingInPlace.flatMap { r.liveLocation(of: $0)?.url.path }.map { ($0 as NSString).abbreviatingWithTildeInPath }
+            Text("Your current “\(r.pendingInPlace?.bundleName ?? "library")”\(live.map { " at \($0)" } ?? "") will be moved to the Trash and replaced with this version. You can recover it from the Trash if needed.")
         }
         .alert("Restore", isPresented: Binding(get: { r.errorMessage != nil }, set: { if !$0 { r.errorMessage = nil } })) {
             Button("OK") { r.errorMessage = nil }
