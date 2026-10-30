@@ -14,7 +14,7 @@ A live mirror is a sparsebundle disk image that updates in place. The first run 
 
 Those earlier copies are APFS clones, which share whatever hasn't changed, so each takes about what changed that night. Only an APFS drive can make clones, so a mirror on an exFAT, FAT32 or Mac OS Extended drive keeps no history. Nor does one on a network drive, where Cryoframe can't count on the server to clone rather than copy, or in a cloud folder, which would upload a whole copy for every night. The job editor says which destinations keep none, and why. History is on the same drive as the mirror, so it doesn't protect against the drive failing; see [Mirror history](versions-retention-storage.md#mirror-history).
 
-<!-- SHOT: editor-keep-history.png — The job editor's Keep section with One up-to-date copy as a disk image, the Keep history menu showing Off, 7, 14 and 30 nights with 7 chosen, and the note below it that the copies are on the same drive -->
+![The job editor's Keep section with One up-to-date copy as a disk image, Keep history set to 7 nights, and the note that the copies share what hasn't changed and are on the same drive](../screenshots/editor-keep-history.png)
 
 Pick it for a frequent working backup of something that changes often, such as an Apple Music library or an active photo library.
 

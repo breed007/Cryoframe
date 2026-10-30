@@ -62,7 +62,7 @@ The Storage button at the top of the window shows, for each job, how much space 
 
 A live mirror with history has a row of its own, "*library* · Mirror history", with how many earlier copies it holds and about how much room they take. That size is an estimate, from what each run wrote: a clone shares its data, so what one holds alone can't be measured without deleting it. Its Delete… menu deletes one earlier copy, after you confirm. Cryoframe 1.7 doesn't know about history, so if you go back to it, its Storage window counts each copy at the mirror's full size. Below each drive's run trend, a line says how much of the mirror has been checked for decay lately; see [Health and verification](health-and-verification.md#live-mirrors-the-check-for-decay).
 
-<!-- SHOT: storage-mirror-history.png — Storage with a live-mirror job expanded: the mirror's row, the "· Mirror history" row with its count, about size and Delete… menu, and under the run trend the line "Whole mirror checked for decay within the last 29 days" -->
+![Storage for a live-mirror job: the mirror, its history with 4 earlier copies, about size and a Delete menu, and the line saying the whole mirror was checked for decay within the last day](../screenshots/storage-mirror-history.png)
 
 This is the place to look before a disk fills. If a job is using more than you want, tighten its retention policy, and the next run prunes down to the new limit.
 

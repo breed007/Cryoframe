@@ -140,10 +140,20 @@ Formats:
 - One up-to-date copy as plain files. Ordinary files and folders that open on any computer, with no Cryoframe needed. What you delete from the library moves to a Removed items folder beside the copy, which you empty in Storage. Plain files can't be encrypted, and on exFAT, FAT32 and network drives they lose what those drives can't hold, such as permissions and creation dates. An app's library, such as Photos, can only be kept as plain files on an APFS drive connected to this Mac.
 - Dated versions, as disk images (sealed DMG) or zip files (sealed zip). One immutable, checksummed file per run for cold storage. An archive larger than the destination's file-size cap splits into volumes, so it fits cloud single-file limits.
 
+<p align="center">
+  <img src="docs/screenshots/editor-keep-history.png" alt="The job editor's Keep section: one up-to-date copy as a disk image, keeping 7 nights of history" width="620">
+</p>
+
 Checks:
 
 - Quick check hashes every archive after writing. A manifest (`cryoframe-manifest.json`) is written next to the archive.
 - Full check also opens the finished archive and runs a SQLite integrity check on the library's database. This is the strong check for live-database libraries.
+
+A live mirror is also checked for decay as it runs: each run rereads part of its disk image on the drive, so the whole mirror is covered about once a month. Storage shows how recently each drive's mirror was covered, and how much its history takes.
+
+<p align="center">
+  <img src="docs/screenshots/storage-mirror-history.png" alt="Storage for a live-mirror job: the mirror, its history of 4 earlier copies, and the whole mirror checked for decay within the last day" width="620">
+</p>
 
 "If the app is open" controls what happens when the owning app is running: back up anyway (the default, because the snapshot is already consistent), back up and say so, or wait until it's closed.
 
@@ -160,6 +170,12 @@ Two doors, because there are two situations.
 </p>
 
 A version a restore drill has opened is marked *Restore-tested*; one whose checksums were re-read is marked *Checksum verified*. A version nothing has checked yet carries no badge, because Cryoframe won't claim more than it knows.
+
+A live mirror with history has a timeline too: the current mirror first, then the copy from each earlier night, labeled "Mirror as of" its date and time.
+
+<p align="center">
+  <img src="docs/screenshots/restore-mirror-history.png" alt="The Restore timeline for a live mirror: the current mirror, then earlier copies named Mirror as of a date and time" width="620">
+</p>
 
 Want the photos out of a backup rather than the library? **Export Media…** copies a version's photos, videos, or other files into a folder for each month, filtered by type and date. Exporting again copies only what isn't there yet. It's offered for folders and Messages, not for app libraries such as Photos.
 

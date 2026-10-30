@@ -31,7 +31,7 @@ A plain-files copy, or a live mirror without history, has no timeline. It keeps 
 
 A live mirror with history shows a timeline: the current mirror first, then each earlier copy as "Mirror as of" the date and time it was made. Restore one the same way as any version. If decay was found in the mirror, Restore warns before using one of its earlier copies too, because they share the same data on the drive. See [Mirror history](versions-retention-storage.md#mirror-history).
 
-<!-- SHOT: restore-mirror-history.png — The Restore timeline for a live mirror with history: the current mirror first, then earlier copies named "Mirror as of" a date and time, each with the Mirror history label -->
+![The Restore timeline for a live mirror: the current mirror first, then earlier copies named Mirror as of a date and time, each labeled Mirror history](../screenshots/restore-mirror-history.png)
 
 Select a version and the bar at the bottom names exactly what will happen when you restore it.
 
