@@ -32,10 +32,6 @@ private final class Stages: @unchecked Sendable {
     var all: [RestoreStage] { lock.lock(); defer { lock.unlock() }; return seen }
 }
 
-private func attachedImages() -> String {
-    (try? ProcessCommandRunner().run("/usr/bin/hdiutil", ["info"]).stdout) ?? ""
-}
-
 @Suite(.serialized) struct RestoreSafetyTests {
 
     // MARK: room
@@ -101,7 +97,7 @@ private func attachedImages() -> String {
             }
             #expect(needed >= RestoreRoom.needed(for: 8 * 1024 * 1024) && had == free, "\(kind): \(needed) \(had)")
             #expect(!FileManager.default.fileExists(atPath: dest.appendingPathComponent("Lib").path), "\(kind)")
-            #expect(!attachedImages().contains(a.dir.path), "\(kind): the archive was left attached")
+            #expect(TestDiskImages.attaches(inside: a.dir).isEmpty, "\(kind): the archive was left attached")
         }
     }
 
