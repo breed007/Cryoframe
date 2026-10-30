@@ -512,8 +512,12 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
             let h = try FileHandle(forWritingTo: url)
             defer { try? h.close() }
             let chunk = Data(repeating: 0x7E, count: 4 << 20)
-            while let free = JobExecutor.freeNow(for: drive), free > want + UInt64(chunk.count) { try h.write(contentsOf: chunk) }
-            try h.synchronize()
+            // synced each time, so the next reading of free space counts it: macOS 15's
+            // APFS takes the room only once the data is written out
+            while let free = JobExecutor.freeNow(for: drive), free > want + UInt64(chunk.count) {
+                try h.write(contentsOf: chunk)
+                try h.synchronize()
+            }
             let left = try #require(JobExecutor.freeNow(for: drive))
             try #require(left + (8 << 20) > want, "the drive is too small for this test: \(left >> 20) MB free, \(want >> 20) MB wanted")
         }
