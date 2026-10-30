@@ -2,7 +2,7 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
-## [1.8.0] — Unreleased
+## [1.8.0] — 2026-10-30
 
 1.8 gives a live mirror two things it lacked: a check of its drive for decay, and a short history to go back to. Scheduled backups also post notifications while the app is quit. A review of 1.7.0 for this release found ways it could lose a backup, or every job, without saying so. Problems in 1.7.0 are listed first.
 
