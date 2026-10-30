@@ -59,32 +59,6 @@ private func makeLibrary(_ lib: URL) throws {
         """, in: lib)
 }
 
-/// An archive opened the way restore opens it. macOS attaches a fresh disk image by
-/// itself for a moment to scan it, and the reader refuses an encrypted image someone
-/// else holds, as it should; the test waits that out.
-private func openOnceFree(_ result: ArchiveResult, passphrase: String?) throws -> OpenedArchive {
-    let until = Date().addingTimeInterval(60)
-    while true {
-        do { return try ArchiveReader(runner: ProcessCommandRunner()).open(result, passphrase: passphrase) }
-        catch let e as DiskImageInUse where e.attachedWithoutMount && Date() < until { Thread.sleep(forTimeInterval: 1) }
-    }
-}
-
-/// A restore, waiting out a disk-image system kept busy (EAGAIN) by macOS's own scan
-/// of a fresh image or by other tests attaching at the same time. The restore's own
-/// one retry wasn't always enough under a full suite.
-func restoreOnceFree(_ archive: RestorableArchive, to dir: URL, passphrase: String? = nil) throws -> URL {
-    let until = Date().addingTimeInterval(60)
-    while true {
-        do { return try RestoreEngine().restore(archive, to: dir, passphrase: passphrase) }
-        catch let ArchiveError.toolFailed(_, _, stderr) where ProcessCommandRunner.isTransient(stderr) && Date() < until {
-            Thread.sleep(forTimeInterval: 2)
-        } catch let e as DiskImageInUse where e.attachedWithoutMount && Date() < until {
-            Thread.sleep(forTimeInterval: 2)        // an encrypted image the scan holds is refused
-        }
-    }
-}
-
 /// `src` copied into `copy` the way the run copies it, before relinking
 private func copyLikeTheRun(_ src: URL, _ copy: URL) throws {
     try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
@@ -197,9 +171,9 @@ private func differences(_ a: [String: String], _ b: [String: String]) -> [Strin
         FilteredCopy.remove(in: buildDir, runner: ProcessCommandRunner())
         #expect(!FileManager.default.fileExists(atPath: buildDir.appendingPathComponent("filtered").path), "the copy wasn't removed")
 
-        let a = try openOnceFree(direct, passphrase: passphrase)
+        let a = try TestDiskImages.open(direct, passphrase: passphrase)
         defer { a.close() }
-        let b = try openOnceFree(filtered, passphrase: passphrase)
+        let b = try TestDiskImages.open(filtered, passphrase: passphrase)
         defer { b.close() }
         let left = describe(a.root), right = describe(b.root)
         let diff = differences(left, right)
@@ -229,7 +203,7 @@ private func differences(_ a: [String: String], _ b: [String: String]) -> [Strin
         FilteredCopy.remove(in: buildDir, runner: ProcessCommandRunner())
         try ArchiveManifest.write(try ArchiveManifest.build(for: result), toDir: out)
         let archive = try #require(RestoreDiscovery.archive(at: out))
-        let restored = try restoreOnceFree(archive, to: base.appendingPathComponent("restored"))
+        let restored = try TestDiskImages.restore(archive, to: base.appendingPathComponent("restored"))
         #expect(restored.lastPathComponent == name)
         #expect(try String(contentsOf: restored.appendingPathComponent("a.txt"), encoding: .utf8) == "one\n")
         #expect(try String(contentsOf: restored.appendingPathComponent("sub/deeper/b-again.txt"), encoding: .utf8) == "two\n")

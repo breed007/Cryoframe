@@ -33,11 +33,8 @@ private func encryptedArchive(_ format: ArchiveFormat, name: String, passphrase:
         let result = try SealedArchiveEngine(.dmg, passphrase: passphrase).archive(ArchiveSource(name: name, root: lib), to: dir)
         try ArchiveManifest.write(try ArchiveManifest.build(for: result, encrypted: true), toDir: dir)
     }
+    TestDiskImages.settle(dir)
     return try #require(RestoreDiscovery.archive(at: dir))
-}
-
-private func attached(_ dir: URL) -> Bool {
-    ((try? ProcessCommandRunner().run("/usr/bin/hdiutil", ["info"]).stdout) ?? "").contains(dir.path)
 }
 
 @Suite(.serialized) struct EscrowTrustTests {
@@ -90,7 +87,7 @@ private func attached(_ dir: URL) -> Bool {
         #expect(found.passphrase == "second" && found.proof == .opens)
         let none = check.firstOpening(a, candidates: ["first", "third"])
         #expect(none.passphrase == nil && none.proof == .wrongKey)
-        #expect(!attached(dir), "the check left the archive attached")
+        #expect(TestDiskImages.attaches(inside: dir).isEmpty, "the check left the archive attached")
     }
 
     // A split archive or one evicted to the cloud can't be tried without putting it
