@@ -84,6 +84,7 @@ private func entry(_ p: String, _ k: ContentsEntry.Kind = .file) -> ContentsEntr
         try p.run(); inp.fileHandleForWriting.write(Data("pw".utf8)); try inp.fileHandleForWriting.close()
         p.waitUntilExit()
         try #require(p.terminationStatus == 0)
+        TestDiskImages.settle(dmg)
         let result = ArchiveResult(artifacts: [dmg], format: .sealedDMG)
         let work = base.appendingPathComponent("work")
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
@@ -113,11 +114,8 @@ private func entry(_ p: String, _ k: ContentsEntry.Kind = .file) -> ContentsEntr
         print("REAL opened=\(opened) canceled=\(canceled) failed=\(failed)")
         let left = (try? fm.contentsOfDirectory(atPath: work.path)) ?? []
         #expect(left.isEmpty, "work left: \(left)")
-        let info = Process(); info.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil"); info.arguments = ["info"]
-        let out = Pipe(); info.standardOutput = out; try info.run()
-        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        info.waitUntilExit()
-        #expect(!text.contains("enc.dmg"), "still attached")
+        let left = TestDiskImages.attaches(of: dmg)
+        #expect(left.isEmpty, "still attached: \(left)")
     }
 
     // The suffix rule: what a path query adds on top of the substring match.

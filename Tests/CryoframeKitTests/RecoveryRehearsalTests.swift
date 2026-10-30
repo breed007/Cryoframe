@@ -36,22 +36,33 @@ private func writeArchive(_ dest: URL, library: String, day: Int, passphrase: St
     let result = try SealedArchiveEngine(format, passphrase: passphrase)
         .archive(ArchiveSource(name: library, root: src), to: versionDir)
     try ArchiveManifest.write(try ArchiveManifest.build(for: result, encrypted: passphrase != nil), toDir: versionDir)
+    if format == .dmg { TestDiskImages.settle(versionDir) }
     return versionDir
 }
 
 /// hdiutil attach answers "busy" for the first `failures` attaches, then behaves.
+///
+/// `realBusy` counts the attaches after those that the Mac itself answered busy: on a
+/// loaded CI runner the real disk-image system can still say so, and the code under
+/// test is right to try again then. Every attach is one of the scripted failures, one
+/// of those, or the one that opens the image.
 final class BusyForAWhile: CommandRunner, @unchecked Sendable {
     private let inner = ProcessCommandRunner()
     private let lock = NSLock()
     private var left: Int
-    private(set) var attaches = 0
+    private var _attaches = 0, _realBusy = 0
+    var attaches: Int { lock.lock(); defer { lock.unlock() }; return _attaches }
+    var realBusy: Int { lock.lock(); defer { lock.unlock() }; return _realBusy }
     init(failures: Int) { left = failures }
     func run(_ launchPath: String, _ args: [String], stdin: Data?) throws -> CommandResult {
-        if (launchPath as NSString).lastPathComponent == "hdiutil", args.first == "attach" {
-            lock.lock(); attaches += 1; let fail = left > 0; if fail { left -= 1 }; lock.unlock()
+        let attach = (launchPath as NSString).lastPathComponent == "hdiutil" && args.first == "attach"
+        if attach {
+            lock.lock(); _attaches += 1; let fail = left > 0; if fail { left -= 1 }; lock.unlock()
             if fail { return CommandResult(status: 1, stdout: "", stderr: "hdiutil: attach failed - Resource temporarily unavailable\n") }
         }
-        return try inner.run(launchPath, args, stdin: stdin)
+        let result = try inner.run(launchPath, args, stdin: stdin)
+        if attach, !result.ok, ProcessCommandRunner.isTransient(result.stderr) { lock.lock(); _realBusy += 1; lock.unlock() }
+        return result
     }
 }
 
@@ -69,7 +80,7 @@ final class BusyForAWhile: CommandRunner, @unchecked Sendable {
         let dump = r.outcomes.map { "\($0.library): \($0.detail)" }.joined(separator: " | ")
         #expect(r.passed, "\(dump)")
         #expect(r.openedCount == 1, "\(dump)")
-        #expect(busy.attaches == 9)
+        #expect(busy.attaches == 9 + busy.realBusy, "\(busy.realBusy) answered busy by the Mac itself")
     }
 
     @Test func rehearsingOpensEveryLibraryARecoveryWouldFind() throws {

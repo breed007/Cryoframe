@@ -108,7 +108,7 @@ private func archiveIn(_ dest: URL) throws -> RestorableArchive {
         #expect(built.notes.isEmpty, "a direct build that kept every lock still said: \(built.notes)")
         try ArchiveManifest.write(try ArchiveManifest.build(for: built.archive), toDir: out)
         let archive = try #require(RestoreDiscovery.archive(at: out))
-        let restored = try restoreOnceFree(archive, to: base.appendingPathComponent("restored"))
+        let restored = try TestDiskImages.restore(archive, to: base.appendingPathComponent("restored"))
         defer { unlock(restored) }
         for rel in ["locked.txt", "Locked", "combo.txt"] {
             #expect(flags(restored.appendingPathComponent(rel)) & UInt32(UF_IMMUTABLE) != 0, "\(rel) came back unlocked")
@@ -159,7 +159,7 @@ private func archiveIn(_ dest: URL) throws -> RestorableArchive {
         #expect(!exists(scratch.appendingPathComponent(job.id)), "the job's scratch folder was left")
         #expect(flags(lib.appendingPathComponent("app.log")) & UInt32(UF_APPEND) != 0, "the library's own flag was taken off")
 
-        let restored = try restoreOnceFree(try archiveIn(dest), to: base.appendingPathComponent("restored"))
+        let restored = try TestDiskImages.restore(try archiveIn(dest), to: base.appendingPathComponent("restored"))
         defer { unlock(restored) }
         for rel in ["locked.txt", "Locked", "app.log"] {
             let locked = flags(restored.appendingPathComponent(rel)) & MirrorCopy.lockingFlags != 0

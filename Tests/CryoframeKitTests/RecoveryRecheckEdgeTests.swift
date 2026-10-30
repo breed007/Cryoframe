@@ -96,15 +96,11 @@ private func report(error: String) -> String {
         try FileManager.default.createDirectory(at: mnt, withIntermediateDirectories: true)
         let args = how == "no mount" ? ["attach", "-readonly", "-nomount", "-stdinpass", image!.path]
                                      : ["attach", "-readonly", "-nobrowse", "-stdinpass", "-mountpoint", mnt.path, image!.path]
-        // A system process sometimes attaches a freshly written image itself (writable,
-        // no mount point, for minutes; seen in full-suite runs) and this attach then
-        // says "Resource temporarily unavailable". Wait a bounded time for it.
-        var attached = try TestDiskImages.run(args, stdin: Data("right".utf8))
-        let until = ProcessInfo.processInfo.systemUptime + 60
-        while !attached.ok, attached.stderr.contains("temporarily unavailable"), ProcessInfo.processInfo.systemUptime < until {
-            Thread.sleep(forTimeInterval: 2)
-            attached = try TestDiskImages.run(args, stdin: Data("right".utf8))
-        }
+        // macOS attaches a freshly written image itself to scan it, for over a minute
+        // in full-suite runs, and this attach then says "Resource temporarily
+        // unavailable" (see TestDiskImages)
+        TestDiskImages.settle(image!)
+        let attached = try TestDiskImages.run(args, stdin: Data("right".utf8))
         try #require(attached.ok, "\(attached.stderr)")
         held = device(attached)
         try #require(held != nil)

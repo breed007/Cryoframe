@@ -32,11 +32,8 @@ private func encryptedDMG(name: String, passphrase: String, base: URL) throws ->
     let dir = base.appendingPathComponent("dest").appendingPathComponent(name)
     let result = try SealedArchiveEngine(.dmg, passphrase: passphrase).archive(ArchiveSource(name: name, root: lib), to: dir)
     try ArchiveManifest.write(try ArchiveManifest.build(for: result, encrypted: true), toDir: dir)
+    TestDiskImages.settle(dir)
     return try #require(RestoreDiscovery.archive(at: dir))
-}
-
-private func attachedDevices(of image: URL) -> Bool {
-    ((try? ProcessCommandRunner().run("/usr/bin/hdiutil", ["info"]).stdout) ?? "").contains(image.path)
 }
 
 private func damage(_ file: URL, at offset: UInt64, count: Int) throws {
@@ -74,7 +71,7 @@ private func damage(_ file: URL, at offset: UInt64, count: Int) throws {
         }
         try? reading.close()
         opened.close()
-        #expect(!attachedDevices(of: image), "left attached")
+        #expect(TestDiskImages.attaches(of: image).isEmpty, "left attached")
     }
 
     // A disk image whose first bytes are damaged attaches as a raw disk, with any
@@ -87,7 +84,7 @@ private func damage(_ file: URL, at offset: UInt64, count: Int) throws {
         try damage(image, at: 0, count: 8)
         let proof = KeyCheck().check(a, passphrase: "wrong")
         #expect(proof != .opens, "a wrong passphrase 'opened' a damaged image")
-        #expect(!attachedDevices(of: image), "left attached")
+        #expect(TestDiskImages.attaches(of: image).isEmpty, "left attached")
     }
 
     // What the wizard is told of an archive every candidate is refused by: with a
@@ -104,7 +101,7 @@ private func damage(_ file: URL, at offset: UInt64, count: Int) throws {
         #expect(KeyCheck().check(a, passphrase: "right") == .wrongKey)
         // the manifest's checksum tells the two apart
         #expect(!(try ChecksumVerifier().reverify(archiveDir: a.dir)).passed)
-        #expect(!attachedDevices(of: image), "left attached")
+        #expect(TestDiskImages.attaches(of: image).isEmpty, "left attached")
     }
 
     // A 1.4 file: one joined string of libraries. Still matched, name by name.

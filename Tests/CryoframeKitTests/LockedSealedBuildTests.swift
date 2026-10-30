@@ -71,14 +71,6 @@ private func buildDir(_ root: URL, job: String = UUID().uuidString) -> URL {
     root.appendingPathComponent("\(job)/build/projects", isDirectory: true)
 }
 
-private func openOnceFree(_ result: ArchiveResult, passphrase: String? = nil) throws -> OpenedArchive {
-    let until = Date().addingTimeInterval(60)
-    while true {
-        do { return try ArchiveReader(runner: ProcessCommandRunner()).open(result, passphrase: passphrase) }
-        catch let e as DiskImageInUse where e.attachedWithoutMount && Date() < until { Thread.sleep(forTimeInterval: 1) }
-    }
-}
-
 /// macOS 15's hdiutil, as measured on CI: `create -srcfolder` of a folder holding a
 /// locked item fails, naming the item on the volume it builds. Everything else runs.
 private final class RefusesLocks: CommandRunner, @unchecked Sendable {
@@ -221,7 +213,7 @@ private struct FillsScratch: CommandRunner {
         }
         #expect(flags(lib.appendingPathComponent("locked.txt")) & UInt32(UF_IMMUTABLE) != 0, "the library's own lock was taken off")
 
-        let opened = try openOnceFree(built.archive, passphrase: passphrase)
+        let opened = try TestDiskImages.open(built.archive, passphrase: passphrase)
         defer { opened.close() }
         #expect(try String(contentsOf: opened.root.appendingPathComponent("locked.txt"), encoding: .utf8) == "locked\n")
         #expect(try String(contentsOf: opened.root.appendingPathComponent("Locked/kept.txt"), encoding: .utf8) == "kept\n")
@@ -353,7 +345,7 @@ private struct FillsScratch: CommandRunner {
                                                    runner: ProcessCommandRunner())
         #expect(built.notes.count == 1 && built.notes[0].hasPrefix("Projects: left the lock off 3 locked items in the zip ("), "\(built.notes)")
         #expect(built.notes[0].contains("A zip can't keep an item's lock."))
-        let opened = try openOnceFree(built.archive)
+        let opened = try TestDiskImages.open(built.archive)
         defer { opened.close() }
         let unpacked = opened.root.appendingPathComponent("Projects/locked.txt")
         #expect(FileManager.default.fileExists(atPath: unpacked.path))

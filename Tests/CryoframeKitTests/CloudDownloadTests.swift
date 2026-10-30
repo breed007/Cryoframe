@@ -69,6 +69,7 @@ private func tempDir(_ tag: String) -> URL {
         defer { for d in [src, out, work] { try? FileManager.default.removeItem(at: d) } }
         try Data("inside".utf8).write(to: src.appendingPathComponent("a.txt"))
         let result = try SealedArchiveEngine(.dmg).archive(ArchiveSource(name: "Lib", root: src), to: out)
+        TestDiskImages.settle(out)
         let provider = FakeProvider(seconds: 3)
         let runner = Watching(inner: ProcessCommandRunner(quietLimit: 30), provider: provider, download: RunControl(quietLimit: 1))
         let opened = try ArchiveReader(runner: runner, workBase: work, cloud: provider.download).open(result)

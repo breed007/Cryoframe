@@ -69,14 +69,6 @@ private func filteredLeftovers(_ root: URL) -> [String] {
     (FileManager.default.enumerator(atPath: root.path)?.allObjects as? [String] ?? []).filter { $0.contains(FilteredCopy.folderName) }
 }
 
-private func openOnceFree(_ result: ArchiveResult, passphrase: String? = nil) throws -> OpenedArchive {
-    let until = Date().addingTimeInterval(60)
-    while true {
-        do { return try ArchiveReader(runner: ProcessCommandRunner()).open(result, passphrase: passphrase) }
-        catch let e as DiskImageInUse where e.attachedWithoutMount && Date() < until { Thread.sleep(forTimeInterval: 1) }
-    }
-}
-
 /// Stop pressed a moment after a chosen command starts
 private struct StopDuring: CommandRunner {
     let inner: ProcessCommandRunner
@@ -115,6 +107,7 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         try ArchiveManifest.write(try ArchiveManifest.build(for: result, encrypted: false), toDir: dir)
         libraries.append(.genericFolder(id: name.lowercased(), displayName: name, path: .absolute(lib.path)))
     }
+    if kind == .dmg { TestDiskImages.settle(base.appendingPathComponent("dest")) }
     let target = Target.localVolume(id: "d", name: "Backups", dir: base.appendingPathComponent("dest"))
     return BackupJob(name: "Nightly", libraries: libraries, target: target, format: kind == .zip ? .sealedZip : .sealedDMG,
                      frequency: .daily(hour: 2, minute: 0), createdAt: Date(timeIntervalSince1970: 0))
@@ -363,9 +356,9 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         let filtered = try SealedArchiveEngine(.dmg, passphrase: passphrase).archive(ArchiveSource(name: "Projects", root: made.copy),
                                                                                      to: buildDir)
         FilteredCopy.remove(in: buildDir, runner: ProcessCommandRunner())
-        let a = try openOnceFree(direct, passphrase: passphrase)
+        let a = try TestDiskImages.open(direct, passphrase: passphrase)
         defer { a.close() }
-        let b = try openOnceFree(filtered, passphrase: passphrase)
+        let b = try TestDiskImages.open(filtered, passphrase: passphrase)
         defer { b.close() }
         var births: [String] = [], nsecs: [String] = []
         for rel in ["Old/a.txt", "Old/Inner/b.txt", "c.txt", "Old/Inner", "Old"] {
@@ -501,7 +494,7 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         }
         let result = try SealedArchiveEngine(.zip).archive(ArchiveSource(name: "Projects", root: lib), to: base.appendingPathComponent("out"))
         Thread.sleep(forTimeInterval: 1.1)          // an unpack date can't pass for the library's
-        let opened = try openOnceFree(result)
+        let opened = try TestDiskImages.open(result)
         defer { opened.close() }
         func date(_ rel: String) -> Int {
             var st = stat()
@@ -550,15 +543,9 @@ private func sealedJob(_ base: URL, _ kind: SealedArchiveEngine.Sealed, names: [
         let report = RecoveryRehearsal(runner: runner, freeSpace: { _ in 1 << 40 })
             .rehearse(destination: base.appendingPathComponent("dest"), expecting: ["Alpha", "Bravo"])
         #expect(report.canceled && report.outcomes.isEmpty, "\(report.outcomes)")
-        let opened = base.appendingPathComponent("dest/Alpha/Alpha.dmg").path
-        let until = Date().addingTimeInterval(30)
-        var info = ""
-        repeat {
-            info = try ProcessCommandRunner().run("/usr/bin/hdiutil", ["info"]).stdout
-            if !info.contains(opened) { break }
-            Thread.sleep(forTimeInterval: 1)
-        } while Date() < until
-        #expect(!info.contains(opened), "the rehearsal's image was left attached")
+        // macOS's own scan of the image isn't the rehearsal's (see TestDiskImages)
+        let left = TestDiskImages.leftovers(of: base.appendingPathComponent("dest/Alpha/Alpha.dmg"), within: 30)
+        #expect(left.isEmpty, "the rehearsal's image was left attached: \(left)")
         #expect(Set(CancelableCheckTests.openWorkDirs()).subtracting(before).isEmpty, "a work folder was left")
     }
 

@@ -374,6 +374,7 @@ private var deadOwner: ProcessIdentity {
         defer { for d in [out.deletingLastPathComponent(), base, back, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) } }
         let engine = SparseBundleMirrorEngine(sizeGB: 1, mountBase: base)
         _ = try engine.archive(ArchiveSource(name: name, root: src), to: out)
+        TestDiskImages.settle(out)          // a run refuses an image macOS is still scanning, after 20 s
         try Data("changed".utf8).write(to: src.appendingPathComponent("f0.txt"))
         let result = try engine.archive(ArchiveSource(name: name, root: src), to: out)
 

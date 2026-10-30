@@ -80,15 +80,6 @@ private final class StopPart: @unchecked Sendable {
     }
 }
 
-private func hdiutilInfo() -> String {
-    let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil"); p.arguments = ["info"]
-    let out = Pipe(); p.standardOutput = out; p.standardError = Pipe()
-    guard (try? p.run()) != nil else { return "" }
-    let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    p.waitUntilExit()
-    return text
-}
-
 /// the image's library copy against the library: by structure, and byte for byte
 private func copyMatches(_ bundle: URL, _ lib: URL, root expected: [String]) throws {
     let mnt = realTemp("look")
@@ -164,7 +155,7 @@ private func copyMatches(_ bundle: URL, _ lib: URL, root expected: [String]) thr
         #expect(latency < 10, "the run went on \(latency) s after Stop")
         #expect(control.step == nil, "a step outlived the run")
         #expect(MirrorMounts.mountPoints(of: bundle, runner: ProcessCommandRunner()).isEmpty, "the image was left mounted")
-        #expect(!hdiutilInfo().contains(base.lastPathComponent), "the image was left attached")
+        #expect(TestDiskImages.attaches(inside: base).isEmpty, "the image was left attached")
         // the volume's lock file stays, by design; a work folder or mountpoint must not
         let left = ((try? FileManager.default.contentsOfDirectory(atPath: mounts.path)) ?? []).filter { !$0.hasPrefix("cf-volume-lock-") }
         #expect(left.isEmpty, "the mount base kept \(left)")
@@ -198,7 +189,7 @@ private func copyMatches(_ bundle: URL, _ lib: URL, root expected: [String]) thr
         s2.follow(second)
         #expect(throws: CancelledError.self) { try engine(second).archive(ArchiveSource(name: "Lib", root: lib), to: out) }
         #expect(s2.stoppedIn == "Removing an unfinished copy an earlier run left", "stopped in \(s2.stoppedIn ?? "-")")
-        #expect(!hdiutilInfo().contains(base.lastPathComponent), "the image was left attached")
+        #expect(TestDiskImages.attaches(inside: base).isEmpty, "the image was left attached")
 
         _ = try engine(RunControl()).archive(ArchiveSource(name: "Lib", root: lib), to: out)
         #expect(!MirrorSeal.isOpen(out))

@@ -268,6 +268,7 @@ private func export(_ source: URL, _ dest: URL, _ filter: MediaExportFilter = Me
         try p.run(); inp.fileHandleForWriting.write(Data("pw".utf8)); try inp.fileHandleForWriting.close()
         #expect(waitBounded(p, seconds: 120) != nil)
         try #require(p.terminationStatus == 0)
+        TestDiskImages.settle(dmg)
         let result = ArchiveResult(artifacts: [dmg], format: .sealedDMG)
         let work = base.appendingPathComponent("work")
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -276,12 +277,7 @@ private func export(_ source: URL, _ dest: URL, _ filter: MediaExportFilter = Me
                 try ArchiveReader(runner: ProcessCommandRunner(control: control), workBase: work).open(result, passphrase: pass)
             }
         }
-        func attached() -> Bool {
-            let i = Process(); i.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil"); i.arguments = ["info"]
-            let o = Pipe(); i.standardOutput = o; i.standardError = Pipe(); try? i.run()
-            let t = String(decoding: o.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self); i.waitUntilExit()
-            return t.contains(base.lastPathComponent)
-        }
+        func attached() -> Bool { !TestDiskImages.attaches(inside: base).isEmpty }
 
         // Stop while it opens (the sheet's Stop before a control exists closes the opener)
         let first = ArchiveOpener()
