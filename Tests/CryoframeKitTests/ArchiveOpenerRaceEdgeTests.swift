@@ -114,8 +114,8 @@ private func entry(_ p: String, _ k: ContentsEntry.Kind = .file) -> ContentsEntr
         print("REAL opened=\(opened) canceled=\(canceled) failed=\(failed)")
         let left = (try? fm.contentsOfDirectory(atPath: work.path)) ?? []
         #expect(left.isEmpty, "work left: \(left)")
-        let left = TestDiskImages.attaches(of: dmg)
-        #expect(left.isEmpty, "still attached: \(left)")
+        let attached = TestDiskImages.attaches(of: dmg)
+        #expect(attached.isEmpty, "still attached: \(attached)")
     }
 
     // The suffix rule: what a path query adds on top of the substring match.
