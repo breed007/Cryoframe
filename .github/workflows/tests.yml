@@ -1,4 +1,5 @@
-# Builds CryoframeKit and runs its test suite on macOS. Cloud agent sessions run
+# Builds CryoframeKit and runs its test suite on macOS, then compiles the app and
+# the helper on one leg. Cloud agent sessions run
 # on Linux and can't build this app, so this is the only place their pull
 # requests get compiled and tested before a merge.
 name: Tests
@@ -72,3 +73,14 @@ jobs:
           wait $pid; status=$?
           grep -vE '^(CompileSwift|SwiftCompile|SwiftDriver|Ld|CodeSign|ProcessInfoPlistFile|WriteAuxiliaryFile|CreateBuildDirectory|MkDir|Copy|Touch|RegisterExecutionPolicyException|GenerateAssetSymbols|note:|    cd |    export |    /Applications/Xcode)' test.log
           exit $status
+
+      - name: Build the app and the helper
+        # The tests cover CryoframeKit only. This compiles the app (which embeds
+        # the helper), so a change to either that doesn't build fails here and not
+        # at the next release build on the Mac. One leg is enough to catch that.
+        if: matrix.os == 'macos-26'
+        run: |
+          xcodebuild build -scheme Cryoframe -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" > build.log 2>&1 \
+            || { grep -E 'error:|BUILD FAILED' build.log; exit 1; }
+          tail -n 3 build.log
