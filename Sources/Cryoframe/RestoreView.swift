@@ -229,6 +229,8 @@ struct RestoreView: View {
     @State private var mode: RestoreMode = .beside
     @State private var finding = false
     @State private var exporting: RestorableArchive?
+    /// the damage warning for the mirror last looked at (see loadMirrorWarning)
+    @State private var mirrorWarning: (id: String, text: String?)?
 
     // effective selection, with fallbacks so the view is always coherent
     private var activeLibrary: String? { selectedLibrary ?? r.orderedLibraries.first }
@@ -557,9 +559,8 @@ struct RestoreView: View {
                         Text("This mirror holds one copy, kept up to date, so there's a single state to restore: right now. A mirror on an APFS drive connected to this Mac also keeps a copy from each of its recent nights, unless Keep history is off for the job, and Restore lists those here once there is one. The disk image and zip formats keep dated versions too.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         // said before a restore uses it, not only when the restore's check refuses it
-                        if let v, let why = MirrorSeal.damage(in: v.dir) {
-                            Label("This mirror is damaged: \(MirrorSeal.damagedDetail(why, in: v.dir)) What a restore gets from it may be incomplete or corrupt.",
-                                  systemImage: "exclamationmark.octagon.fill")
+                        if let v, let w = mirrorWarning, w.id == v.id, let warning = w.text {
+                            Label(warning, systemImage: "exclamationmark.octagon.fill")
                                 .font(.caption).foregroundStyle(Color.cryoCrit).fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -573,6 +574,7 @@ struct RestoreView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(16)
+        .task(id: v) { if let v { await loadMirrorWarning(v) } }
     }
 
     /// A plain-files copy: ordinary files and folders, brought up to date by each run,
@@ -639,7 +641,7 @@ struct RestoreView: View {
                      : "Restore \(activeLibrary ?? "") from \(relative(v.version))\(v.version.map { " · " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")")
                     .font(.callout)
                 // (a mirror without history says it in its own pane)
-                if let warning = Self.mirrorWarning(v), !r.isSingleCurrent(activeLibrary ?? "") {
+                if let w = mirrorWarning, w.id == v.id, let warning = w.text, !r.isSingleCurrent(activeLibrary ?? "") {
                     Label(warning, systemImage: "exclamationmark.octagon.fill")
                         .font(.caption2).foregroundStyle(Color.cryoCrit).lineLimit(4)
                 }
@@ -663,6 +665,7 @@ struct RestoreView: View {
                 }
             }
             .task(id: r.roomKey(for: v, inPlace: effectiveMode == .inPlace)) { await r.checkRoom(for: v, inPlace: effectiveMode == .inPlace) }
+            .task(id: v) { await loadMirrorWarning(v) }
         } else {
             Text("Select a version to restore.").font(.callout).foregroundStyle(.secondary)
         }
@@ -798,11 +801,20 @@ struct RestoreView: View {
         return "the current mirror and \(earlier) earlier cop\(earlier == 1 ? "y" : "ies")"
     }
 
+    /// Reads the mirror's warning off the main thread: it reads the destination
+    /// drive, which may have spun down or stalled, and the view's body must not wait
+    /// on that. Read again whenever the version shown changes.
+    private func loadMirrorWarning(_ v: RestorableArchive) async {
+        let text = await Task.detached { Self.mirrorWarning(v) }.value
+        // not from a task another version has replaced: it would take this one's place
+        if !Task.isCancelled { mirrorWarning = (v.id, text) }
+    }
+
     /// Said before a restore uses a damaged mirror, or an earlier copy of one: its
     /// history shares the mirror's blocks on the drive, so decay found in the mirror
     /// may be in its earlier copies too, before and after it is started over (see
     /// MirrorHistory.restoreWarning).
-    static func mirrorWarning(_ v: RestorableArchive) -> String? {
+    nonisolated static func mirrorWarning(_ v: RestorableArchive) -> String? {
         guard v.format == .liveMirror else { return nil }
         if v.mirrorHistory { return MirrorHistory.restoreWarning(entry: v.dir, mirror: v.libraryFolder) }
         guard let why = MirrorSeal.damage(in: v.libraryFolder) else { return nil }
