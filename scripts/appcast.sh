@@ -39,12 +39,22 @@ private_to_me() {
 }
 
 FETCH_WORK=""
+MNT=""
+# One exit trap for both: a failure while the DMG is attached must not leave it
+# attached, nor the folders behind.
+cleanup() {
+  if [ -n "$MNT" ]; then
+    hdiutil detach "$MNT" >/dev/null 2>&1 || hdiutil detach "$MNT" -force >/dev/null 2>&1 || true
+    rmdir "$MNT" 2>/dev/null || true
+  fi
+  if [ -n "$FETCH_WORK" ]; then rm -rf "$FETCH_WORK"; fi
+}
+trap cleanup EXIT
 fetch_sparkle() {
   echo "== fetching Sparkle $SPARKLE_VER tools =="
   mkdir -p "$CACHE" && chmod 700 "$CACHE"
   private_to_me "$CACHE" || { echo "$CACHE isn't private to you; refusing to keep the signing tool there"; exit 1; }
   FETCH_WORK=$(mktemp -d "$CACHE/fetch.XXXXXX")
-  trap 'rm -rf "$FETCH_WORK"' EXIT
   curl -fsSL -o "$FETCH_WORK/sparkle.tar.xz" \
     "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VER/Sparkle-$SPARKLE_VER.tar.xz"
   local got
@@ -82,11 +92,20 @@ APP_IN_DMG=$(find "$MNT" -maxdepth 1 -name '*.app' | head -1)
 BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_IN_DMG/Contents/Info.plist")
 SHORT=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_IN_DMG/Contents/Info.plist")
 hdiutil detach "$MNT" >/dev/null; rmdir "$MNT" 2>/dev/null || true
+MNT=""
 [ -n "$BUILD" ] || { echo "couldn't read CFBundleVersion from the DMG"; exit 1; }
 if [ "$SHORT" != "$VERSION" ]; then
   echo "warning: DMG marketing version ($SHORT) != argument ($VERSION) — using $SHORT for the label"
 fi
 echo "  marketing $SHORT · build $BUILD"
+
+# A second run for one version would add a second <item>; the feed is edited by
+# hand to replace one.
+if grep -Fq "<sparkle:shortVersionString>$SHORT</sparkle:shortVersionString>" appcast.xml \
+   || grep -Fq "<sparkle:version>$BUILD</sparkle:version>" appcast.xml; then
+  echo "appcast.xml already has an item for $SHORT (or build $BUILD); remove it first to replace it"
+  exit 1
+fi
 
 # sign_update prints e.g.  sparkle:edSignature="…" length="12345"
 SIG_LINE=$("$TOOLS/sign_update" "$DMG")
