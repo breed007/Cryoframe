@@ -89,7 +89,7 @@ struct StorageView: View {
                         let failed = await Task.detached { () -> String? in
                             // holding the job's lock: a run saves and removes history itself
                             do { try RunLocks.standard().withLock(jobID: d.jobID, trigger: .cleanup) { _ in try MirrorHistory.remove(d.entry, in: d.mirror) }; return nil }
-                            catch is RunLockError { return "a backup or check of the job is running. Try again once it's done" }
+                            catch RunLockError.alreadyRunning { return "a backup or check of the job is running. Try again once it's done" }
                             catch { return error.localizedDescription }
                         }.value
                         if let failed { historyError = "Couldn't delete the \(d.label.lowercased()): \(failed)" }
