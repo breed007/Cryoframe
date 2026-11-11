@@ -52,9 +52,8 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     private static let snapshotLock = NSLock()
 
     func createSnapshot(volume: Data, reply: @escaping (Data?, Error?) -> Void) {
-        respond(reply) {
+        respond(reply, holding: Self.snapshotLock) {
             let vol = try Wire.decode(VolumeRef.self, from: volume)
-            Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
             let snap = try self.backend.create(on: vol)
             self.ledger.record(snap.name)         // own it before anything can fail
             // which volume, so reconcile looks for it there (an external source drive,
@@ -66,9 +65,8 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     }
 
     func mountSnapshot(snapshot: Data, ownerUID: uid_t, reply: @escaping (Data?, Error?) -> Void) {
-        respond(reply) {
+        respond(reply, holding: Self.snapshotLock) {
             let snap = try Wire.decode(SnapshotRef.self, from: snapshot)
-            Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
             let mount = try self.backend.mount(snap, ownerUID: ownerUID)
             if let client = self.client { self.owners.recordMount(mount.mountPoint, owner: client) }
             return mount
@@ -92,9 +90,8 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     }
 
     func deleteSnapshot(snapshot: Data, reply: @escaping (Error?) -> Void) {
-        respondVoid(reply) {
+        respondVoid(reply, holding: Self.snapshotLock) {
             let snap = try Wire.decode(SnapshotRef.self, from: snapshot)
-            Self.snapshotLock.lock(); defer { Self.snapshotLock.unlock() }
             // ownership guard: only delete what we recorded creating.
             guard self.ledger.all().contains(snap.name) else {
                 throw HelperError.refusedForeignSnapshot(name: snap.name)
@@ -117,8 +114,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     private static let reconcileLock = NSLock()
 
     func reconcile(reply: @escaping (Data?, Error?) -> Void) {
-        respond(reply) {
-            Self.reconcileLock.lock(); defer { Self.reconcileLock.unlock() }
+        respond(reply, holding: Self.reconcileLock) {
             return try self.runReconcile()
         }
     }
@@ -164,9 +160,13 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
         // connection. The short delay lets the reply flush; the locks make sure we
         // aren't mid snapshot create/mount/delete or mid reconcile (which unmounts
         // outside the snapshot lock) when we go. Same order reconcile takes them.
+        // Those calls reply before they let go of their lock (see respond), and the
+        // second delay lets that reply flush too: the agent may be the one waiting
+        // on it, at the start of a scheduled run.
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
             Self.reconcileLock.lock()
             Self.snapshotLock.lock()
+            Thread.sleep(forTimeInterval: 0.2)
             exit(0)
         }
     }
@@ -188,11 +188,18 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     /// contract does: the app only asks for reconcile at or above 1.6.0.
     static let version = SnapshotReconciler.helperVersion
 
-    private func respond<T: Encodable>(_ reply: (Data?, Error?) -> Void, _ work: () throws -> T) {
+    /// `holding`: a lock taken for the work and kept until the reply has been handed
+    /// to the connection. reloadForUpdate exits once it has these locks, so a reply
+    /// sent after the unlock could lose the race with that exit, and the caller would
+    /// see a finished call fail.
+    private func respond<T: Encodable>(_ reply: (Data?, Error?) -> Void, holding lock: NSLock? = nil,
+                                       _ work: () throws -> T) {
+        lock?.lock(); defer { lock?.unlock() }
         do { reply(try Wire.encode(try work()), nil) }
         catch { reply(nil, Self.ns(error)) }
     }
-    private func respondVoid(_ reply: (Error?) -> Void, _ work: () throws -> Void) {
+    private func respondVoid(_ reply: (Error?) -> Void, holding lock: NSLock? = nil, _ work: () throws -> Void) {
+        lock?.lock(); defer { lock?.unlock() }
         do { try work(); reply(nil) }
         catch { reply(Self.ns(error)) }
     }
