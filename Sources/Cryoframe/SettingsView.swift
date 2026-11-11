@@ -251,6 +251,8 @@ private struct ScheduleSettings: View {
     @StateObject private var schedule = ScheduleManager()
     /// why the last Enable or Disable failed; the status is read again either way
     @State private var scheduleError: String?
+    /// Disable, pressed while a scheduled pass is running: asked about first
+    @State private var confirmingDisable = false
 
     var body: some View {
         Form {
@@ -258,7 +260,12 @@ private struct ScheduleSettings: View {
                 HStack {
                     Text("Agent:"); Text(schedule.statusText).foregroundStyle(.secondary)
                     Spacer()
-                    if schedule.isEnabled { Button("Disable") { change { try schedule.unregister() } } }
+                    if schedule.isEnabled {
+                        Button("Disable") {
+                            // turning the agent off stops a pass that is running (see AgentRegistration)
+                            if Self.scheduledPassRunning() { confirmingDisable = true } else { change { try schedule.unregister() } }
+                        }
+                    }
                     else { Button("Enable") { change { try schedule.register() } } }
                     Button("Refresh") { schedule.refresh() }
                 }
@@ -272,6 +279,20 @@ private struct ScheduleSettings: View {
             }
         }
         .formStyle(.grouped)
+        .alert("A scheduled backup or check is running", isPresented: $confirmingDisable) {
+            Button("Stop It and Disable", role: .destructive) { change { try schedule.unregister() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Turning the schedule off now stops it partway, and its result isn't recorded. To let it finish, cancel and turn the schedule off afterward.")
+        }
+    }
+
+    /// Whether the scheduled agent is at work: a pass of this version's agent holds
+    /// the pass lock, and one of the agent 1.7 registered holds a job's run lock.
+    private static func scheduledPassRunning() -> Bool {
+        if AgentPassLock.isHeld() { return true }
+        let ids = JobStore.standard().load().jobs.map(\.id)
+        return RunLocks.standard().holders(of: ids).contains { !$0.value.isThisProcess }
     }
 
     /// Enable or Disable, saying why it failed. A failure used to be dropped, and the
