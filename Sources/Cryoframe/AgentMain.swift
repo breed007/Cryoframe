@@ -189,9 +189,10 @@ enum AgentMain {
             for check in checks {
                 if let p = check.alert(everyEvent: RemoteAlert.allEvents) { await RemoteAlert.deliverPayload(p) }
             }
+            // told only when an alert went: one that didn't is tried at the next pass,
+            // not held back for a day (the notice below counts too)
             for finding in pressure {
-                await RemoteAlert.deliverStorage(for: finding)
-                StorageNag.recordWarned(finding.destination, now: Date())
+                if await RemoteAlert.deliverStorage(for: finding) { StorageNag.recordWarned(finding.destination, now: Date()) }
             }
             await WakeScheduler.arm(store: store)
             sem.signal()
@@ -244,14 +245,21 @@ enum AgentMain {
                 if let n = NoticeContent.stopped(stopped, policy: policy) { notices.append(n) }
             }
         }
-        notices += pressure.compactMap { NoticeContent.storage($0, policy: policy, now: now) }
+        let storage: [(destination: String, notice: NoticeContent)] = pressure.compactMap { finding in
+            NoticeContent.storage(finding, policy: policy, now: now).map { (finding.destination, $0) }
+        }
         // overdue jobs, from the ledger the app posts from too
         let ledger = AlertThrottle.overdueLocal()
         let overdue = overdueAlerts(jobs: store.load().jobs, history: history, lastRun: store.load().lastRun,
                                     now: now, throttle: ledger)
-        guard !notices.isEmpty || !overdue.isEmpty,
+        guard !notices.isEmpty || !storage.isEmpty || !overdue.isEmpty,
               AgentNotices.shouldPost(appOpen: appOpen, authorization: await LocalNotice.authorization()) else { return }
         for notice in notices { await LocalNotice.post(notice) }
+        // A full destination counts as told (StorageNag) unless macOS refused the
+        // notice. No answer in time may still be shown, as for an overdue notice.
+        for entry in storage {
+            if await LocalNotice.post(entry.notice) != false { StorageNag.recordWarned(entry.destination, now: now) }
+        }
         for alert in overdue {
             guard let notice = NoticeContent.overdue(alert.payload, subject: alert.subject, policy: policy, now: now),
                   let claim = ledger.claim(alert.subject, now: now) else { continue }

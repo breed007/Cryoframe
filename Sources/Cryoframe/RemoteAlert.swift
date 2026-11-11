@@ -56,10 +56,12 @@ enum RemoteAlert {
         await deliver(p)
     }
 
-    /// deliver a low-space warning, awaiting the request.
-    static func deliverStorage(for finding: StoragePressure.Finding) async {
-        guard isConfigured, let p = AlertPolicy.payload(forStorage: finding) else { return }
-        await deliver(p)
+    /// deliver a low-space warning, awaiting the request. False when alerts aren't
+    /// set up or the service didn't take it.
+    @discardableResult
+    static func deliverStorage(for finding: StoragePressure.Finding) async -> Bool {
+        guard isConfigured, let p = AlertPolicy.payload(forStorage: finding) else { return false }
+        return await deliver(p)
     }
 
     /// deliver a payload the caller built (an overdue job, a run of deferrals),
