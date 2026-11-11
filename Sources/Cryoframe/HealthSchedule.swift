@@ -4,7 +4,8 @@
 //
 //  The scheduled archive-health pass the agent runs: when the configured interval
 //  has elapsed, re-verify every job's archives against their checksums and record
-//  the result. Failures surface via the menu-bar app's history watch + notifications.
+//  the result. Failures are posted by the app as it sees them appear in the history,
+//  or by the agent itself when the app isn't open (AgentMain), and sent as remote alerts.
 //
 
 import Foundation

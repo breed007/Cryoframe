@@ -22,7 +22,6 @@ final class RestoreModel: ObservableObject {
     @Published var stage = ""
     @Published var results: [Outcome] = []
     @Published var pendingInPlace: RestorableArchive?    // awaiting the replace-in-place confirmation
-    @Published var pendingDelete: RestorableArchive?     // awaiting the delete-version confirmation
     @Published var errorMessage: String?
     @Published var browsingName: String?                 // an archive is mounted for in-app browsing
     @Published var browseWarning: String?                 // said in the browser: how the archive was opened
@@ -156,17 +155,6 @@ final class RestoreModel: ObservableObject {
         browseRoot = nil
     }
 
-    func confirmDelete() {
-        guard let a = pendingDelete else { return }
-        pendingDelete = nil
-        do {
-            try FileManager.default.removeItem(at: a.dir)
-            if let folder = sourceFolder { scan(folder) }
-        } catch {
-            errorMessage = "Couldn't delete: \((error as NSError).localizedDescription)"
-        }
-    }
-
     func scan(_ folder: URL) {
         sourceFolder = folder
         archives = RestoreDiscovery.scan(folder, removedItems: true, history: true)
@@ -295,13 +283,6 @@ struct RestoreView: View {
         .alert("Restore", isPresented: Binding(get: { r.errorMessage != nil }, set: { if !$0 { r.errorMessage = nil } })) {
             Button("OK") { r.errorMessage = nil }
         } message: { Text(r.errorMessage ?? "") }
-        .alert("Delete this archive version?",
-               isPresented: Binding(get: { r.pendingDelete != nil }, set: { if !$0 { r.pendingDelete = nil } })) {
-            Button("Cancel", role: .cancel) { r.pendingDelete = nil }
-            Button("Delete", role: .destructive) { r.confirmDelete(); model.refreshProtectedSize(force: true) }
-        } message: {
-            Text("Permanently delete this version of “\(r.pendingDelete?.bundleName ?? "")”\(r.pendingDelete?.version.map { " from " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "")? This can't be undone.")
-        }
     }
 
     // MARK: - source
