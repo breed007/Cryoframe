@@ -194,7 +194,7 @@ final class AppModel: ObservableObject {
     func refreshStoragePressure() {
         let jobs = self.jobs
         guard !jobs.isEmpty else { storageFindings = []; return }
-        let retention = Dictionary(uniqueKeysWithValues: jobs.map { ($0.id, $0.retention) })
+        let retention = Dictionary(jobs.map { ($0.id, $0.retention) }, uniquingKeysWith: { first, _ in first })
         Task.detached {
             let report = StorageReporter.report(jobs)
             let found = StoragePressure.findings(storage: report, retention: retention)
@@ -503,10 +503,10 @@ final class AppModel: ObservableObject {
         let locator = ContentLocator()
         libraryValid = Dictionary(uniqueKeysWithValues:
             reg.types.map { ($0.id, !locator.liveRoots(of: $0).isEmpty) })
-        jobValid = Dictionary(uniqueKeysWithValues:
+        jobValid = Dictionary(
             jobs.map { job in
                 (job.id, job.resolvingLibraries(in: reg).libraries.allSatisfy { !locator.liveRoots(of: $0).isEmpty })
-            })
+            }, uniquingKeysWith: { first, _ in first })
     }
 
     /// whether any of a job's libraries is a built-in (so a broken path is fixable in Settings).

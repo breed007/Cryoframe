@@ -160,7 +160,7 @@ enum AgentMain {
         // drive doesn't turn into an hourly alarm.
         let pressure = StoragePressure.findings(
             storage: StorageReporter.report(store.load().jobs),
-            retention: Dictionary(uniqueKeysWithValues: store.load().jobs.map { ($0.id, $0.retention) })
+            retention: Dictionary(store.load().jobs.map { ($0.id, $0.retention) }, uniquingKeysWith: { first, _ in first })
         ).filter { $0.kind == .tight && StorageNag.shouldWarn($0.destination, now: Date()) }
         let remoteThrottle = AlertThrottle(key: AlertThrottle.overdueRemoteKey), overdueAt = Date()
         let overdue: [(AlertPolicy.Payload, @Sendable () -> Void)] = overdueAlerts(
