@@ -77,9 +77,12 @@ enum AgentMain {
             due = []
         }
 
-        let healthDue = HealthSchedule.isDue(now: Date())
+        // Don't idle-sleep from here to the exit: through the runs, the checks and
+        // rehearsals (which decide for themselves whether they are due), and then the
+        // alerts, the wake and the notices. A Mac woken for this pass that slept again
+        // before those went would never send them.
         let sleepGuard = SleepGuard()
-        if !due.isEmpty || healthDue { sleepGuard.begin() }     // don't idle-sleep mid scheduled work
+        sleepGuard.begin()
         if !due.isEmpty {
             let executor = TransferConfig.makeExecutor(detector: WorkspaceProcessDetector(), store: store)
             let registry = ContentTypeRegistry.withOverrides(LibraryOverrides.load())
@@ -156,7 +159,6 @@ enum AgentMain {
         let overdue: [(AlertPolicy.Payload, @Sendable () -> Void)] = overdueAlerts(
             jobs: store.load().jobs, history: historyStore, lastRun: store.load().lastRun, now: overdueAt, throttle: remoteThrottle)
             .map { alert in (alert.payload, { remoteThrottle.recordSent(alert.subject, now: overdueAt) }) }
-        sleepGuard.end()
 
         // Send everything before exiting. This process is the ONLY thing that will
         // tell you a scheduled backup failed while you weren't at the Mac: the app
@@ -198,6 +200,7 @@ enum AgentMain {
             posted.signal()
         }
         posted.wait()
+        sleepGuard.end()
         exit(0)
     }
 
