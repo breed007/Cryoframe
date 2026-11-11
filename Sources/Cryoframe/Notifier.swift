@@ -12,9 +12,10 @@
 //  Measured: nothing yet. Read but not measured: the agent is the app's own executable
 //  inside the bundle (BundleProgram), so macOS should take its notices as
 //  Cryoframe's. A banner from the agent has not been seen on a signed build, nor
-//  after a reboot or under Focus. That is why the agent posts last, after its
-//  history, remote alerts and wake, and gives each call 5 seconds: if it can't post,
-//  nothing else it does changes.
+//  after a reboot or under Focus. That is why the agent posts last (a run's notice
+//  after its record, lease and remote alert; the rest after the end-of-pass alerts and
+//  the wake) and gives each call 5 seconds: if it can't post, nothing else it does
+//  changes.
 //
 
 import Foundation

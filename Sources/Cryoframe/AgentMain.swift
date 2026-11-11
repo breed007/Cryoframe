@@ -6,7 +6,8 @@
 //  resumes interrupted transfers, then runs any due jobs (up to the concurrency
 //  limit) through the same JobExecutor the GUI uses, then exits. Every run holds
 //  its job's run lock, so a job the app is already running is left to the app.
-//  When the app isn't open, it also posts the notices the app would have (Notifier).
+//  When the app isn't open, it also posts the notices the app would have (Notifier):
+//  a run's as soon as it is recorded, the rest at the end of the pass.
 //
 
 import AppKit
@@ -53,7 +54,6 @@ enum AgentMain {
         var due = Scheduler().jobsToStart(store.load(), now: Date(), running: running,
                                           stoppedThisPass: resumes.stoppedJobIDs)
         var alerts: [RunRecord] = []      // failures to start, delivered once the run loop is done
-        let finished = Finished()         // every run's record, for the notices on this Mac
         var notices: [(payload: AlertPolicy.Payload, record: RunRecord)] = []     // deferrals that have gone on
         let historyStore = RunHistoryStore.standard()
         // One history record per run of deferrals, kept up to date, rather than one
@@ -130,14 +130,21 @@ enum AgentMain {
                         record = RunRecord.failure(job: current, error: error.localizedDescription,
                                                    startedAt: started, finishedAt: Date(), trigger: "scheduled")
                     }
+                    // Whether the app is open as the record appears: an open app posts
+                    // the notice itself as it sees the record, and one opened later
+                    // takes the record as already seen, so then it is ours to post.
+                    let appOpen = Self.appIsOpen()
                     historyStore.append(record)
-                    finished.add(record)
                     // each destination's trend, and a cloud run's versions for the upload check
                     RunFollowUp.record(record, job: current, health: .standard(), uploads: .standard(),
                                        lastCheck: HealthStore.standard().latest(forJob: current.id), checks: .standard())
                     lease.release()                                 // the run is over once it's recorded
                     await RemoteAlert.deliver(for: record)          // nobody is watching the screen
                     limit.signal()
+                    // The notice on this Mac now, not at the end of the pass: that may be
+                    // hours away behind other jobs and checks, and a pass that is killed
+                    // first never gets there. Last, so nothing above waits on it.
+                    await Self.postRunNotice(record, appOpen: appOpen)
                     group.leave()
                 }
             }
@@ -165,7 +172,8 @@ enum AgentMain {
         // marks every record that predates its launch as already-seen, so a failure
         // it wasn't running for is never announced later.
         // re-point the optional pmset wake at the next due job (lastRun may have changed).
-        let runs = alerts + finished.records, madeChecks = checks      // for the notices, after
+        // for the notices, after. The runs that finished have had theirs (postRunNotice).
+        let runs = alerts, madeChecks = checks
         let sem = DispatchSemaphore(value: 0)
         Task {
             for record in alerts { await RemoteAlert.deliver(for: record) }
@@ -204,8 +212,20 @@ enum AgentMain {
         exit(0)
     }
 
-    /// Notices on this Mac for what this pass did, as the app would post them (see
-    /// Notifier): when macOS allows them and the app isn't open. Each call to the
+    /// The notice on this Mac for a run this pass made, posted as soon as the run is
+    /// recorded, under the rules of `postNotices`. `appOpen`: as it was when the
+    /// record was written.
+    private static func postRunNotice(_ record: RunRecord, appOpen: Bool) async {
+        let policy = Notifier.current()
+        guard !appOpen, Bundle.main.bundleIdentifier != nil,
+              let notice = NoticeContent.run(record, policy: policy),
+              AgentNotices.shouldPost(appOpen: appOpen, authorization: await LocalNotice.authorization()) else { return }
+        await LocalNotice.post(notice)
+    }
+
+    /// Notices on this Mac for the rest of what this pass did (runs that couldn't
+    /// start, checks, full destinations, overdue jobs), as the app would post them
+    /// (see Notifier): when macOS allows them and the app isn't open. Each call to the
     /// notification center is given up after 5 seconds (LocalNotice).
     private static func postNotices(runs: [RunRecord], checks: [CheckRecording.Outcome],
                                     pressure: [StoragePressure.Finding], store: JobStore, history: RunHistoryStore,
@@ -239,7 +259,9 @@ enum AgentMain {
         }
     }
 
-    /// whether the app is open: another process of this bundle, as macOS lists apps
+    /// Whether the app is open: another process of this bundle, as macOS lists apps.
+    /// Measured on macOS 27.2: the list is current when asked for off the main thread
+    /// with no run loop turning, which is how a run's task asks.
     private static func appIsOpen() -> Bool {
         guard let id = Bundle.main.bundleIdentifier else { return false }
         let me = getpid()
@@ -260,14 +282,6 @@ enum AgentMain {
         }
         return AlertPolicy.overdueAlerts(jobs: jobs, latest: latest, lastGood: history.lastGood(), unrecordedRuns: unrecorded,
                                          now: now, throttle: throttle)
-    }
-
-    /// the records of the runs this pass made, added as each finishes
-    private final class Finished: @unchecked Sendable {
-        private let lock = NSLock()
-        private var list: [RunRecord] = []
-        var records: [RunRecord] { lock.lock(); defer { lock.unlock() }; return list }
-        func add(_ record: RunRecord) { lock.lock(); list.append(record); lock.unlock() }
     }
 
     /// Ask the helper to clean up after crashed runs before any run of ours starts.
