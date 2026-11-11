@@ -54,6 +54,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     func createSnapshot(volume: Data, reply: @escaping (Data?, Error?) -> Void) {
         respond(reply, holding: Self.snapshotLock) {
             let vol = try Wire.decode(VolumeRef.self, from: volume)
+            try HelperArguments.check(vol)
             let snap = try self.backend.create(on: vol)
             self.ledger.record(snap.name)         // own it before anything can fail
             // which volume, so reconcile looks for it there (an external source drive,
@@ -67,6 +68,13 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     func mountSnapshot(snapshot: Data, ownerUID: uid_t, reply: @escaping (Data?, Error?) -> Void) {
         respond(reply, holding: Self.snapshotLock) {
             let snap = try Wire.decode(SnapshotRef.self, from: snapshot)
+            try HelperArguments.check(snap.volume)
+            // Only a snapshot this helper made, as for delete below. Every mount the
+            // app asks for is of the snapshot it has just had made (SnapshotCoordinator),
+            // and every version of the helper has recorded those in this ledger.
+            guard self.ledger.all().contains(snap.name) else {
+                throw HelperError.refusedForeignSnapshot(name: snap.name)
+            }
             let mount = try self.backend.mount(snap, ownerUID: ownerUID)
             if let client = self.client { self.owners.recordMount(mount.mountPoint, owner: client) }
             return mount
@@ -105,6 +113,7 @@ final class HelperService: NSObject, CryoframeHelperXPC, @unchecked Sendable {
     func listSnapshots(volume: Data, reply: @escaping (Data?, Error?) -> Void) {
         respond(reply) {
             let vol = try Wire.decode(VolumeRef.self, from: volume)
+            try HelperArguments.check(vol)
             return try self.backend.list(on: vol)
         }
     }
