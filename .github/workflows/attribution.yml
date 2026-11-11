@@ -34,6 +34,12 @@ jobs:
           allowed_committers='^(breed007@gmail\.com|41339110\+breed007@users\.noreply\.github\.com|noreply@github\.com)$'
           banned='co-authored-by:|claude-session:|noreply@anthropic\.com|generated with \[?claude|claude\.ai/code'
 
+          # a deleted branch pushes an all-zero "after": there are no commits to check
+          if [ "$EVENT" != "pull_request" ] && [ "$PUSH_AFTER" = "0000000000000000000000000000000000000000" ]; then
+            echo "branch deleted; nothing to check"
+            exit 0
+          fi
+
           if [ "$EVENT" = "pull_request" ]; then
             range="$PR_BASE..$PR_HEAD"
           elif [ "$PUSH_BEFORE" = "0000000000000000000000000000000000000000" ]; then
