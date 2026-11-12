@@ -107,3 +107,50 @@ private func fakeEntry(_ dir: URL, _ date: Date, written: UInt64, bands: Int = 1
         #expect(!MirrorMounts.isClosed(image, runner: mounted))
     }
 }
+
+// Removing a damaged mirror first, when it has history: the room that gives back is
+// there only as the history goes too, and that is said.
+@Suite struct RemovingADamagedMirrorThatHasHistory {
+    private let copy: UInt64 = 1_000_000
+    private var need: UInt64 { copy + copy / 20 }
+
+    private func refusal(_ bundle: URL, _ free: UInt64) -> String? {
+        JobExecutor.startOverRefusal(bundle, in: bundle.deletingLastPathComponent(), destination: "Disk", copyBytes: copy, free: free)
+    }
+
+    @Test func theRoomCountsTheHistoryAndTheRefusalSaysItGoes() throws {
+        let dir = tempDir("startover")
+        let bundle = try fakeBundle(in: dir, bands: 2)
+        MirrorSeal.markDamaged(dir, why: "x")
+        let old = JobExecutor.directorySize(bundle)
+
+        // without history, as before
+        let alone = try #require(MirrorSeal.startOverRoom(bundle, in: dir, removingDamagedFirst: true))
+        #expect(alone.history == 0 && alone.credit == old)
+        try MirrorSeal.requestStartOver(dir)
+        #expect(refusal(bundle, 0)?.contains("history") == false)
+
+        // two earlier copies; the run after the older one wrote 300 bytes
+        _ = try fakeEntry(dir, start, written: 900)
+        _ = try fakeEntry(dir, start.addingTimeInterval(day), written: 300)
+        let kept = try #require(MirrorSeal.startOverRoom(bundle, in: dir, removingDamagedFirst: false))
+        #expect(kept.history == 2 && kept.credit == 0)
+        let removing = try #require(MirrorSeal.startOverRoom(bundle, in: dir, removingDamagedFirst: true))
+        #expect(removing.history == 2 && removing.credit == old + 300, "\(removing)")
+
+        // refused beside the damaged one: the way out it names takes the history, and says so
+        let beside = try #require(refusal(bundle, 0))
+        #expect(beside.contains("remove the damaged mirror first") && beside.hasSuffix(MirrorSeal.historyGoesToo), "\(beside)")
+        // asked to remove it first: the room counted is what going with its history gives
+        try MirrorSeal.requestStartOver(dir, removingDamagedFirst: true)
+        #expect(refusal(bundle, need - old - 300) == nil)
+        #expect(refusal(bundle, need - old - 301)?.contains("even with the damaged one and its history removed") == true)
+
+        // and Storage's offer says it
+        var shown = MirrorSeal.Damaged(library: "Lib", dir: dir, detail: "", imageDamaged: true, underWay: false,
+                                       oldBytes: old, newBytes: 0, free: 0)
+        #expect(shown.removingFirstNote.isEmpty)
+        shown.history = 2
+        #expect(shown.removingFirstNote == MirrorSeal.historyGoesToo)
+    }
+}

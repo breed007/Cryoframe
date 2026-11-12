@@ -122,7 +122,7 @@ struct StorageView: View {
     private var startOverMessage: String {
         guard let job = startingOver?.job, let m = startingOver?.mirror else { return "" }
         let bytes = { (n: UInt64) in ByteCountFormatter.string(fromByteCount: Int64(clamping: n), countStyle: .file) }
-        let gone = "Until the new mirror is complete, there is no backup of \(m.library) on this drive."
+        let gone = "Until the new mirror is complete, there is no backup of \(m.library) on this drive." + m.removingFirstNote
         if !m.imageDamaged {
             return "\(m.library) is being started over, and the new mirror isn't complete yet. The damaged one is kept, hidden beside it, and takes \(bytes(m.oldBytes)). Removing it makes room for the new mirror to finish, and \(job.name) runs now to finish it. " + gone
         }

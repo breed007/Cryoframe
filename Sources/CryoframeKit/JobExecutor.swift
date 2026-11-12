@@ -1399,13 +1399,16 @@ public struct JobExecutor: Sendable {
         let needed = copyBytes + copyBytes / 20
         guard free < needed, room.credit < needed - free else { return nil }
         let more = human(needed - room.credit), have = human(free)
+        // removing the damaged mirror first takes its history too, when the room is needed
+        let history = room.history > 0 ? MirrorSeal.historyGoesToo : ""
         if room.removingDamagedFirst {
-            return "not enough space on \(destination) for a new mirror, even with the damaged one removed: needs ~\(more), only \(have) free. Free up space on \(destination), or move the job to a bigger drive."
+            let removed = room.history > 0 ? "the damaged one and its history removed" : "the damaged one removed"
+            return "not enough space on \(destination) for a new mirror, even with \(removed): needs ~\(more), only \(have) free. Free up space on \(destination), or move the job to a bigger drive."
         }
         if room.underWay {
-            return "not enough space on \(destination) to finish starting the mirror over: needs ~\(more) more, only \(have) free. The damaged mirror is still kept, hidden beside the new one, until the new one is complete. Free up space on \(destination), or remove the damaged mirror from Storage."
+            return "not enough space on \(destination) to finish starting the mirror over: needs ~\(more) more, only \(have) free. The damaged mirror is still kept, hidden beside the new one, until the new one is complete. Free up space on \(destination), or remove the damaged mirror from Storage." + history
         }
-        return "not enough space on \(destination) to start the mirror over beside the damaged one, which is kept until the new one is complete: needs ~\(more), only \(have) free. Free up space on \(destination), or choose Start This Mirror Over in Storage again and remove the damaged mirror first."
+        return "not enough space on \(destination) to start the mirror over beside the damaged one, which is kept until the new one is complete: needs ~\(more), only \(have) free. Free up space on \(destination), or choose Start This Mirror Over in Storage again and remove the damaged mirror first." + history
     }
 
     static func human(_ bytes: UInt64) -> String {

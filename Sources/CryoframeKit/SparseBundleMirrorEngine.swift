@@ -971,7 +971,16 @@ public enum MirrorSeal {
         public var credit: UInt64
         /// the damaged image's size, about what a new one needs
         public var oldBytes: UInt64
+        /// The earlier copies in the mirror's history. They are clones of the damaged
+        /// image, so removing it gives back its room only as they go too, and the run
+        /// removes them, oldest first, for whatever room the new mirror still needs
+        /// (see SparseBundleMirrorEngine.makingRoom).
+        public var history: Int = 0
     }
+
+    /// what is said wherever removing a damaged mirror first is offered or asked for,
+    /// of a mirror that has history
+    public static let historyGoesToo = " The mirror's history shares the damaged mirror's room on the drive, so its earlier copies are removed too if the new mirror needs that room."
 
     /// `removingDamagedFirst`: what is to be done with the damaged image; nil: what was asked
     public static func startOverRoom(_ bundle: URL, in dir: URL, removingDamagedFirst: Bool? = nil) -> StartOverRoom? {
@@ -983,8 +992,13 @@ public enum MirrorSeal {
         let removing = removingDamagedFirst ?? (startOverRequested(dir) && startOverRemovesFirst(dir))
         let current = fm.fileExists(atPath: bundle.path) ? JobExecutor.directorySize(bundle) : 0
         let old = underWay ? JobExecutor.directorySize(aside) : current
+        // With history, the damaged image's blocks are held by its clones as well: its
+        // size comes back only once they are gone too, and with them what they hold
+        // of earlier runs. That is the room removing it first really gives.
+        let earlier = MirrorHistory.entries(in: dir)
         return StartOverRoom(underWay: underWay, removingDamagedFirst: removing,
-                             credit: (underWay ? current : 0) + (removing ? old : 0), oldBytes: old)
+                             credit: (underWay ? current : 0) + (removing ? old + MirrorHistory.aboutBytes(earlier) : 0),
+                             oldBytes: old, history: earlier.count)
     }
 
     public static func startOverRequested(_ dir: URL) -> Bool {
@@ -1054,6 +1068,11 @@ public enum MirrorSeal {
         public var newBytes: UInt64
         /// free on its drive; nil when the drive doesn't say
         public var free: UInt64?
+        /// the earlier copies in its history (see StartOverRoom.history)
+        public var history: Int = 0
+
+        /// what removing the damaged mirror first costs besides, to be said with the offer
+        public var removingFirstNote: String { history > 0 ? MirrorSeal.historyGoesToo : "" }
 
         /// what a new mirror needs that the drive doesn't yet give it, the damaged one kept
         public var neededBeside: UInt64 {
@@ -1075,7 +1094,8 @@ public enum MirrorSeal {
             let detail = damage(in: dir).map { damagedDetail($0, in: dir) }
                 ?? "it is being started over, and the new mirror isn't complete yet. The damaged one is kept, hidden beside it, until it is."
             return Damaged(library: lib.displayName, dir: dir, detail: detail, imageDamaged: damage(in: dir) != nil,
-                           underWay: room.underWay, oldBytes: room.oldBytes, newBytes: room.credit, free: freeSpace(dir))
+                           underWay: room.underWay, oldBytes: room.oldBytes, newBytes: room.credit, free: freeSpace(dir),
+                           history: room.history)
         }
     }
 
