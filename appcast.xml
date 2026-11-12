@@ -6,6 +6,15 @@
     <description>In-app updates for Cryoframe. Items are added by scripts/appcast.sh at release time.</description>
     <language>en</language>
     <item>
+      <title>1.8.1</title>
+      <description><![CDATA[Fixes for mirror history, scheduled backups and notifications found in a review of 1.8.0.]]></description>
+      <pubDate>Thu, 12 Nov 2026 19:34:59 +0000</pubDate>
+      <sparkle:version>20261112.1433</sparkle:version>
+      <sparkle:shortVersionString>1.8.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/breed007/Cryoframe/releases/download/v1.8.1/Cryoframe-1.8.1.dmg" type="application/octet-stream" sparkle:edSignature="8Fng5XbELGSuUUtTgxl7bCqWsbqHyklx/BwL+WgHp5qI7EBM9cNYD6YOeTd/fpixlMI4sI1jBIBauTmgXT+1Bg==" length="9091170" />
+    </item>
+    <item>
       <title>1.8.0</title>
       <description><![CDATA[Mirror history, a decay check for live mirrors, notifications while the app is quit, and data-safety fixes for 1.7.0.]]></description>
       <pubDate>Fri, 30 Oct 2026 13:10:11 +0000</pubDate>
