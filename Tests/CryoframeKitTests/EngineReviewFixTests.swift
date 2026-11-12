@@ -67,3 +67,43 @@ private func fakeEntry(_ dir: URL, _ date: Date, written: UInt64, bands: Int = 1
         #expect(summarizeRun(results).kind == .failed)
     }
 }
+
+// An image is closed only when hdiutil says nothing of it is attached.
+@Suite struct AnImageNotShownToBeClosed {
+    private let image = URL(fileURLWithPath: "/nowhere/Lib.sparsebundle")
+
+    private func listing(_ entity: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <plist version="1.0"><dict><key>images</key><array><dict>
+        <key>image-path</key><string>\(image.path)</string>
+        <key>system-entities</key><array><dict>\(entity)</dict></array>
+        </dict></array></dict></plist>
+        """
+    }
+
+    private func answering(_ status: Int32, _ stdout: String) -> ScriptedCommandRunner {
+        ScriptedCommandRunner { (_: String, _: [String]) -> CommandResult in CommandResult(status: status, stdout: stdout, stderr: "") }
+    }
+
+    @Test func onlyAnAnswerThatListsNoDeviceOfItSaysClosed() {
+        let nothing = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>images</key><array/></dict></plist>"
+        #expect(MirrorMounts.isClosed(image, runner: answering(0, nothing)))
+
+        // hdiutil couldn't be asked, or said something unreadable: not known to be closed
+        let failed = answering(1, "")
+        #expect(MirrorMounts.mountPoints(of: image, runner: failed).isEmpty)
+        #expect(!MirrorMounts.isClosed(image, runner: failed))
+        #expect(!MirrorMounts.isClosed(image, runner: answering(0, "not a property list")))
+
+        // attached with nothing mounted
+        let unmounted = answering(0, listing("<key>dev-entry</key><string>/dev/disk9</string>"))
+        #expect(MirrorMounts.mountPoints(of: image, runner: unmounted).isEmpty)
+        #expect(!MirrorMounts.isClosed(image, runner: unmounted))
+
+        // mounted
+        let mounted = answering(0, listing("<key>dev-entry</key><string>/dev/disk9s1</string><key>mount-point</key><string>/Volumes/Lib</string>"))
+        #expect(MirrorMounts.mountPoints(of: image, runner: mounted) == ["/Volumes/Lib"])
+        #expect(!MirrorMounts.isClosed(image, runner: mounted))
+    }
+}

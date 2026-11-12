@@ -59,6 +59,15 @@ public enum MirrorMounts {
             .flatMap(\.mountPoints)
     }
 
+    /// Whether `image` is shown to be closed: hdiutil could be asked, and lists no
+    /// device of it, mounted or not. `mountPoints` is empty for an image that isn't
+    /// attached, for one attached with nothing mounted, and when hdiutil couldn't be
+    /// asked; read as "closed", the last two had a run compact and seal an image that
+    /// might still be open. A mirror not shown to be closed stays marked (see MirrorSeal).
+    static func isClosed(_ image: URL, runner: CommandRunner) -> Bool {
+        devicesIfKnown(of: image, runner: runner)?.isEmpty == true
+    }
+
     /// every device of `image` attached on this Mac, mounted or not (an attach with
     /// -nomount has no mount point). Empty when it isn't attached, or when hdiutil
     /// couldn't be asked.

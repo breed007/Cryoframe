@@ -145,7 +145,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
                 throw MirrorCopyError.imageDecayed(image: bundle.path, why: why)
             }
             // (damage(in:) reads decay too, so a damaged marker 1.7 cleared doesn't let one by)
-            if MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty,
+            if MirrorMounts.isClosed(bundle, runner: runner.forTeardown),
                MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown, control: runner.control) == .sound {
                 MirrorSeal.clearDamaged(destinationDir)
             } else {
@@ -191,7 +191,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
             // whoever else was writing, so the next run makes room for that; a dip
             // with nothing measured records nothing.
             if shared, !watch.swapped, let needed = watch.needed { MirrorHistory.recordShort(needed, in: destinationDir) }
-            guard MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty else {
+            guard MirrorMounts.isClosed(bundle, runner: runner.forTeardown) else {
                 throw dipped(watch.swapped)   // still attached: stays marked
             }
             switch MirrorIntegrity.check(bundle, passphrase: passphrase, runner: runner.forTeardown, control: runner.control) {
@@ -210,7 +210,7 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
         if let error = failure {
             if !touched {
                 if markedHere { MirrorSeal.clearOpen(destinationDir) }   // never changed: the manifest still holds
-            } else if MirrorMounts.mountPoints(of: bundle, runner: runner.forTeardown).isEmpty {
+            } else if MirrorMounts.isClosed(bundle, runner: runner.forTeardown) {
                 compact(bundle, stdin: stdin)
                 // Stopped or failed, but closed: the copy inside is the previous complete
                 // one (MirrorCopy only swaps after rsync succeeds), so the manifest can
