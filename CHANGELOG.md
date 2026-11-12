@@ -2,6 +2,32 @@
 
 Notable changes to Cryoframe. Versions follow [semantic versioning](https://semver.org).
 
+## [1.8.1] — 2026-11-12
+
+A review of 1.8.0 found one way a mirror's new history could be lost when it was needed most, and a number of smaller problems. All of them are fixed here; nothing is added.
+
+### Fixed: mirror history
+- **One night that rewrote a whole library could cost the mirror all its earlier history.** Before each run, Cryoframe works out how much room the run will need, and with history it counted what the last run had written over. After a night that rewrote everything (a batch re-tag, a repair, or ransomware), the next run expected to do the same, and removed every earlier copy to make room it then didn't use, one night after those copies mattered most. On a drive smaller than about three times the library, this happened every time. The figure is now what the mirror's runs usually write over, so one heavy night doesn't move it. A run that does run out of room records what it needed, and the next run makes room for that.
+- **Removing a damaged mirror first could remove its history without saying so.** When a mirror found decayed is started over on a drive without room for both, Storage offers to remove the damaged one first. The earlier copies in its history share its room on the drive, so they could go too, and the offer said nothing of it. It now says so, and counts that room when it works out whether the new mirror fits.
+- Storage showed about nothing for the copy from before a mirror was started over, though it holds the whole earlier mirror once the old one is removed. It now shows what it holds.
+- After Stop during a mirror's decay check, the run said its history wasn't saved because the disk image was in use. It now says the run was stopped.
+
+### Fixed: other problems in 1.8.0
+- **A mirror found decayed was still counted as a fresh copy on its drive.** The run failed and you were alerted, but the drive's "last copy" was set to that run, so a drive you rotate looked up to date. It no longer counts.
+- **A run history Cryoframe couldn't read was replaced.** If the run history, the record of archive checks, or the record of overdue notices couldn't be read, as after going back from a newer version, the next run wrote a new file over it. The same went for the record of which drive is which. What the file held is now kept in a copy beside it first.
+- **Deleting a job while the job file couldn't be read looked as if it worked.** Its staged copies and upload records were removed, and the job was still there. The delete is now refused, and says why.
+- A mirror's disk image is closed off at the end of a run only when macOS shows it detached. When macOS couldn't be asked, it used to be taken as detached.
+- **Scheduled backups could let the Mac sleep before telling you what happened.** The scheduled backups stopped holding the Mac awake before they sent their alerts, set the next wake, and posted their notifications, and didn't hold it awake at all for a round of only checks or a recovery rehearsal. A Mac woken for a backup could go back to sleep with a failure unsent. They now hold it awake until they are done.
+- **A notification from a scheduled backup is posted when that backup ends.** They were all posted at the end of the round, which could be hours later behind other jobs, and never if the round was cut short.
+- Turning the schedule off in Settings while a scheduled backup is running stopped that backup partway without a word. Settings now asks first.
+- Restore could freeze when you chose a mirror on a drive that was slow to answer. It now reads the drive in the background.
+- A warning that a destination is nearly full was marked as given for the day even when nothing had been sent or shown. It is now tried again at the next round.
+- Storage said "a backup or check is running" for any trouble with a job's lock. It now says that only when one is.
+- The helper that makes snapshots now checks what it is asked to do more closely, and can no longer be restarted for an update at the moment it is answering a backup that is starting.
+
+### Known limits
+- A mirror that rewrites most of its library two nights running, on a drive with little room to spare, can still run out of room on the second night. The run fails and says so, the copy from before stays as it was, and the next run makes room.
+
 ## [1.8.0] — 2026-10-30
 
 1.8 gives a live mirror two things it lacked: a check of its drive for decay, and a short history to go back to. Scheduled backups also post notifications while the app is quit. A review of 1.7.0 for this release found ways it could lose a backup, or every job, without saying so. Problems in 1.7.0 are listed first.
