@@ -622,6 +622,7 @@ mbr
 me
 meaningful
 meanwhile
+measuring
 membership
 menu
 messages
@@ -707,6 +708,7 @@ office
 ok
 old
 older
+oldest
 on
 once
 one

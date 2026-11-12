@@ -182,7 +182,8 @@ public enum MirrorHistory {
 
     /// About what the next run of a mirror whose library is now `library` bytes will
     /// write into its image: what the library grew by since the newest entry, and what
-    /// that entry's run wrote again of files that changed. nil when there is no history.
+    /// its runs usually write again of files that changed (see usualRewrite). nil when
+    /// there is no history.
     ///
     /// With history, every block written into the image takes new room on the drive,
     /// since a clone still holds the block it replaces (measured on macOS 27.0.1: +32 MB
@@ -192,9 +193,71 @@ public enum MirrorHistory {
     /// Entries made before a start over are clones of the old image, so they share
     /// nothing with the new one and don't count.
     static func writeEstimate(_ entries: [Entry], library: UInt64) -> UInt64? {
-        guard let newest = sharing(entries).max(by: { $0.date < $1.date }) else { return nil }
+        let clones = sharing(entries)
+        guard let newest = clones.max(by: { $0.date < $1.date }) else { return nil }
         let grown = newest.library.map { library > $0 ? library - $0 : 0 } ?? 0
-        return grown + (newest.rewrote ?? 0)
+        return grown + usualRewrite(clones)
+    }
+
+    /// What the runs that made `entries` usually wrote again of files that changed:
+    /// the median of what each recorded (the lower of the middle two).
+    ///
+    /// This was the newest entry's figure alone. After one night that wrote the whole
+    /// library again (a batch re-tag, a repair, ransomware), the next run took that
+    /// for what it would write, and removed every earlier copy for room it then never
+    /// used, one night after those copies were needed most. One night, or any fewer
+    /// than half of those kept, no longer moves it; a library that does write itself
+    /// over every night still has the room made before the run, not found missing
+    /// during it.
+    static func usualRewrite(_ entries: [Entry]) -> UInt64 {
+        let samples = entries.compactMap(\.rewrote).sorted()
+        return samples.isEmpty ? 0 : samples[(samples.count - 1) / 2]
+    }
+
+    // MARK: a run that ran out of room beside history
+    //
+    // A run that writes over more than its runs usually do, and more than the drive
+    // has free, runs out of room part way: the image fills, or the drive comes close
+    // to full under it. It records here what it had to write, measured from the
+    // library and the previous copy, and the next run counts that as well as the
+    // usual figure, removing history, oldest first, for it. A run that completes
+    // clears it.
+    //
+    // Making this the only way history goes for files written over was tried, and
+    // isn't safe: on a 600 MB APFS drive, runs writing 60 MB over with 30 MB to spare
+    // ended with the drive under its floor (twice), with rsync failing at 9 MB free
+    // (once), and once with the image damaged (fsck_apfs: "found zeroed-out block").
+    // The cap on the image (MirrorSizing) doesn't always make it fill first, so the
+    // usual figure still makes room before the run.
+
+    /// beside a mirror whose last run ran out of room with history sharing its image:
+    /// the bytes that run had to write
+    static let shortName = ".cryoframe-mirror-short"
+
+    /// record that a run of the mirror in `dir` ran out of room, having `needed` bytes to write
+    static func recordShort(_ needed: UInt64, in dir: URL) {
+        try? Data(String(needed).utf8).write(to: dir.appendingPathComponent(shortName), options: .atomic)
+    }
+
+    /// a run that completes, or a mirror started over, has nothing left to make room for
+    static func clearShort(in dir: URL) {
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(shortName))
+    }
+
+    /// the bytes the last run of the mirror in `dir` had to write when it ran out of
+    /// room; nil when it didn't
+    static func short(in dir: URL) -> UInt64? {
+        (try? Data(contentsOf: dir.appendingPathComponent(shortName)))
+            .flatMap { UInt64(String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    /// What the room check counts as written into the image of the mirror in `dir`,
+    /// whose library is now `library` bytes: the estimate, and no less than what its
+    /// last run had to write if that one ran out of room. nil when no history shares
+    /// the image.
+    static func writesToMakeRoomFor(in dir: URL, library: UInt64) -> UInt64? {
+        guard let estimate = writeEstimate(entries(in: dir), library: library) else { return nil }
+        return max(estimate, short(in: dir) ?? 0)
     }
 
     /// what of `written` wasn't the library growing from `before` to `library` bytes.

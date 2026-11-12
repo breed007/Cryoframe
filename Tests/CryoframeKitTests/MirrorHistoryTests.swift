@@ -100,10 +100,9 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
     }
 
     // With history, the image's blocks are shared with its clones, so what a run writes
-    // over in place takes new room on the drive. The room check counts what the newest
-    // entry's run wrote over, and the image is capped by what it holds inside rather
-    // than by its bands, so it fills before the drive does. History goes to make room
-    // only when removing all of it would.
+    // over in place takes new room on the drive. The room check counts what its runs
+    // usually write over, and the image is capped by what it holds inside rather
+    // than by its bands. History goes to make room only when removing all of it would.
     @Test func historyCountsWhatARunWritesOverAsNewRoom() {
         let gb: UInt64 = 1 << 30
         // a mirror as big as its library, 3 GB free, 1 GB kept free
@@ -120,16 +119,61 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
         #expect(MirrorHistory.makeRoom(entries, fits: { false }, fitsWithAllGone: { false },
                                        remove: { _ in Issue.record("removed"); return true }).isEmpty)
         #expect(MirrorHistory.makeRoom(entries, fits: { false }, fitsWithAllGone: { true }, remove: { _ in true }).count == 3)
-        // the estimate: what the library grew by since the newest entry, and what that
-        // entry's run wrote again of files that changed
+        // the estimate: what the library grew by since the newest entry, and what its
+        // runs usually wrote again of files that changed (the median, the lower of two)
         let newer = MirrorHistory.Entry(dir: URL(fileURLWithPath: "/nowhere/b"), date: start.addingTimeInterval(day), written: 50,
                                         rewrote: 7, library: 1_000)
         let older = MirrorHistory.Entry(dir: URL(fileURLWithPath: "/nowhere/a"), date: start, written: 900, rewrote: 0, library: 957)
-        #expect(MirrorHistory.writeEstimate([older, newer], library: 1_010) == 17)
-        #expect(MirrorHistory.writeEstimate([older, newer], library: 990) == 7)
+        #expect(MirrorHistory.writeEstimate([older, newer], library: 1_010) == 10)
+        #expect(MirrorHistory.writeEstimate([older, newer], library: 990) == 0)
+        let newest = MirrorHistory.Entry(dir: URL(fileURLWithPath: "/nowhere/c"), date: start.addingTimeInterval(2 * day), written: 9,
+                                         rewrote: 9, library: 1_000)
+        #expect(MirrorHistory.writeEstimate([older, newer, newest], library: 1_010) == 17)
+        #expect(MirrorHistory.writeEstimate([older, newer, newest], library: 990) == 7)
         #expect(MirrorHistory.writeEstimate([], library: 1_000) == nil, "no history: nothing shares the image")
         #expect(MirrorHistory.rewrote(written: 50, library: 1_000, before: 957) == 7)
         #expect(MirrorHistory.rewrote(written: 900, library: 900, before: nil) == 900 - 900, "a first run adds it all")
+    }
+
+    // One night that writes the whole library again doesn't become what the next run
+    // is expected to write: the estimate is what the runs usually wrote over. A run
+    // that ran out of room has the next one count what it had to write.
+    @Test func oneNightsRewriteIsNotTheEstimateAndARunThatRanShortIsCounted() throws {
+        func entry(_ n: Int, rewrote: UInt64?) -> MirrorHistory.Entry {
+            MirrorHistory.Entry(dir: URL(fileURLWithPath: "/nowhere/\(n)"), date: start.addingTimeInterval(Double(n) * day),
+                                written: rewrote, rewrote: rewrote, library: 1_000)
+        }
+        // six ordinary nights, then one that wrote everything again
+        let week = (0..<6).map { entry($0, rewrote: 5) } + [entry(6, rewrote: 1_000)]
+        #expect(MirrorHistory.usualRewrite(week) == 5)
+        #expect(MirrorHistory.writeEstimate(week, library: 1_000) == 5, "one night's rewrite became the estimate")
+        // a library that writes itself over most nights is expected to again
+        let nightly = (0..<7).map { entry($0, rewrote: $0 < 3 ? 5 : 1_000) }
+        #expect(MirrorHistory.usualRewrite(nightly) == 1_000)
+        #expect(MirrorHistory.usualRewrite([entry(0, rewrote: nil), entry(1, rewrote: 40)]) == 40, "only what was recorded")
+        #expect(MirrorHistory.usualRewrite([]) == 0)
+
+        let dir = tempDir("short")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(MirrorHistory.short(in: dir) == nil)
+        MirrorHistory.recordShort(500, in: dir)
+        #expect(MirrorHistory.short(in: dir) == 500)
+        #expect(MirrorHistory.writesToMakeRoomFor(in: dir, library: 1_000) == nil, "no history: nothing shares the image")
+
+        _ = try fakeEntry(dir, start, written: 900)
+        let made = try fakeEntry(dir, start.addingTimeInterval(day), written: 20)
+        try MirrorHistory.record(written: 20, rewrote: 20, library: 1_000, in: made.dir)
+        // the run that ran short had 500 to write, whatever the runs before it wrote
+        #expect(MirrorHistory.writesToMakeRoomFor(in: dir, library: 1_010) == 500)
+        MirrorHistory.clearShort(in: dir)
+        #expect(MirrorHistory.short(in: dir) == nil)
+        #expect(MirrorHistory.writesToMakeRoomFor(in: dir, library: 1_010) == 30, "what it grew by and usually writes over")
+        // never less than the estimate
+        MirrorHistory.recordShort(4, in: dir)
+        #expect(MirrorHistory.writesToMakeRoomFor(in: dir, library: 1_010) == 30)
+        // entries of an image since started over share nothing with the new one
+        try MirrorHistory.markStartedOver(in: dir, decay: nil)
+        #expect(MirrorHistory.writesToMakeRoomFor(in: dir, library: 1_010) == nil)
     }
 
     // Start Over keeps the history, but its entries are clones of the old image. When
@@ -427,8 +471,8 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
         #expect(try String(contentsOf: current.appendingPathComponent("note.txt"), encoding: .utf8) == "second")
 
         // A file the drive has room for only once the oldest entry is gone. Sized by the
-        // room check itself, from what the drive has now and what the last run wrote over
-        // (it wrote the big file over, which, with history, takes new room again).
+        // room check itself, from what the drive has now, what the library grows by and
+        // what its runs usually write over.
         let bundle = dir.appendingPathComponent("Lib.sparsebundle")
         let capacity = try #require(StorageReporter.volume(of: drive).total)
         let reserve = MirrorSizing.reserve(capacity: capacity)
@@ -468,10 +512,10 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
         #expect(MirrorMounts.mountPoints(of: bundle, runner: ProcessCommandRunner()).isEmpty)
     }
 
-    // On a small APFS drive: a run that writes a file over again, with history, removes
-    // the oldest entry first to make the room, and doesn't fill the drive. A run that
-    // removing all of it wouldn't make room for removes none. One that fails after
-    // history was removed still says what went.
+    // On a small APFS drive: a run of a library that is written over every time, with
+    // history, removes the oldest entry first to make the room, and doesn't fill the
+    // drive. A run that removing all of it wouldn't make room for removes none. One
+    // that fails after history was removed still says what went.
     @Test func historyMakesRoomForWhatARunWritesOver() throws {
         let scratch = tempDir("over"), base = tempDir("base-over")
         // padded down to what each step needs, so its size only has to be enough: at
@@ -500,6 +544,11 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
         #expect(newest.library == JobExecutor.directorySize(src))
         let e2 = try backdate(newest, days: 2)
         #expect(MirrorHistory.entries(in: dir).map(\.date) == [e2.date, e1.date])
+        // and once more: written over on most of its runs, it is expected to be again
+        try fill(big, mb: 60, byte: 0x2A)
+        _ = try run()
+        let e3 = try backdate(try #require(MirrorHistory.entries(in: dir).first), days: 1)
+        #expect(MirrorHistory.usualRewrite(MirrorHistory.entries(in: dir)) >= 50 << 20)
 
         // the drive has room for the mirror as it is, not for the file written over again
         let reserve = MirrorSizing.reserve(capacity: try #require(StorageReporter.volume(of: drive).total))
@@ -526,14 +575,16 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
         // far more than removing all of it would free: nothing goes
         let free = try #require(JobExecutor.freeNow(for: drive))
         #expect { try run(sizeHint: library + free + (300 << 20)) } throws: { ($0 as? MirrorSpaceError)?.isShortOfRoom == true }
-        #expect(MirrorHistory.entries(in: dir).count == 2, "history was removed for a run that couldn't fit anyway")
+        #expect(MirrorHistory.entries(in: dir).count == 3, "history was removed for a run that couldn't fit anyway")
 
         // written over again: the oldest entry goes first, and the run fits
         try fill(big, mb: 60, byte: 0x33)
         let third = try run()
         #expect(third.notes.contains { $0.contains("removed the mirror's history from") }, "\(third.notes)")
         let after = MirrorHistory.entries(in: dir)
-        #expect(!after.contains { $0.date == e1.date } && after.contains { $0.date == e2.date }, "\(after.map(\.dir.lastPathComponent))")
+        #expect(!after.contains { $0.date == e1.date } && after.contains { $0.date == e2.date } && after.contains { $0.date == e3.date },
+                "\(after.map(\.dir.lastPathComponent))")
+        #expect(MirrorHistory.short(in: dir) == nil)
 
         // and once more, failing after the room was made: the removal is still said
         try fill(big, mb: 60, byte: 0x44)
@@ -542,6 +593,69 @@ private func fill(_ url: URL, mb: Int, byte: UInt8) throws {
         #expect(throws: MirrorCopyError.self) { try run(excluded: ["odd\\name"], control: control) }
         #expect(!MirrorHistory.entries(in: dir).contains { $0.date == e2.date }, "the older entry is still there")
         #expect(control.notes.contains { $0.contains("removed the mirror's history from") }, "\(control.notes)")
+        #expect(MirrorMounts.mountPoints(of: bundle, runner: ProcessCommandRunner()).isEmpty)
+    }
+
+    // One night that writes every file again (a batch re-tag, a repair, ransomware)
+    // leaves little room on the drive. The next night's run writes a few bytes, and
+    // must not remove the copies from before that night on the strength of what the
+    // night before wrote: they are the ones a restore then needs.
+    @Test func oneNightOfRewritingDoesNotCostTheHistoryBeforeIt() throws {
+        let scratch = tempDir("night"), base = tempDir("base-night")
+        let drive = try scratchDrive("600m", in: scratch)
+        let src = tempDir("lib-night").appendingPathComponent("Lib")
+        defer {
+            MountPoint.detach(drive, runner: ProcessCommandRunner())
+            for d in [scratch, base, src.deletingLastPathComponent()] { try? FileManager.default.removeItem(at: d) }
+        }
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        let big = src.appendingPathComponent("big.bin"), note = src.appendingPathComponent("note.txt")
+        try fill(big, mb: 60, byte: 0x11)
+        try Data("one".utf8).write(to: note)
+        let dir = drive.appendingPathComponent("Lib")
+        let bundle = dir.appendingPathComponent("Lib.sparsebundle")
+        func run() throws -> ArchiveResult {
+            try SparseBundleMirrorEngine(runner: ProcessCommandRunner(), mountBase: base, history: 7)
+                .archive(ArchiveSource(name: "Lib", root: src, sizeHint: JobExecutor.directorySize(src)), to: dir)
+        }
+        // two nights of history
+        _ = try run()
+        let e1 = try backdate(try #require(MirrorHistory.entries(in: dir).first), days: 4)
+        try Data("two".utf8).write(to: note)
+        _ = try run()
+        let e2 = try backdate(try #require(MirrorHistory.entries(in: dir).first), days: 3)
+
+        // night X: every file written again, the size the same, and the drive has the room
+        try fill(big, mb: 60, byte: 0x22)
+        try Data("xxx".utf8).write(to: note)
+        _ = try run()
+        let newest = try #require(MirrorHistory.entries(in: dir).first)
+        #expect((newest.rewrote ?? 0) >= 50 << 20, "night X wrote the file over: \(String(describing: newest.rewrote))")
+        let x = try backdate(newest, days: 1)
+
+        // which leaves the drive with less free than night X wrote
+        let reserve = MirrorSizing.reserve(capacity: try #require(StorageReporter.volume(of: drive).total))
+        let want = reserve + (30 << 20)
+        let padding = drive.appendingPathComponent("pad")
+        try #require(FileManager.default.createFile(atPath: padding.path, contents: nil))
+        let h = try FileHandle(forWritingTo: padding)
+        let chunk = Data(repeating: 0x7E, count: 4 << 20)
+        while let free = JobExecutor.freeNow(for: drive), free > want + UInt64(chunk.count) {
+            try h.write(contentsOf: chunk)
+            try h.synchronize()
+        }
+        try h.close()
+        let free = try #require(JobExecutor.freeNow(for: drive))
+        try #require(free < 50 << 20 + reserve, "the drive wasn't filled: \(free >> 20) MB free")
+
+        // night X+1: a few bytes change. Nothing is removed, and nothing is said to be.
+        try Data("day".utf8).write(to: note)
+        let next = try run()
+        #expect(!next.notes.contains { $0.contains("removed the mirror's history") }, "\(next.notes)")
+        let kept = Set(MirrorHistory.entries(in: dir).map(\.date))
+        #expect(kept.isSuperset(of: [e1.date, e2.date, x.date]), "the copies from before night X are gone: \(kept)")
+        #expect(kept.count == 4)
+        #expect(MirrorHistory.short(in: dir) == nil)
         #expect(MirrorMounts.mountPoints(of: bundle, runner: ProcessCommandRunner()).isEmpty)
     }
 }

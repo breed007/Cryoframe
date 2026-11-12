@@ -1044,9 +1044,9 @@ extension MirrorCopyError: LocalizedError {
             let copy = swapped
                 ? "The mirror holds the previous copy or the updated one, whichever the drive kept; its file system checked out."
                 : "Nothing was updated, and the mirror's file system checked out."
-            return "the drive nearly filled while the mirror was being written. The mirror's history shares its disk image's room on the drive, so all that a run writes takes new room, and something else may have been writing to the drive as well. A disk image loses writes when its drive fills, so this run doesn't count. \(copy) Make room on the drive, or remove some of the mirror's history in Storage, and run again."
+            return "the drive nearly filled while the mirror was being written. The mirror's history shares its disk image's room on the drive, so all that a run writes takes new room, and something else may have been writing to the drive as well. A disk image loses writes when its drive fills, so this run doesn't count. \(copy) Make room on the drive, or remove some of the mirror's history in Storage, and run again; if the next run still hasn't the room, it removes the oldest of the mirror's history to make it."
         case .imageFilledBesideHistory:
-            return "the mirror ran out of room during the run. The mirror's history shares its disk image's room on the drive, so all that a run writes takes new room, and this run wrote more than the drive had free. The previous copy is intact. Make room on the drive, or remove some of the mirror's history in Storage, and run again."
+            return "the mirror ran out of room during the run. The mirror's history shares its disk image's room on the drive, so all that a run writes takes new room, and this run wrote more than the drive had free. The previous copy is intact. Make room on the drive and run again; if the next run still hasn't the room, it removes the oldest of the mirror's history to make it."
         case .imageDamaged(let why):
             return "the drive filled while the mirror was being written, and the mirror's disk image is damaged (\(why)). Don't rely on this copy: run a restore drill, and consider starting this mirror afresh on a drive with room to spare."
         case .readBackMismatch(let count, let examples):

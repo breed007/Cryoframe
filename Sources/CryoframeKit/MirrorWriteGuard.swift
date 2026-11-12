@@ -34,6 +34,9 @@ final class RunWatch: @unchecked Sendable {
     var written: UInt64 = 0
     /// the entries of the mirror's history removed to make room (see MirrorHistory)
     var historyRemoved: [MirrorHistory.Entry] = []
+    /// the bytes a run that ran out of room in the image had to write, when measured
+    /// (see MirrorHistory.recordShort)
+    var needed: UInt64?
 }
 
 /// the lowest free space seen on a drive while a run writes to it.
