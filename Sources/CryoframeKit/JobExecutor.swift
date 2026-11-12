@@ -1460,6 +1460,17 @@ public struct JobExecutor: Sendable {
                            encrypted: passphrase != nil, buildDir: buildDir, dests: dests, notes: notes, contents: contents)
     }
 
+    /// What a library's run comes to when the check of its mirror found decay: a
+    /// failure, not a completed copy. The copy went into an image that can't be
+    /// trusted, and counted as completed it stamped its destination's "last copy", so
+    /// a rotating drive whose mirror had just been found decayed read as freshly
+    /// copied. nil when the check found none, or wasn't made.
+    static func decayFailure(_ check: BandCheckReport?, library: String, destination: String) -> LibraryRunResult? {
+        guard let check, check.mismatches > 0 else { return nil }
+        return .failed(library: library, destination: destination,
+                       error: MirrorSeal.decayedDetail(MirrorSeal.decayReason(check.damaged), history: (check.history ?? 0) > 0))
+    }
+
     private func direct(job: BackupJob, library: ContentType, source: ArchiveSource, dest: URL, target: Target,
                         runner: CommandRunner, passphrase: String?, notes: inout [String],
                         onStage: @escaping @Sendable (BackupStage) -> Void) throws -> LibraryRunResult {
@@ -1478,6 +1489,9 @@ public struct JobExecutor: Sendable {
         if var check = archive.bandCheck {
             check.library = library.displayName; check.destination = target.displayName
             runner.control?.record(check)           // for the run's record (see RunRecord.make)
+        }
+        if let decayed = Self.decayFailure(archive.bandCheck, library: library.displayName, destination: target.displayName) {
+            return decayed
         }
         if archive.format != .liveMirror {
             onStage(.checksumming)
