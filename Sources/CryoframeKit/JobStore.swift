@@ -31,6 +31,12 @@
 //  can be read. Writing the jobs that could be read would replace it with a partial
 //  list, or an empty one.
 //
+//  jobs-drives.json is written again from the jobs at every save, so one that can't
+//  be read doesn't stop jobs being saved or run. But it was ignored without a word
+//  and replaced by the next save, and what only it still held (a drive 1.5.6 had
+//  dropped from jobs.json) went with it. What it held is now copied beside it first,
+//  and it is replaced only once that copy is there.
+//
 
 import Foundation
 
@@ -170,8 +176,12 @@ public final class JobStore: @unchecked Sendable {
         case .unreadable: unreadable.append(url.lastPathComponent)
         case .read(let decoded):
             state = decoded
-            if let d = try? Data(contentsOf: drivesURL), let drives = try? JSONDecoder().decode(DriveRecords.self, from: d) {
-                drives.fill(&state)
+            if let d = try? Data(contentsOf: drivesURL) {
+                if let drives = try? JSONDecoder().decode(DriveRecords.self, from: d) {
+                    drives.fill(&state)
+                } else {
+                    UnreadableCopy.keep(d, from: drivesURL)     // the next save replaces it (see the top)
+                }
             }
         }
         switch Self.decode(filesURL) {
@@ -205,8 +215,18 @@ public final class JobStore: @unchecked Sendable {
         // job and without a file to empty, none is written.
         if !files.jobs.isEmpty || FileManager.default.fileExists(atPath: filesURL.path),
            let data = try? encoder.encode(files) { try? data.write(to: filesURL, options: .atomic) }
-        if let data = try? encoder.encode(DriveRecords(main)) { try? data.write(to: drivesURL, options: .atomic) }
+        if drivesFileCanBeReplaced(), let data = try? encoder.encode(DriveRecords(main)) { try? data.write(to: drivesURL, options: .atomic) }
         if let data = try? encoder.encode(main) { try? data.write(to: url, options: .atomic) }
+    }
+
+    /// Whether jobs-drives.json can be written over: it isn't there, it reads as what
+    /// this version writes, or what it holds is kept in a copy beside it (see the top).
+    /// One whose bytes can't be read at all is left as it is.
+    private func drivesFileCanBeReplaced() -> Bool {
+        guard FileManager.default.fileExists(atPath: drivesURL.path) else { return true }
+        guard let held = try? Data(contentsOf: drivesURL) else { return false }
+        if (try? JSONDecoder().decode(DriveRecords.self, from: held)) != nil { return true }
+        return UnreadableCopy.keep(held, from: drivesURL)
     }
 
     /// the lock file, locked, or -1 when it can't be opened or the wait ran out (the

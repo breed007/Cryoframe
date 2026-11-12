@@ -140,4 +140,31 @@ private func writeState(_ jobs: [[String: Any]], to url: URL) throws {
         try store.updateSaved { (_: inout ScheduleState) -> Void in }
         #expect(JobStore.NotSaved(files: ["jobs.json"]).reason.contains("can't read jobs.json"))
     }
+
+    // jobs-drives.json is written again from the jobs at every save. One that can't be
+    // read doesn't stop jobs being saved, but what it held is kept before it is replaced.
+    @Test func whatADrivesFileThatCantBeReadHeldIsKeptBeforeItIsReplaced() throws {
+        let dir = scratch("drives")
+        let store = JobStore(url: dir.appendingPathComponent("jobs.json"))
+        store.save(ScheduleState(jobs: [job("image")]))
+        let broken = Data(#"{"jobs": ["as a later version writes them"]}"#.utf8)
+        try broken.write(to: store.drivesURL)
+        func copies() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("jobs-drives.json.unreadable-") }
+        }
+
+        // loading keeps the copy, and leaves the file
+        let loaded = store.load()
+        #expect(loaded.unreadableFiles.isEmpty && loaded.jobs.map(\.id) == ["image"])
+        #expect(try copies().count == 1)
+        #expect(try Data(contentsOf: store.drivesURL) == broken)
+
+        // jobs are still saved, and the file is written again
+        store.recordRun(id: "image", at: start)
+        #expect(store.load().lastRun["image"] == start)
+        #expect((try? JSONDecoder().decode(DriveRecords.self, from: Data(contentsOf: store.drivesURL))) != nil)
+        let kept = try copies()
+        #expect(kept.count == 1, "\(kept)")
+        #expect(try kept.first.map { try Data(contentsOf: dir.appendingPathComponent($0)) } == broken)
+    }
 }
