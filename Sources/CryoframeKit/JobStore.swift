@@ -159,21 +159,10 @@ public final class JobStore: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
         guard let data = try? Data(contentsOf: url) else { return .unreadable }
         guard let state = try? JSONDecoder().decode(ScheduleState.self, from: data) else {
-            keepCopy(of: data, from: url)
+            UnreadableCopy.keep(data, from: url)
             return .unreadable
         }
         return .read(state)
-    }
-
-    /// `data`, the contents of `url`, copied to `<name>.unreadable-<time, in UTC>` beside
-    /// it, unless a copy of these same contents is there already
-    private static func keepCopy(of data: Data, from url: URL) {
-        let dir = url.deletingLastPathComponent(), prefix = url.lastPathComponent + ".unreadable-"
-        let copies = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasPrefix(prefix) }
-        guard !copies.contains(where: { (try? Data(contentsOf: dir.appendingPathComponent($0))) == data }) else { return }
-        let f = ISO8601DateFormatter()                          // 2026-10-29T155833Z
-        f.formatOptions = [.withFullDate, .withTime, .withTimeZone]
-        try? data.write(to: dir.appendingPathComponent(prefix + f.string(from: Date())), options: .withoutOverwriting)
     }
 
     private func write(_ state: ScheduleState) {
