@@ -154,3 +154,40 @@ private func fakeEntry(_ dir: URL, _ date: Date, written: UInt64, bands: Int = 1
         #expect(shown.removingFirstNote == MirrorSeal.historyGoesToo)
     }
 }
+
+// After a start over, the newest entry made before it holds the whole old image once
+// the image kept aside is gone. Storage showed it as about nothing.
+@Suite struct WhatAnEntryFromBeforeAStartOverHolds {
+    @Test func theNewestOfThemHoldsTheOldImageOnceItIsGone() throws {
+        let dir = tempDir("alone")
+        let bundle = try fakeBundle(in: dir, bands: 1)
+        _ = try fakeEntry(dir, start, written: 900, bands: 3)
+        let newestOld = try fakeEntry(dir, start.addingTimeInterval(day), written: 300, bands: 3)
+        try MirrorHistory.markStartedOver(in: dir, decay: nil)
+        let held = Checksum.byteSize(of: try #require(MirrorHistory.image(in: newestOld.dir)))
+        try #require(held >= 3_000)
+
+        // the old image still kept aside: its entries share it
+        let aside = try fakeBundle(in: dir, name: MirrorSeal.replaced(bundle).lastPathComponent, bands: 3)
+        var measured = MirrorHistory.measuredEntries(in: dir)
+        #expect(measured.allSatisfy { $0.alone == 0 })
+        #expect(MirrorHistory.aboutBytes(measured) == 300)
+
+        // gone: the newest of them holds it all, the older one what the run after it wrote
+        try FileManager.default.removeItem(at: aside)
+        measured = MirrorHistory.measuredEntries(in: dir)
+        #expect(measured.map(\.alone) == [held, 0])
+        #expect(MirrorHistory.aboutBytes(of: measured[0], among: measured) == held)
+        #expect(MirrorHistory.aboutBytes(of: measured[1], among: measured) == 300)
+        #expect(MirrorHistory.aboutBytes(measured) == held + 300)
+        #expect(MirrorHistory.aboutBytes(measured)
+                == MirrorHistory.roomFreed(byRemoving: MirrorHistory.entries(in: dir), oldImageKept: false), "Storage and the room check disagree")
+
+        // an entry of the new image holds nothing alone
+        _ = try fakeEntry(dir, start.addingTimeInterval(2 * day), written: 50)
+        measured = MirrorHistory.measuredEntries(in: dir)
+        #expect(measured.map(\.alone) == [0, held, 0])
+        // as `entries` lists them, nothing is measured
+        #expect(MirrorHistory.entries(in: dir).allSatisfy { $0.alone == 0 })
+    }
+}

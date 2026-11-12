@@ -77,6 +77,11 @@ public enum MirrorHistory {
         /// a clone of the image a start over replaced, not of the one the mirror has now
         public var madeBeforeStartOver: Bool { startedOver != nil }
 
+        /// What it holds besides, when that was measured (see measuredEntries): the
+        /// whole old image, for the newest entry made before a start over once that
+        /// image is gone. 0 as `entries` lists it.
+        public var alone: UInt64 = 0
+
         public init(dir: URL, date: Date, written: UInt64?, rewrote: UInt64? = nil, library: UInt64? = nil,
                     startedOver: String? = nil) {
             self.dir = dir; self.date = date; self.written = written; self.rewrote = rewrote; self.library = library
@@ -107,10 +112,25 @@ public enum MirrorHistory {
     /// the next entry (whose record carries them). The newest shares everything with
     /// the mirror, so it holds about nothing until the next run. Entries made before a
     /// start over are clones of the old image, so they are counted among themselves.
+    ///
+    /// Once the old image is gone, the newest of those holds all of it. That takes
+    /// reading the drive, so it is counted only for entries from `measuredEntries`.
     public static func aboutBytes(of entry: Entry, among entries: [Entry]) -> UInt64 {
         let newestFirst = entries.filter { $0.madeBeforeStartOver == entry.madeBeforeStartOver }.sorted { $0.date > $1.date }
-        guard let i = newestFirst.firstIndex(where: { $0.dir == entry.dir }), i > 0 else { return 0 }
-        return newestFirst[i - 1].written ?? 0
+        guard let i = newestFirst.firstIndex(where: { $0.dir == entry.dir }) else { return 0 }
+        return (i > 0 ? newestFirst[i - 1].written ?? 0 : 0) + newestFirst[i].alone
+    }
+
+    /// `entries(in:)`, with what the newest entry made before a start over holds alone
+    /// (see Entry.alone), for whoever shows sizes. After a start over that entry holds
+    /// the whole old image as soon as the image kept aside is removed, and shown from
+    /// what runs wrote it read as about nothing, for what may be hundreds of GB.
+    public static func measuredEntries(in dir: URL) -> [Entry] {
+        var all = entries(in: dir)
+        let kept = MirrorSeal.image(in: dir).map { FileManager.default.fileExists(atPath: MirrorSeal.replaced($0).path) } ?? false
+        guard !kept, let i = all.firstIndex(where: \.madeBeforeStartOver) else { return all }      // newest first
+        all[i].alone = image(in: all[i].dir).map(Checksum.byteSize) ?? 0
+        return all
     }
 
     /// about what all of `entries` hold on the drive: what every run since the oldest wrote

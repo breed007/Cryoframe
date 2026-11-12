@@ -249,6 +249,6 @@ public struct JobFootprint: Sendable, Equatable {
     /// what a library folder takes on its drive: a mirror's history by what its runs
     /// wrote, since its clones read as full copies (see MirrorHistory.aboutBytes)
     static func bytes(of folder: URL) -> UInt64 {
-        JobExecutor.directorySize(folder, skipping: MirrorHistory.folderName) + MirrorHistory.aboutBytes(MirrorHistory.entries(in: folder))
+        JobExecutor.directorySize(folder, skipping: MirrorHistory.folderName) + MirrorHistory.aboutBytes(MirrorHistory.measuredEntries(in: folder))
     }
 }

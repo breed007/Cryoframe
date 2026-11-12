@@ -95,7 +95,7 @@ public enum StorageReporter {
                             archives.append(ArchiveSize(library: a.libraryName, version: nil,
                                                         bytes: JobExecutor.directorySize(a.dir, skipping: MirrorHistory.folderName),
                                                         kept: LibraryFolders.isKept(a)))
-                            let entries = MirrorHistory.entries(in: a.dir)
+                            let entries = MirrorHistory.measuredEntries(in: a.dir)
                             if !entries.isEmpty {
                                 archives.append(ArchiveSize(library: "\(a.libraryName) · Mirror history", version: nil,
                                                             bytes: MirrorHistory.aboutBytes(entries), kept: LibraryFolders.isKept(a),
