@@ -85,14 +85,46 @@ public final class JobStore: @unchecked Sendable {
     /// can't be read (see the top).
     @discardableResult
     public func update<T>(_ body: (inout ScheduleState) throws -> T) rethrows -> T {
+        try change(body).result
+    }
+
+    /// a change that wasn't saved, because a job file can't be read (see the top)
+    public struct NotSaved: Error, Equatable, LocalizedError {
+        /// the files that can't be read
+        public let files: [String]
+        public init(files: [String]) { self.files = files }
+
+        /// why, as the end of a sentence
+        public var reason: String {
+            "Cryoframe can't read \(files.joined(separator: " or ")), and saves nothing to its job files while it can't"
+        }
+        public var errorDescription: String? { "nothing was saved: \(reason)" }
+    }
+
+    /// `update`, for a caller that goes on as if its change were saved: throws NotSaved
+    /// when `body` changed something and it wasn't written. `update` itself returns
+    /// normally then, and a delete went on to say the job was gone while it was still
+    /// there.
+    @discardableResult
+    public func updateSaved<T>(_ body: (inout ScheduleState) throws -> T) throws -> T {
+        let made = try change(body)
+        guard made.unsaved.isEmpty else { throw NotSaved(files: made.unsaved) }
+        return made.result
+    }
+
+    /// `update`, and the files that kept a change from being saved (none: it was
+    /// saved, or there was nothing to save)
+    private func change<T>(_ body: (inout ScheduleState) throws -> T) rethrows -> (result: T, unsaved: [String]) {
         lock.lock(); defer { lock.unlock() }
         let fd = takeFileLock()
         defer { if fd >= 0 { flock(fd, LOCK_UN); close(fd) } }
         var state = read()
         let before = state
         let result = try body(&state)
-        if state != before, state.unreadableFiles.isEmpty { write(state) }
-        return result
+        guard state != before else { return (result, []) }
+        guard state.unreadableFiles.isEmpty else { return (result, state.unreadableFiles) }
+        write(state)
+        return (result, [])
     }
 
     public func upsert(_ job: BackupJob) {

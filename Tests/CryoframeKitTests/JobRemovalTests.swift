@@ -112,6 +112,28 @@ private func delete(_ s: Setup, expected: JobRemoval.Plan, queued: Bool = false)
         #expect(p.encrypted)
     }
 
+    // While a job file can't be read nothing is saved, so the job would still be
+    // there: the delete is refused before its upload records or staged copies go.
+    @Test func aDeleteThatCouldntBeSavedRemovesNothing() throws {
+        let s = try setup("unsaved")
+        let expected = plan(s)
+        let files = s.base.appendingPathComponent("jobs-files.json")
+        try Data("not a job file".utf8).write(to: files)
+        let scratchBefore = tree(s.scratchBase), pendingBefore = s.pending.all().map(\.jobID).sorted()
+        #expect {
+            try delete(s, expected: expected)
+        } throws: { error in
+            guard case JobRemoval.Refusal.unavailable(let why) = error else { return false }
+            return why.contains("can't read jobs-files.json")
+        }
+        #expect(tree(s.scratchBase) == scratchBefore, "its staged copy went")
+        #expect(s.pending.all().map(\.jobID).sorted() == pendingBefore, "its upload record went")
+        // readable again: it goes
+        try FileManager.default.removeItem(at: files)
+        try delete(s, expected: plan(s))
+        #expect(!s.store.load().jobs.contains { $0.id == s.job.id })
+    }
+
     @Test func deletingLeavesTheDestinationByteForByteAndOtherJobsAlone() throws {
         let s = try setup("delete")
         let before = tree(s.dest)

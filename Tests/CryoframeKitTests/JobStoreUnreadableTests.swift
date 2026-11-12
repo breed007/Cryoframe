@@ -121,4 +121,23 @@ private func writeState(_ jobs: [[String: Any]], to url: URL) throws {
         #expect(result == .unreadable)
         #expect(try Data(contentsOf: url) == Data("not json".utf8))
     }
+
+    // `update` returns normally when nothing could be saved; a caller that goes on as
+    // if it had been asks with `updateSaved`, which says so.
+    @Test func aChangeThatWasntSavedIsReportedToACallerThatAsks() throws {
+        let dir = scratch("unsaved")
+        let store = JobStore(url: dir.appendingPathComponent("jobs.json"))
+        store.save(ScheduleState(jobs: [job("image"), job("plain", .plainFiles)]))
+        try store.updateSaved { (s: inout ScheduleState) -> Void in s.lastRun["image"] = start }
+        #expect(store.load().lastRun["image"] == start)
+
+        try Data("not a job file".utf8).write(to: store.filesURL)
+        #expect(throws: JobStore.NotSaved(files: ["jobs-files.json"])) {
+            try store.updateSaved { (s: inout ScheduleState) -> Void in s.jobs.removeAll { $0.id == "image" } }
+        }
+        #expect(store.load().jobs.map(\.id) == ["image"], "the job is still there")
+        // a change that changes nothing had nothing to save
+        try store.updateSaved { (_: inout ScheduleState) -> Void in }
+        #expect(JobStore.NotSaved(files: ["jobs.json"]).reason.contains("can't read jobs.json"))
+    }
 }

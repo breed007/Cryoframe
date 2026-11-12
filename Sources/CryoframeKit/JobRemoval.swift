@@ -156,6 +156,10 @@ public enum JobRemoval {
         guard !isQueued() else { throw Refusal.queued }
         let now = plan(for: job, pending: pending, scratchBase: scratchBase, volumes: volumes)
         guard now == expected else { throw Refusal.changed(now) }
+        // Nothing is saved while a job file can't be read (see JobStore), so the job
+        // would still be there afterwards: refused before anything of it is removed.
+        let unreadable = store.load().unreadableFiles
+        guard unreadable.isEmpty else { throw Refusal.unavailable(JobStore.NotSaved(files: unreadable).reason) }
         for p in pending.all() where p.owningJobID == job.id { pending.remove(jobID: p.jobID) }
         // only a folder provably Cryoframe's (see ScratchLayout): a 1.5 build in a
         // scratch location chosen in Settings carries no mark, and stays
@@ -171,11 +175,16 @@ public enum JobRemoval {
                 guard rmdir(dir.path) == 0 else { break }
             }
         }
-        store.update { s in
-            s.jobs.removeAll { $0.id == job.id }
-            s.lastRun[job.id] = nil
-            s.lastCopy[job.id] = nil
-            s.adoptionReviews[job.id] = nil
+        do {
+            try store.updateSaved { (s: inout ScheduleState) -> Void in
+                s.jobs.removeAll { $0.id == job.id }
+                s.lastRun[job.id] = nil
+                s.lastCopy[job.id] = nil
+                s.adoptionReviews[job.id] = nil
+            }
+        } catch let unsaved as JobStore.NotSaved {
+            // a job file went unreadable since the check above: the job is still there
+            throw Refusal.unavailable(unsaved.reason)
         }
     }
 
