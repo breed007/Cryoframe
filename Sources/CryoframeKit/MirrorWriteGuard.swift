@@ -176,7 +176,8 @@ enum MirrorIntegrity {
         }
         let devices = DiskImageTool.devices(fromAttach: a.stdout)
         let whole = devices.first?.node ?? ""
-        defer { _ = try? runner.runRetryingBusy(DiskImageTool.detach(whole, force: true)) }
+        // an attach that printed no device leaves nothing to detach by name
+        defer { if !whole.isEmpty { _ = try? runner.runRetryingBusy(DiskImageTool.detach(whole, force: true)) } }
         guard let container = devices.first(where: { $0.content.contains("Apple_APFS") })?.node else {
             return .unknown("no APFS container in the image")
         }

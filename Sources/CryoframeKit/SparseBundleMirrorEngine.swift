@@ -260,7 +260,9 @@ public struct SparseBundleMirrorEngine: ArchiveEngine {
     private func saveHistory(_ bundle: URL, in dir: URL, written: UInt64, library: UInt64?, nights: Int) -> [String] {
         runner.control?.begin("Saving the mirror's history", stage: .finishing)
         guard let lock = ImageLock.acquire(bundle, wait: ImageLock.patience, control: runner.control) else {
-            return ["the mirror's history wasn't saved this run: its disk image was in use"]
+            // Stop ends the wait for the image too: it wasn't in use for all anyone knows
+            let why = runner.control?.isCancelled == true ? "the run was stopped" : "its disk image was in use"
+            return ["the mirror's history wasn't saved this run: \(why)"]
         }
         defer { lock.release() }
         let attached = MirrorMounts.attachedImagesIfKnown(runner: runner.forTeardown)
